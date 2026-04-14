@@ -1,0 +1,1374 @@
+{
+  "agencias": [
+    {
+      "canal": "Principal",
+      "codigo": "101",
+      "puntos": 75
+    },
+    {
+      "canal": "Popular",
+      "codigo": "102",
+      "puntos": 50
+    },
+    {
+      "canal": "Acacias",
+      "codigo": "103",
+      "puntos": 50
+    },
+    {
+      "canal": "Porfia",
+      "codigo": "104",
+      "puntos": 25
+    },
+    {
+      "canal": "Montecarlo",
+      "codigo": "105",
+      "puntos": 75
+    },
+    {
+      "canal": "Granada",
+      "codigo": "106",
+      "puntos": 25
+    },
+    {
+      "canal": "Guayabetal",
+      "codigo": "107",
+      "puntos": 25
+    },
+    {
+      "canal": "Catama",
+      "codigo": "108",
+      "puntos": 75
+    },
+    {
+      "canal": "Barranca de Upia",
+      "codigo": "109",
+      "puntos": 50
+    },
+    {
+      "canal": "Puerto Gaitán",
+      "codigo": "110",
+      "puntos": 75
+    },
+    {
+      "canal": "Cabuyaro",
+      "codigo": "111",
+      "puntos": 50
+    },
+    {
+      "canal": "Vista Hermosa",
+      "codigo": "112",
+      "puntos": 100
+    },
+    {
+      "canal": "CB Cubarral",
+      "codigo": "203",
+      "puntos": 50
+    },
+    {
+      "canal": "CB Puerto Rico",
+      "codigo": "204",
+      "puntos": 100
+    },
+    {
+      "canal": "CB Lejanias",
+      "codigo": "205",
+      "puntos": 50
+    },
+    {
+      "canal": "CB Cumaral",
+      "codigo": "206",
+      "puntos": 75
+    },
+    {
+      "canal": "CB Villanueva",
+      "codigo": "207",
+      "puntos": 50
+    },
+    {
+      "canal": "CB Tauramena",
+      "codigo": "208",
+      "puntos": 100
+    },
+    {
+      "canal": "CB Yopal",
+      "codigo": "209",
+      "puntos": 100
+    },
+    {
+      "canal": "CB Puerto Lopez",
+      "codigo": "210",
+      "puntos": 25
+    },
+    {
+      "canal": "CB Mesetas",
+      "codigo": "211",
+      "puntos": 75
+    },
+    {
+      "canal": "CB Uribe",
+      "codigo": "212",
+      "puntos": 75
+    },
+    {
+      "canal": "CB El Castillo",
+      "codigo": "213",
+      "puntos": 50
+    },
+    {
+      "canal": "CB Puerto Lleras",
+      "codigo": "214",
+      "puntos": 75
+    }
+  ],
+  "gastos_familiares": [
+    {
+      "salario_minimo": 1,
+      "cant_personasacargo": 0,
+      "porcentaje": 30.1536,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 2,
+      "cant_personasacargo": 0,
+      "porcentaje": 30.0,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 3,
+      "cant_personasacargo": 0,
+      "porcentaje": 27.1536,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 4,
+      "cant_personasacargo": 0,
+      "porcentaje": 24.1536,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 5,
+      "cant_personasacargo": 0,
+      "porcentaje": 24.1536,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 6,
+      "cant_personasacargo": 0,
+      "porcentaje": 24.1536,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 7,
+      "cant_personasacargo": 0,
+      "porcentaje": 21.1536,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 8,
+      "cant_personasacargo": 0,
+      "porcentaje": 21.1536,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 9,
+      "cant_personasacargo": 0,
+      "porcentaje": 21.1536,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 10,
+      "cant_personasacargo": 0,
+      "porcentaje": 18.1536,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 1,
+      "cant_personasacargo": 1,
+      "porcentaje": 40.3071,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 2,
+      "cant_personasacargo": 1,
+      "porcentaje": 35.3071,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 3,
+      "cant_personasacargo": 1,
+      "porcentaje": 35.3071,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 4,
+      "cant_personasacargo": 1,
+      "porcentaje": 30.3071,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 5,
+      "cant_personasacargo": 1,
+      "porcentaje": 30.3071,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 6,
+      "cant_personasacargo": 1,
+      "porcentaje": 30.3071,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 7,
+      "cant_personasacargo": 1,
+      "porcentaje": 25.3071,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 8,
+      "cant_personasacargo": 1,
+      "porcentaje": 25.3071,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 9,
+      "cant_personasacargo": 1,
+      "porcentaje": 25.3071,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 10,
+      "cant_personasacargo": 1,
+      "porcentaje": 20.3071,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 1,
+      "cant_personasacargo": 2,
+      "porcentaje": 60.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 2,
+      "cant_personasacargo": 2,
+      "porcentaje": 55.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 3,
+      "cant_personasacargo": 2,
+      "porcentaje": 55.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 4,
+      "cant_personasacargo": 2,
+      "porcentaje": 50.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 5,
+      "cant_personasacargo": 2,
+      "porcentaje": 50.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 6,
+      "cant_personasacargo": 2,
+      "porcentaje": 50.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 7,
+      "cant_personasacargo": 2,
+      "porcentaje": 45.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 8,
+      "cant_personasacargo": 2,
+      "porcentaje": 45.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 9,
+      "cant_personasacargo": 2,
+      "porcentaje": 45.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 10,
+      "cant_personasacargo": 2,
+      "porcentaje": 40.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 1,
+      "cant_personasacargo": 3,
+      "porcentaje": 65.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 2,
+      "cant_personasacargo": 3,
+      "porcentaje": 60.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 3,
+      "cant_personasacargo": 3,
+      "porcentaje": 60.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 4,
+      "cant_personasacargo": 3,
+      "porcentaje": 55.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 5,
+      "cant_personasacargo": 3,
+      "porcentaje": 55.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 6,
+      "cant_personasacargo": 3,
+      "porcentaje": 55.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 7,
+      "cant_personasacargo": 3,
+      "porcentaje": 50.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 8,
+      "cant_personasacargo": 3,
+      "porcentaje": 50.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 9,
+      "cant_personasacargo": 3,
+      "porcentaje": 50.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 10,
+      "cant_personasacargo": 3,
+      "porcentaje": 45.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 1,
+      "cant_personasacargo": 4,
+      "porcentaje": 70.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 2,
+      "cant_personasacargo": 4,
+      "porcentaje": 65.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 3,
+      "cant_personasacargo": 4,
+      "porcentaje": 65.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 4,
+      "cant_personasacargo": 4,
+      "porcentaje": 60.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 5,
+      "cant_personasacargo": 4,
+      "porcentaje": 60.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 6,
+      "cant_personasacargo": 4,
+      "porcentaje": 60.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 7,
+      "cant_personasacargo": 4,
+      "porcentaje": 55.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 8,
+      "cant_personasacargo": 4,
+      "porcentaje": 55.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 9,
+      "cant_personasacargo": 4,
+      "porcentaje": 55.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 10,
+      "cant_personasacargo": 4,
+      "porcentaje": 50.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 1,
+      "cant_personasacargo": 5,
+      "porcentaje": 75.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 2,
+      "cant_personasacargo": 5,
+      "porcentaje": 70.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 3,
+      "cant_personasacargo": 5,
+      "porcentaje": 70.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 4,
+      "cant_personasacargo": 5,
+      "porcentaje": 65.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 5,
+      "cant_personasacargo": 5,
+      "porcentaje": 65.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 6,
+      "cant_personasacargo": 5,
+      "porcentaje": 65.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 7,
+      "cant_personasacargo": 5,
+      "porcentaje": 60.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 8,
+      "cant_personasacargo": 5,
+      "porcentaje": 60.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 9,
+      "cant_personasacargo": 5,
+      "porcentaje": 60.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 10,
+      "cant_personasacargo": 5,
+      "porcentaje": 55.4607,
+      "zona": "Urbano"
+    },
+    {
+      "salario_minimo": 1,
+      "cant_personasacargo": 0,
+      "porcentaje": 27.1536,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 2,
+      "cant_personasacargo": 0,
+      "porcentaje": 27.0,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 3,
+      "cant_personasacargo": 0,
+      "porcentaje": 24.1536,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 4,
+      "cant_personasacargo": 0,
+      "porcentaje": 21.1536,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 5,
+      "cant_personasacargo": 0,
+      "porcentaje": 21.1536,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 6,
+      "cant_personasacargo": 0,
+      "porcentaje": 21.1536,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 7,
+      "cant_personasacargo": 0,
+      "porcentaje": 18.1536,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 8,
+      "cant_personasacargo": 0,
+      "porcentaje": 18.1536,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 9,
+      "cant_personasacargo": 0,
+      "porcentaje": 18.1536,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 10,
+      "cant_personasacargo": 0,
+      "porcentaje": 15.1536,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 1,
+      "cant_personasacargo": 1,
+      "porcentaje": 37.3071,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 2,
+      "cant_personasacargo": 1,
+      "porcentaje": 32.3071,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 3,
+      "cant_personasacargo": 1,
+      "porcentaje": 32.3071,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 4,
+      "cant_personasacargo": 1,
+      "porcentaje": 25.3071,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 5,
+      "cant_personasacargo": 1,
+      "porcentaje": 25.3071,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 6,
+      "cant_personasacargo": 1,
+      "porcentaje": 25.3071,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 7,
+      "cant_personasacargo": 1,
+      "porcentaje": 20.3071,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 8,
+      "cant_personasacargo": 1,
+      "porcentaje": 20.3071,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 9,
+      "cant_personasacargo": 1,
+      "porcentaje": 20.3071,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 10,
+      "cant_personasacargo": 1,
+      "porcentaje": 15.3071,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 1,
+      "cant_personasacargo": 2,
+      "porcentaje": 57.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 2,
+      "cant_personasacargo": 2,
+      "porcentaje": 52.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 3,
+      "cant_personasacargo": 2,
+      "porcentaje": 52.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 4,
+      "cant_personasacargo": 2,
+      "porcentaje": 45.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 5,
+      "cant_personasacargo": 2,
+      "porcentaje": 45.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 6,
+      "cant_personasacargo": 2,
+      "porcentaje": 45.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 7,
+      "cant_personasacargo": 2,
+      "porcentaje": 40.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 8,
+      "cant_personasacargo": 2,
+      "porcentaje": 40.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 9,
+      "cant_personasacargo": 2,
+      "porcentaje": 40.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 10,
+      "cant_personasacargo": 2,
+      "porcentaje": 35.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 1,
+      "cant_personasacargo": 3,
+      "porcentaje": 62.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 2,
+      "cant_personasacargo": 3,
+      "porcentaje": 57.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 3,
+      "cant_personasacargo": 3,
+      "porcentaje": 57.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 4,
+      "cant_personasacargo": 3,
+      "porcentaje": 50.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 5,
+      "cant_personasacargo": 3,
+      "porcentaje": 50.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 6,
+      "cant_personasacargo": 3,
+      "porcentaje": 50.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 7,
+      "cant_personasacargo": 3,
+      "porcentaje": 45.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 8,
+      "cant_personasacargo": 3,
+      "porcentaje": 45.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 9,
+      "cant_personasacargo": 3,
+      "porcentaje": 45.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 10,
+      "cant_personasacargo": 3,
+      "porcentaje": 40.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 1,
+      "cant_personasacargo": 4,
+      "porcentaje": 67.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 2,
+      "cant_personasacargo": 4,
+      "porcentaje": 62.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 3,
+      "cant_personasacargo": 4,
+      "porcentaje": 62.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 4,
+      "cant_personasacargo": 4,
+      "porcentaje": 55.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 5,
+      "cant_personasacargo": 4,
+      "porcentaje": 55.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 6,
+      "cant_personasacargo": 4,
+      "porcentaje": 55.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 7,
+      "cant_personasacargo": 4,
+      "porcentaje": 50.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 8,
+      "cant_personasacargo": 4,
+      "porcentaje": 50.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 9,
+      "cant_personasacargo": 4,
+      "porcentaje": 50.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 10,
+      "cant_personasacargo": 4,
+      "porcentaje": 45.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 1,
+      "cant_personasacargo": 5,
+      "porcentaje": 72.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 2,
+      "cant_personasacargo": 5,
+      "porcentaje": 67.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 3,
+      "cant_personasacargo": 5,
+      "porcentaje": 67.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 4,
+      "cant_personasacargo": 5,
+      "porcentaje": 60.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 5,
+      "cant_personasacargo": 5,
+      "porcentaje": 60.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 6,
+      "cant_personasacargo": 5,
+      "porcentaje": 60.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 7,
+      "cant_personasacargo": 5,
+      "porcentaje": 55.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 8,
+      "cant_personasacargo": 5,
+      "porcentaje": 55.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 9,
+      "cant_personasacargo": 5,
+      "porcentaje": 55.4607,
+      "zona": "Rural"
+    },
+    {
+      "salario_minimo": 10,
+      "cant_personasacargo": 5,
+      "porcentaje": 50.4607,
+      "zona": "Rural"
+    }
+  ],
+  "regresion": [
+    {
+      "parametro": "Estrato",
+      "nivel": "Nivel 1 y 2",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Estrato",
+      "nivel": "Nivel 3 y 4",
+      "estimacion": -0.242
+    },
+    {
+      "parametro": "Estrato",
+      "nivel": "Nivel 5 y 6",
+      "estimacion": -0.531
+    },
+    {
+      "parametro": "Nivel de estudios",
+      "nivel": "Técnico o Tecnológico",
+      "estimacion": -0.1142
+    },
+    {
+      "parametro": "Nivel de estudios",
+      "nivel": "Especialización, Maestría, Doctorado o Postdoctorado",
+      "estimacion": -0.1767
+    },
+    {
+      "parametro": "Nivel de estudios",
+      "nivel": "Ninguno, Primaria o Secundaria",
+      "estimacion": -0.0961
+    },
+    {
+      "parametro": "Estado Civil",
+      "nivel": "Soltero",
+      "estimacion": -0.0385
+    },
+    {
+      "parametro": "Estado Civil",
+      "nivel": "Unión Libre",
+      "estimacion": -0.0385
+    },
+    {
+      "parametro": "Estado Civil",
+      "nivel": "Casado",
+      "estimacion": -0.1417
+    },
+    {
+      "parametro": "Estado Civil",
+      "nivel": "Divorciado",
+      "estimacion": 0.074
+    },
+    {
+      "parametro": "Estado Civil",
+      "nivel": "Viudo",
+      "estimacion": -0.0201
+    },
+    {
+      "parametro": "Género",
+      "nivel": "Femenino",
+      "estimacion": -0.5115
+    },
+    {
+      "parametro": "Género",
+      "nivel": "Masculino",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Tipo de Vivienda",
+      "nivel": "Propia",
+      "estimacion": -0.9179
+    },
+    {
+      "parametro": "Tipo de Vivienda",
+      "nivel": "Arriendo",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Tipo de Vivienda",
+      "nivel": "Familiar",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Tipo de Vivienda",
+      "nivel": "Otra",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Forma de Pago",
+      "nivel": "Débito automático",
+      "estimacion": -0.4233
+    },
+    {
+      "parametro": "Forma de Pago",
+      "nivel": "Ventanilla",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Forma de Pago",
+      "nivel": "Otro",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Forma de Pago",
+      "nivel": "Nómina",
+      "estimacion": -1.4075
+    },
+    {
+      "parametro": "Garantía",
+      "nivel": "Personal",
+      "estimacion": -0.8002
+    },
+    {
+      "parametro": "Garantía",
+      "nivel": "Codeudor o Fondo Garantias",
+      "estimacion": -1.2189
+    },
+    {
+      "parametro": "Garantía",
+      "nivel": "Otro",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Tipo de Contrato",
+      "nivel": "Prestación de servicios Formal",
+      "estimacion": -0.261
+    },
+    {
+      "parametro": "Tipo de Contrato",
+      "nivel": "Independiente",
+      "estimacion": -0.0615
+    },
+    {
+      "parametro": "Tipo de Contrato",
+      "nivel": "Término indefinido",
+      "estimacion": -0.2813
+    },
+    {
+      "parametro": "Tipo de Contrato",
+      "nivel": "Pensionado",
+      "estimacion": -0.3905
+    },
+    {
+      "parametro": "Número de Personas a Cargo",
+      "nivel": "0",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Número de Personas a Cargo",
+      "nivel": "1",
+      "estimacion": -0.7615
+    },
+    {
+      "parametro": "Número de Personas a Cargo",
+      "nivel": "2",
+      "estimacion": -0.4468
+    },
+    {
+      "parametro": "Número de Personas a Cargo",
+      "nivel": "3",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Número de Personas a Cargo",
+      "nivel": "4",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Número de Personas a Cargo",
+      "nivel": "5",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Edad",
+      "nivel": "Menor de 31",
+      "estimacion": 0.3525
+    },
+    {
+      "parametro": "Edad",
+      "nivel": "31-40",
+      "estimacion": 0.3163
+    },
+    {
+      "parametro": "Edad",
+      "nivel": "41-50",
+      "estimacion": 0.2888
+    },
+    {
+      "parametro": "Edad",
+      "nivel": "51-55",
+      "estimacion": 0.1807
+    },
+    {
+      "parametro": "Edad",
+      "nivel": "55-60",
+      "estimacion": 0.148
+    },
+    {
+      "parametro": "Edad",
+      "nivel": "Mas de 60",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Antiguedad del Asociado",
+      "nivel": "1 año",
+      "estimacion": -0.3687
+    },
+    {
+      "parametro": "Antiguedad del Asociado",
+      "nivel": "Entre 2 y 5 años",
+      "estimacion": -0.8222
+    },
+    {
+      "parametro": "Antiguedad del Asociado",
+      "nivel": "Entre 6 y 34 años",
+      "estimacion": -1.2003
+    },
+    {
+      "parametro": "Antiguedad del Asociado",
+      "nivel": "Más de 34 años",
+      "estimacion": -1.5906
+    },
+    {
+      "parametro": "Ingresos",
+      "nivel": "($1,500,000 - $3,000,000)",
+      "estimacion": 0.7046
+    },
+    {
+      "parametro": "Ingresos",
+      "nivel": "($3,000,000 - $5,000,000)",
+      "estimacion": 0.2466
+    },
+    {
+      "parametro": "Ingresos",
+      "nivel": "Más de $5,000,000",
+      "estimacion": -0.0625
+    },
+    {
+      "parametro": "Score Buro de Credito Experian",
+      "nivel": "Menor a 300",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Score Buro de Credito Experian",
+      "nivel": "300 - 500",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Score Buro de Credito Experian",
+      "nivel": "500 - 700",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Score Buro de Credito Experian",
+      "nivel": "700 - 800",
+      "estimacion": -0.5
+    },
+    {
+      "parametro": "Score Buro de Credito Experian",
+      "nivel": "800 - 900",
+      "estimacion": -1.4816
+    },
+    {
+      "parametro": "Score Buro de Credito Experian",
+      "nivel": "Más de 900",
+      "estimacion": -2.5416
+    },
+    {
+      "parametro": "Aportes sociales",
+      "nivel": "($2,300,000 - $6,400,000)",
+      "estimacion": 0.0275
+    },
+    {
+      "parametro": "Aportes sociales",
+      "nivel": "($6,400,000 - $12,800,000)",
+      "estimacion": 0.0045
+    },
+    {
+      "parametro": "Aportes sociales",
+      "nivel": "($12,800,000 - $24,800,000)",
+      "estimacion": -0.0431
+    },
+    {
+      "parametro": "Aportes sociales",
+      "nivel": "Más de $24,800,000",
+      "estimacion": -0.2608
+    },
+    {
+      "parametro": "Activos",
+      "nivel": "Menos de $150,000,000",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Activos",
+      "nivel": "Más de $150,000,000",
+      "estimacion": -0.9794
+    },
+    {
+      "parametro": "Pasivos",
+      "nivel": "SI",
+      "estimacion": -1.2247
+    },
+    {
+      "parametro": "Pasivos",
+      "nivel": "NO",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Ocupacion",
+      "nivel": "Prestador de Servicios",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Ocupacion",
+      "nivel": "Pensionado",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Ocupacion",
+      "nivel": "Empleado",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Ocupacion",
+      "nivel": "Independiente",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Ocupacion",
+      "nivel": "Profesional Independiente",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Ocupacion",
+      "nivel": "Rentista de capital",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Ocupacion",
+      "nivel": "Transportador",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Tipo de Crédito",
+      "nivel": "Crédito de Libre Inversión",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Tipo de Crédito",
+      "nivel": "Crédito Educativo",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Tipo de Crédito",
+      "nivel": "Crédito de Libranza",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Tipo de Crédito",
+      "nivel": "Credi HOY",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Tipo de Crédito",
+      "nivel": "Cupo Rotativo",
+      "estimacion": 0.0
+    },
+    {
+      "parametro": "Tipo de Contrato",
+      "nivel": "Otro",
+      "estimacion": 0.0
+    }
+  ],
+  "tasas": [
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Ventanilla",
+      "sub_categoria": "General",
+      "categoria_riesgo": "D",
+      "tasa_ea": 22.1393991766528
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Ventanilla",
+      "sub_categoria": "General",
+      "categoria_riesgo": "C",
+      "tasa_ea": 21.3185389403076
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Ventanilla",
+      "sub_categoria": "General",
+      "categoria_riesgo": "B",
+      "tasa_ea": 20.4915646746226
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Ventanilla",
+      "sub_categoria": "General",
+      "categoria_riesgo": "A",
+      "tasa_ea": 19.6583803805666
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Ventanilla",
+      "sub_categoria": "Educacion",
+      "categoria_riesgo": "D",
+      "tasa_ea": 15.716903723146
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Ventanilla",
+      "sub_categoria": "Educacion",
+      "categoria_riesgo": "C",
+      "tasa_ea": 14.8468512458471
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Ventanilla",
+      "sub_categoria": "Educacion",
+      "categoria_riesgo": "B",
+      "tasa_ea": 13.9698900115818
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Ventanilla",
+      "sub_categoria": "Educacion",
+      "categoria_riesgo": "A",
+      "tasa_ea": 12.1947754569788
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Libranza",
+      "sub_categoria": "Empresas privadas",
+      "categoria_riesgo": "D",
+      "tasa_ea": 20.0507566477538
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Libranza",
+      "sub_categoria": "Empresas privadas",
+      "categoria_riesgo": "C",
+      "tasa_ea": 19.2142413280648
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Libranza",
+      "sub_categoria": "Empresas privadas",
+      "categoria_riesgo": "B",
+      "tasa_ea": 18.3713645996774
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Libranza",
+      "sub_categoria": "Empresas privadas",
+      "categoria_riesgo": "A",
+      "tasa_ea": 17.9475089301476
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Libranza",
+      "sub_categoria": "Oficiales",
+      "categoria_riesgo": "D",
+      "tasa_ea": 17.6498416071433
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Libranza",
+      "sub_categoria": "Oficiales",
+      "categoria_riesgo": "C",
+      "tasa_ea": 16.837828563345
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Libranza",
+      "sub_categoria": "Oficiales",
+      "categoria_riesgo": "B",
+      "tasa_ea": 16.2356660619831
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Libranza",
+      "sub_categoria": "Oficiales",
+      "categoria_riesgo": "A",
+      "tasa_ea": 15.8035333577548
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Libranza",
+      "sub_categoria": "Pensionados",
+      "categoria_riesgo": "D",
+      "tasa_ea": 17.3342919179475
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Libranza",
+      "sub_categoria": "Pensionados",
+      "categoria_riesgo": "C",
+      "tasa_ea": 16.4941372808908
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Libranza",
+      "sub_categoria": "Pensionados",
+      "categoria_riesgo": "B",
+      "tasa_ea": 15.9765892010223
+    },
+    {
+      "linea_credito": "Libre inversion",
+      "forma_pago": "Libranza",
+      "sub_categoria": "Pensionados",
+      "categoria_riesgo": "A",
+      "tasa_ea": 15.3697044983803
+    },
+    {
+      "linea_credito": "Cesion de CDAT",
+      "forma_pago": "Ventanilla",
+      "sub_categoria": "General",
+      "categoria_riesgo": "NA",
+      "tasa_ea": 16.0198108622982
+    },
+    {
+      "linea_credito": "Cupo Rotativo",
+      "forma_pago": "Ventanilla",
+      "sub_categoria": "General",
+      "categoria_riesgo": "NA",
+      "tasa_ea": 22.6127337019376
+    }
+  ]
+}

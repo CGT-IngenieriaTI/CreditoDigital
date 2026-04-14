@@ -1,0 +1,7 @@
+<svg width="220" height="64" viewBox="0 0 220 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="64" height="64" rx="20" fill="#143A63"/>
+  <path d="M18 32C18 23.1634 25.1634 16 34 16H46V24H34C29.5817 24 26 27.5817 26 32C26 36.4183 29.5817 40 34 40H46V48H34C25.1634 48 18 40.8366 18 32Z" fill="#F47A20"/>
+  <path d="M40 16H48L30 48H22L40 16Z" fill="#F7B38A"/>
+  <text x="78" y="28" fill="#143A63" font-family="Aptos, Segoe UI, sans-serif" font-size="22" font-weight="700">Congente</text>
+  <text x="78" y="48" fill="#4E6A85" font-family="Aptos, Segoe UI, sans-serif" font-size="13" font-weight="600">Crédito Digital de Consumo</text>
+</svg>

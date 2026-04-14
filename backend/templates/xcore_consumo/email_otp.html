@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="es" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Código de Autorización OTP - Congente</title>
+  <!--[if mso]>
+  <noscript>
+    <xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml>
+  </noscript>
+  <![endif]-->
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; background-color: #f0f4f8; }
+    a { color: inherit; }
+    @media only screen and (max-width: 620px) {
+      .email-wrapper { padding: 12px !important; }
+      .email-body { padding: 28px 20px !important; }
+      .otp-code { font-size: 38px !important; letter-spacing: 10px !important; }
+      .otp-box { padding: 24px 16px !important; }
+      .btn-main { padding: 14px 24px !important; font-size: 15px !important; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background-color:#f0f4f8;font-family:'DM Sans',Arial,sans-serif;">
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0f4f8;">
+    <tr>
+      <td align="center" class="email-wrapper" style="padding:32px 16px;">
+
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
+
+          <tr>
+            <td style="background:#ffffff;border-radius:16px 16px 0 0;padding:28px 40px 24px;text-align:center;border-bottom:3px solid #f78300;">
+              <img
+                src="{% if logo_cid %}cid:{{ logo_cid }}{% else %}{{ logo_url }}{% endif %}"
+                alt="Congente - Cooperativa de Ahorro y Crédito"
+                style="max-width:260px;height:auto;display:block;margin:0 auto;"
+              >
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background:linear-gradient(135deg,#f78300 0%,#D7620C 100%);padding:18px 40px;text-align:center;">
+              <p style="margin:0;color:#ffffff;font-size:13px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;">
+                Autorización de Consulta - Centrales de Riesgo
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="email-body" style="background:#ffffff;padding:40px 40px 32px;">
+
+              <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#1a1a2e;">
+                Hola{% if nombre_asociado %}, {{ nombre_asociado }}{% endif %} - aquí está tu código OTP
+              </p>
+
+              <p style="margin:0 0 28px;font-size:15px;color:#6b7280;line-height:1.6;">
+                Un asesor de <strong>Congente</strong> ha solicitado tu autorización para consultar
+                tus datos en las <strong>Centrales de Riesgo</strong>. Antes de compartir este código,
+                por favor lee con atención los pasos a continuación.
+              </p>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td class="otp-box" style="background:linear-gradient(135deg,#fff8f2 0%,#fff3e8 100%);border:2px dashed #f78300;border-radius:14px;padding:28px 24px;text-align:center;">
+                    <p style="margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#f78300;">
+                      Tu Código de Autorización
+                    </p>
+                    <p class="otp-code" style="margin:8px 0;font-size:52px;font-weight:700;letter-spacing:16px;color:#1a1a2e;line-height:1;">
+                      {{ otp_code }}
+                    </p>
+                    <p style="margin:10px 0 0;font-size:13px;color:#6b7280;">
+                      Vigencia: <strong style="color:#D7620C;">{{ vigencia_minutos }} minutos</strong>
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:28px 0 24px;">
+                <tr><td style="border-top:1px solid #e9ecef;"></td></tr>
+              </table>
+
+              <p style="margin:0 0 16px;font-size:15px;font-weight:700;color:#1a1a2e;">
+                Sigue estos pasos antes de compartir el código:
+              </p>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px;">
+                <tr>
+                  <td width="42" valign="top" style="padding-top:1px;">
+                    <div style="width:32px;height:32px;background:#f78300;border-radius:50%;text-align:center;line-height:32px;font-size:14px;font-weight:700;color:#ffffff;">1</div>
+                  </td>
+                  <td style="padding-left:12px;">
+                    <p style="margin:0 0 4px;font-size:14px;font-weight:600;color:#1a1a2e;">Lee el documento de consentimiento</p>
+                    <p style="margin:0 0 10px;font-size:13px;color:#6b7280;line-height:1.5;">
+                      Accede al documento oficial que describe cómo se usarán tus datos al consultar las Centrales de Riesgo.
+                    </p>
+                    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-top:10px;">
+                      <tr>
+                        <td align="center" style="border-radius:8px;background:#1a1a2e;">
+                          <a href="{{ consentimiento_url }}"
+                             style="display:block;background:#1a1a2e;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:13px 20px;border-radius:8px;text-align:center;line-height:1.4;">
+                            Ver Consentimiento
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px;">
+                <tr>
+                  <td width="42" valign="top" style="padding-top:1px;">
+                    <div style="width:32px;height:32px;background:#f78300;border-radius:50%;text-align:center;line-height:32px;font-size:14px;font-weight:700;color:#ffffff;">2</div>
+                  </td>
+                  <td style="padding-left:12px;">
+                    <p style="margin:0 0 4px;font-size:14px;font-weight:600;color:#1a1a2e;">Decide si estás de acuerdo</p>
+                    <p style="margin:0;font-size:13px;color:#6b7280;line-height:1.5;">
+                      Si aceptas el consentimiento, comparte el código OTP con el asesor.<br>
+                      Si <strong style="color:#dc2626;">no estás de acuerdo</strong>, no compartas el código.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px;">
+                <tr>
+                  <td width="42" valign="top" style="padding-top:1px;">
+                    <div style="width:32px;height:32px;background:#f78300;border-radius:50%;text-align:center;line-height:32px;font-size:14px;font-weight:700;color:#ffffff;">3</div>
+                  </td>
+                  <td style="padding-left:12px;">
+                    <p style="margin:0 0 4px;font-size:14px;font-weight:600;color:#1a1a2e;">Comparte solo con tu asesor</p>
+                    <p style="margin:0;font-size:13px;color:#6b7280;line-height:1.5;">
+                      Este código es de uso único y personal.
+                      <strong style="color:#dc2626;">No lo compartas con personas que no sean tu asesor asignado</strong>
+                      en esta gestión.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="background:#fef2f2;border-left:4px solid #dc2626;border-radius:0 10px 10px 0;padding:14px 18px;">
+                    <p style="margin:0;font-size:13px;color:#991b1b;line-height:1.6;">
+                      <strong>Advertencia de seguridad:</strong> Este código es de uso exclusivo para la consulta
+                      autorizada con tu asesor de Congente. Si recibes una solicitud de este código de alguien
+                      que no reconoces o fuera de ese contexto, no lo compartas y repórtalo
+                      de inmediato a tu oficina más cercana.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background:#f8fafc;border-radius:0 0 16px 16px;border-top:1px solid #e9ecef;padding:24px 40px;text-align:center;">
+              <p style="margin:0 0 6px;font-size:12px;color:#9ca3af;">
+                Este es un mensaje automático generado por el sistema de Congente.
+              </p>
+              <p style="margin:0 0 14px;font-size:12px;color:#9ca3af;">
+                Por favor, <strong>no respondas</strong> a este correo directamente.
+              </p>
+              <p style="margin:0;font-size:11px;color:#c0c7d0;">
+                © {% now "Y" %} Congente · Cooperativa de Ahorro y Crédito · Todos los derechos reservados
+              </p>
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>

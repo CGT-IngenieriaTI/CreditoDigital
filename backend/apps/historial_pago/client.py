@@ -1,4 +1,5 @@
 import html
+import hashlib
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -105,7 +106,8 @@ class HistorialPagoSOAPClient:
         session = requests.Session()
         session.cert = (self.tls_cert_path, self.key_path)
         tls_verify = str(getattr(settings, "DATACREDITO_SOAP_TLS_VERIFY", "1")).lower() not in {"0", "false"}
-        session.verify = tls_verify
+        ca_bundle = str(getattr(settings, "DATACREDITO_SOAP_CA_BUNDLE", "") or os.getenv("DATACREDITO_SOAP_CA_BUNDLE", "")).strip()
+        session.verify = _cert_path(ca_bundle) if ca_bundle else tls_verify
         retry = Retry(total=3, backoff_factor=1, status_forcelist=[502, 503, 504], allowed_methods=["POST"])
         adapter = HTTPAdapter(max_retries=retry)
         session.mount("https://", adapter)
@@ -122,7 +124,7 @@ class HistorialPagoSOAPClient:
         self.history = history
         return client
 
-    def _build_manual_envelope(self, *, operation, identificacion, tipo_identificacion, primer_apellido, parameters=None):
+    def _build_manual_envelope(self, *, operation, identificacion, tipo_identificacion, primer_apellido, parameters=None, celebrity_id="1"):
         def _safe(value):
             return xml_escape(str(value or ""))
 
@@ -136,17 +138,23 @@ class HistorialPagoSOAPClient:
                     <ns1:valor>{_safe(param.get('valor', ''))}</ns1:valor>
                 </ns1:parametro>"""
 
-        created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-        expires = (datetime.now(timezone.utc) + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        timestamp_id = f"TS-{hashlib.sha1(os.urandom(16)).hexdigest()[:16].upper()}"
+        body_id = f"id-{hashlib.sha1(os.urandom(16)).hexdigest()[:16].upper()}"
+        ttl_seconds = int(os.getenv("DATACREDITO_SOAP_TTL_SECONDS", "300") or 300)
+        skew_seconds = int(os.getenv("DATACREDITO_SOAP_TIME_SKEW_SECONDS", "120") or 120)
+        now = datetime.now(timezone.utc)
+        created = (now - timedelta(seconds=skew_seconds)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        expires = (now + timedelta(seconds=ttl_seconds)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         envelope = f"""<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope
     xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
     xmlns:ns1="http://ws.hc2.dc.com/v1"
     xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"
-    xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
+    xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"
+    xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
     <soapenv:Header>
         <wsse:Security soapenv:mustUnderstand="1">
-            <wsu:Timestamp>
+            <wsu:Timestamp wsu:Id="{timestamp_id}">
                 <wsu:Created>{created}</wsu:Created>
                 <wsu:Expires>{expires}</wsu:Expires>
             </wsu:Timestamp>
@@ -156,7 +164,7 @@ class HistorialPagoSOAPClient:
             </wsse:UsernameToken>
         </wsse:Security>
     </soapenv:Header>
-    <soapenv:Body>
+    <soapenv:Body wsu:Id="{body_id}">
         <ns1:{operation}>
             <ns1:solicitud>
                 <ns1:clave>{_safe(self.soap_password)}</ns1:clave>
@@ -165,6 +173,8 @@ class HistorialPagoSOAPClient:
                 <ns1:producto>{_safe(self.product_id)}</ns1:producto>
                 <ns1:tipoIdentificacion>{_safe(tipo_identificacion)}</ns1:tipoIdentificacion>
                 <ns1:usuario>{_safe(self.soap_user)}</ns1:usuario>
+                <ns1:InfoTipoCuenta>{_safe(self.info_account_type)}</ns1:InfoTipoCuenta>
+                <ns1:celebrityId>{_safe(celebrity_id or "1")}</ns1:celebrityId>
                 {params_xml}
             </ns1:solicitud>
         </ns1:{operation}>
@@ -172,10 +182,35 @@ class HistorialPagoSOAPClient:
 </soapenv:Envelope>"""
         envelope_el = etree.fromstring(envelope.encode("utf-8"))
         envelope_el, _ = BinarySignature(self.key_path, self.cert_path).apply(envelope_el, {})
+        self._reorder_security_header(envelope_el)
         return etree.tostring(envelope_el, encoding="utf-8", xml_declaration=True).decode("utf-8")
 
+    def _reorder_security_header(self, envelope_el) -> None:
+        ns = {
+            "soapenv": "http://schemas.xmlsoap.org/soap/envelope/",
+            "wsse": "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd",
+            "wsu": "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd",
+            "ds": "http://www.w3.org/2000/09/xmldsig#",
+        }
+        header = envelope_el.find("soapenv:Header", namespaces=ns)
+        if header is None:
+            return
+        security = header.find("wsse:Security", namespaces=ns)
+        if security is None:
+            return
+
+        timestamp = security.find("wsu:Timestamp", namespaces=ns)
+        username = security.find("wsse:UsernameToken", namespaces=ns)
+        binary_token = security.find("wsse:BinarySecurityToken", namespaces=ns)
+        signature = security.find("ds:Signature", namespaces=ns)
+
+        security[:] = []
+        for node in (timestamp, username, binary_token, signature):
+            if node is not None:
+                security.append(node)
+
     def _service_url(self) -> str:
-        explicit = str(getattr(settings, "DATACREDITO_SOAP_ADDRESS", "") or "").strip()
+        explicit = str(getattr(settings, "DATACREDITO_SOAP_ADDRESS", "") or os.getenv("DATACREDITO_SOAP_ADDRESS", "")).strip()
         if explicit:
             return explicit
         services = list(self.client.wsdl.services.values())

@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.historial_pago.client import HistorialPagoClientError
 from apps.xcore_consumo.models import SolicitudConsumo
 from apps.xcore_consumo.serializers import (
     ConsentimientoSerializer,
@@ -285,6 +286,8 @@ class ConsumoProcessView(APIView):
             )
         except Hc2SelectionRequired as exc:
             return Response(exc.payload, status=status.HTTP_409_CONFLICT)
+        except HistorialPagoClientError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         payload = EvaluacionConsumoSerializer(evaluacion).data

@@ -9,9 +9,10 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.documentos.services import get_active_documents
+from apps.historial_pago.client import HistorialPagoClientError
+from apps.historial_pago.models import HistorialPagoConsulta
 from apps.preselecta.client import PreselectaClient
 from apps.usuarios.models import PerfilAsesor, RolAsesor
-from apps.historial_pago.models import HistorialPagoConsulta
 from apps.xcore_consumo.models import (
     ConsentimientoConsumo,
     ConsultaAsociadoIntento,
@@ -685,6 +686,61 @@ class ConsumoRobustFlowTests(TestCase):
             format="json",
         )
         self.assertEqual(process_response.status_code, 400)
+
+    @patch("apps.xcore_consumo.services.otp.persist_orchestration_snapshot", side_effect=lambda detail: detail)
+    @patch("apps.xcore_consumo.services.pipeline.HistorialPagoSOAPClient")
+    @patch("apps.xcore_consumo.services.pipeline.PreselectaClient.evaluate")
+    def test_process_returns_503_when_historial_cert_config_is_invalid(
+        self,
+        mock_preselecta,
+        mock_historial_client,
+        _mock_snapshot,
+    ):
+        payload = self._create_solicitud(numero_identificacion="1090438587")
+        solicitud_id = payload["solicitud"]["id"]
+        self._register_consent(solicitud_id)
+        self.client.post(
+            f"/api/v1/consumo/solicitudes/{solicitud_id}/otp/send/",
+            {"canal": "SMS"},
+            format="json",
+        )
+        challenge = self._latest_challenge(solicitud_id)
+        verify_response = self.client.post(
+            f"/api/v1/consumo/solicitudes/{solicitud_id}/otp/verify/",
+            {"codigo": challenge.codigo},
+            format="json",
+        )
+        self.assertEqual(verify_response.status_code, 200)
+
+        detail = self._detail(solicitud_id)
+        detail.oracle_consultado = True
+        detail.core_data = {"nombre": "GOMEZ PRUEBA"}
+        detail.form_data = {"tipo_cliente": "ANTIGUO", "forma_pago": "NOMINA"}
+        detail.save(update_fields=("oracle_consultado", "core_data", "form_data", "updated_at"))
+        mock_preselecta.return_value = {
+            "decision": "APROBADO",
+            "risk_level": "VERDE",
+            "mensaje": "Aprobado",
+            "score": 780,
+        }
+        mock_historial_client.side_effect = HistorialPagoClientError(
+            "Archivo no encontrado: /app/erts/client_key.pem"
+        )
+
+        response = self.client.post(
+            f"/api/v1/consumo/solicitudes/{solicitud_id}/procesar/",
+            {"selected_hc2_keys": []},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("/app/erts/client_key.pem", response.json()["detail"])
+        consulta = HistorialPagoConsulta.objects.get(solicitud_id=solicitud_id)
+        self.assertEqual(consulta.estado, "ERROR")
+        self.assertIn("/app/erts/client_key.pem", consulta.resumen)
+        detail.refresh_from_db()
+        self.assertEqual(detail.estado, EstadoSolicitudConsumo.FORMULARIO_XCORE_OK)
+        self.assertIn("/app/erts/client_key.pem", detail.ultimo_error)
 
     def test_otp_wrong_attempts_can_block_flow(self):
         payload = self._create_solicitud()

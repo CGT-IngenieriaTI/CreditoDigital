@@ -10,6 +10,7 @@ from apps.decisiones.models import ResultadoDecision
 from apps.decisiones.services import persist_final_decision
 from apps.documentos.models import AceptacionDocumento
 from apps.documentos.services import get_active_documents
+from apps.historial_pago.client import HistorialPagoClientError, HistorialPagoSOAPClient
 from apps.historial_pago.models import HistorialPagoConsulta
 from apps.historial_pago.services import build_historial_from_stored_xml, persist_historial_consulta, persist_historial_failure
 from apps.preselecta.client import PreselectaClient
@@ -331,9 +332,19 @@ def _consultar_historial(detail, identity_effective=None, *, selected_keys=None)
         normalized = build_historial_from_stored_xml(consulta_existente, selected_keys=selected_keys)
         return historial_payload, {"xml_payload": consulta_existente.xml_payload, "source": "stored_xml"}, normalized
 
-    from apps.historial_pago.client import HistorialPagoSOAPClient
-
-    raw_historial = HistorialPagoSOAPClient().consult(historial_payload)
+    try:
+        raw_historial = HistorialPagoSOAPClient().consult(historial_payload)
+    except HistorialPagoClientError as exc:
+        persist_historial_failure(solicitud, historial_payload, None, str(exc))
+        detail.estado = EstadoSolicitudConsumo.FORMULARIO_XCORE_OK
+        detail.ultimo_error = str(exc)
+        detail.save(update_fields=("estado", "ultimo_error", "updated_at"))
+        sync_solicitud_state(
+            solicitud,
+            estado=get_solicitud_state_for_consumo(EstadoSolicitudConsumo.FORMULARIO_XCORE_OK),
+            paso_actual="analisis",
+        )
+        raise
     try:
         _, normalized = persist_historial_consulta(
             solicitud,

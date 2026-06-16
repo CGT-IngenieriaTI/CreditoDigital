@@ -2,37 +2,19 @@ import os
 
 
 TEST_IDENTITY_CASES = {
-    "VARGAS": {
+    "ORTIZ": {
         "tipo_identificacion": "1",
-        "numero_identificacion": "1110501568",
-        "primer_apellido": "VARGAS",
+        "numero_identificacion": "1006442329",
+        "primer_apellido": "ORTIZ",
         "linea_credito": "1",
         "tipo_asociado": "1",
         "medio_pago": "1",
         "actividad": "1",
     },
-    "GARCIA": {
+    "PALACIOS": {
         "tipo_identificacion": "1",
-        "numero_identificacion": "24234676",
-        "primer_apellido": "GARCIA",
-        "linea_credito": "1",
-        "tipo_asociado": "1",
-        "medio_pago": "1",
-        "actividad": "1",
-    },
-    "GOMEZ": {
-        "tipo_identificacion": "1",
-        "numero_identificacion": "1090438586",
-        "primer_apellido": "GOMEZ",
-        "linea_credito": "1",
-        "tipo_asociado": "1",
-        "medio_pago": "1",
-        "actividad": "1",
-    },
-    "DUQUE": {
-        "tipo_identificacion": "1",
-        "numero_identificacion": "25096152",
-        "primer_apellido": "DUQUE",
+        "numero_identificacion": "86080032",
+        "primer_apellido": "PALACIOS",
         "linea_credito": "1",
         "tipo_asociado": "1",
         "medio_pago": "1",

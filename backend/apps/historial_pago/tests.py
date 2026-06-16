@@ -31,6 +31,16 @@ class HistorialPagoXmlParsingTests(SimpleTestCase):
         extracted = client._extract_xml_from_response(soap)
         self.assertTrue(extracted.startswith("<Informes"))
 
+    def test_create_session_uses_fullchain_for_tls_client_certificate(self):
+        client = HistorialPagoSOAPClient.__new__(HistorialPagoSOAPClient)
+        client.cert_path = "certs/client_cert.pem"
+        client.fullchain_path = "certs/client_fullchain.pem"
+        client.tls_cert_path = client.fullchain_path
+        client.key_path = "certs/client_key.pem"
+
+        session = client._create_session()
+
+        self.assertEqual(session.cert, ("certs/client_fullchain.pem", "certs/client_key.pem"))
 
     def test_to_pesos_supports_hc2_thousands_and_already_pesos(self):
         self.assertEqual(_to_pesos("1027.0", 1000), 1027000)

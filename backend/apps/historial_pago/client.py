@@ -56,6 +56,11 @@ def _cert_path(path_value: str) -> str:
     return str(path)
 
 
+def _optional_cert_path(key: str) -> str:
+    value = str(getattr(settings, key, "") or os.getenv(key, "")).strip()
+    return _cert_path(value) if value else ""
+
+
 class HistorialPagoSOAPClient:
     def __init__(self):
         self.timeout = settings.EXTERNAL_API_TIMEOUT
@@ -71,6 +76,8 @@ class HistorialPagoSOAPClient:
             self.info_account_type = str(getattr(settings, "DATACREDITO_INFO_ACCOUNT_TYPE", "1")).strip()
             self.cert_path = _cert_path(_required("DATACREDITO_SOAP_CERT"))
             self.key_path = _cert_path(_required("DATACREDITO_SOAP_KEY"))
+            self.fullchain_path = _optional_cert_path("DATACREDITO_SOAP_FULLCHAIN")
+            self.tls_cert_path = self.fullchain_path or self.cert_path
             self.minimal_fields = str(getattr(settings, "DATACREDITO_SOAP_MINIMAL_FIELDS", "1")).lower() in {
                 "1",
                 "true",
@@ -96,7 +103,7 @@ class HistorialPagoSOAPClient:
 
     def _create_session(self):
         session = requests.Session()
-        session.cert = (self.cert_path, self.key_path)
+        session.cert = (self.tls_cert_path, self.key_path)
         tls_verify = str(getattr(settings, "DATACREDITO_SOAP_TLS_VERIFY", "1")).lower() not in {"0", "false"}
         session.verify = tls_verify
         retry = Retry(total=3, backoff_factor=1, status_forcelist=[502, 503, 504], allowed_methods=["POST"])

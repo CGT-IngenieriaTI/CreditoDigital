@@ -24,8 +24,11 @@ TEST_IDENTITY_CASES = {
 
 
 def get_provider_mode() -> str:
-    mode = str(os.getenv("XCORE_PROVIDER_MODE", "real")).strip().lower()
-    return "test" if mode == "test" else "real"
+    mode = str(os.getenv("XCORE_PROVIDER_MODE", "")).strip().lower()
+    legacy_enabled = str(os.getenv("XCORE_USE_PROVIDER_TEST_IDENTITIES", "")).strip().lower()
+    if mode == "test" or legacy_enabled in {"1", "true", "yes", "on"}:
+        return "test"
+    return "real"
 
 
 def use_provider_test_identity() -> bool:

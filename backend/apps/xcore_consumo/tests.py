@@ -24,6 +24,11 @@ from apps.xcore_consumo.models import (
 from apps.xcore_consumo.services.otp_crypto import decrypt_text
 from apps.xcore_consumo.services.oracle import _map_capacidad_row
 from apps.xcore_consumo.services.orchestration import build_consumo_snapshot, normalize_preselecta_business_status, _payload_preselecta
+from apps.xcore_consumo.services.provider_test_identities import (
+    get_provider_mode,
+    get_provider_test_identity,
+    use_provider_test_identity,
+)
 
 
 @override_settings(
@@ -36,8 +41,10 @@ from apps.xcore_consumo.services.orchestration import build_consumo_snapshot, no
 class ConsumoRobustFlowTests(TestCase):
     def setUp(self):
         self._provider_mode_original = os.environ.get("XCORE_PROVIDER_MODE")
+        self._provider_legacy_original = os.environ.get("XCORE_USE_PROVIDER_TEST_IDENTITIES")
         self._provider_case_original = os.environ.get("XCORE_PROVIDER_TEST_CASE")
         os.environ["XCORE_PROVIDER_MODE"] = "real"
+        os.environ.pop("XCORE_USE_PROVIDER_TEST_IDENTITIES", None)
         os.environ["XCORE_PROVIDER_TEST_CASE"] = ""
         self.client = APIClient()
         self.user = get_user_model().objects.create_user(
@@ -55,6 +62,10 @@ class ConsumoRobustFlowTests(TestCase):
             os.environ.pop("XCORE_PROVIDER_MODE", None)
         else:
             os.environ["XCORE_PROVIDER_MODE"] = self._provider_mode_original
+        if self._provider_legacy_original is None:
+            os.environ.pop("XCORE_USE_PROVIDER_TEST_IDENTITIES", None)
+        else:
+            os.environ["XCORE_USE_PROVIDER_TEST_IDENTITIES"] = self._provider_legacy_original
         if self._provider_case_original is None:
             os.environ.pop("XCORE_PROVIDER_TEST_CASE", None)
         else:
@@ -124,6 +135,17 @@ class ConsumoRobustFlowTests(TestCase):
         self.assertEqual(payload["tipo_asociado"], "2")
         self.assertEqual(payload["medio_pago"], "2")
         self.assertEqual(payload["actividad"], "3")
+
+    def test_provider_legacy_flag_enables_palacios_demo_identity(self):
+        os.environ.pop("XCORE_PROVIDER_MODE", None)
+        os.environ["XCORE_USE_PROVIDER_TEST_IDENTITIES"] = "1"
+        os.environ["XCORE_PROVIDER_TEST_CASE"] = "PALACIOS"
+
+        self.assertEqual(get_provider_mode(), "test")
+        self.assertTrue(use_provider_test_identity())
+        identity = get_provider_test_identity()
+        self.assertEqual(identity["numero_identificacion"], "86080032")
+        self.assertEqual(identity["primer_apellido"], "PALACIOS")
 
     def test_create_solicitud_starts_on_consent_pending(self):
         payload = self._create_solicitud()

@@ -120,6 +120,11 @@ class Command(BaseCommand):
             action="store_true",
             help="Intenta descargar el WSDL con el certificado configurado y reporta el error TLS/HTTP.",
         )
+        parser.add_argument(
+            "--url",
+            default="",
+            help="URL WSDL alternativa para probar sin cambiar DATACREDITO_WSDL_URL.",
+        )
 
     def handle(self, *args, **options):
         cert_path = _cert_path(_required("DATACREDITO_SOAP_CERT"))
@@ -138,10 +143,12 @@ class Command(BaseCommand):
             "0",
             "false",
         }
+        wsdl_url = str(options.get("url") or _setting_value("DATACREDITO_WSDL_URL")).strip()
         response = {
             "runtime": {
                 "credit_use_mock_services": bool(getattr(settings, "CREDIT_USE_MOCK_SERVICES", False)),
-                "wsdl_url": _safe_url(_setting_value("DATACREDITO_WSDL_URL")),
+                "wsdl_url": _safe_url(wsdl_url),
+                "wsdl_url_source": "argument" if options.get("url") else "settings",
                 "tls_verify": tls_verify,
                 "client_module": "apps.historial_pago.client",
                 "tls_session_cert": [tls_cert_path, key_path],
@@ -161,7 +168,7 @@ class Command(BaseCommand):
         if options["live_wsdl"]:
             try:
                 live = requests.get(
-                    _setting_value("DATACREDITO_WSDL_URL"),
+                    wsdl_url,
                     cert=(tls_cert_path, key_path),
                     verify=tls_verify,
                     timeout=getattr(settings, "EXTERNAL_API_TIMEOUT", 15),

@@ -439,8 +439,8 @@ class ConsumoRobustFlowTests(TestCase):
         self.assertEqual(second_create.json()["solicitud"]["id"], solicitud_id)
         self.assertEqual(second_create.json()["wizard_step"], "analisis")
 
-    @patch("apps.xcore_consumo.services.orchestration.HistorialPagoSOAPClient")
-    @patch("apps.xcore_consumo.services.orchestration.PreselectaClient.evaluate")
+    @patch("apps.xcore_consumo.services.orchestration.HistorialPagoSOAPClient", autospec=True)
+    @patch("apps.xcore_consumo.services.orchestration.PreselectaClient", autospec=True)
     @patch("apps.xcore_consumo.services.orchestration.consultar_capa")
     def test_otp_verify_persists_historial_xml(self, mock_consultar_capa, mock_preselecta, mock_historial_client):
         payload = self._create_solicitud(numero_identificacion="1020304059")
@@ -448,7 +448,7 @@ class ConsumoRobustFlowTests(TestCase):
         self._register_consent(solicitud_id)
 
         mock_consultar_capa.return_value = {"nombre": "VARGAS PRUEBA"}
-        mock_preselecta.return_value = {
+        mock_preselecta.return_value.evaluate.return_value = {
             "estado": "SUCCESS",
             "mensaje": "APROBADO",
             "engine_response": [{"key": "DECISION", "value": "APROBADO"}],
@@ -494,16 +494,19 @@ class ConsumoRobustFlowTests(TestCase):
         self.assertEqual(consulta.soap_request_xml, "<soap>req</soap>")
         self.assertEqual(consulta.response_payload.get("source"), "live")
         self.assertIn("valor_pasivos", verify_response.json()["orchestration"]["historial_pago"]["metrics"])
+        mock_preselecta.return_value.evaluate.assert_called_once()
+        mock_historial_client.return_value.consult.assert_called_once()
 
-    @patch("apps.xcore_consumo.services.orchestration.HistorialPagoSOAPClient.consult")
-    @patch("apps.xcore_consumo.services.orchestration.PreselectaClient.evaluate")
+    @patch("apps.xcore_consumo.services.orchestration.HistorialPagoSOAPClient", autospec=True)
+    @patch("apps.xcore_consumo.services.orchestration.PreselectaClient", autospec=True)
     @patch("apps.xcore_consumo.services.orchestration.consultar_capa")
-    def test_snapshot_reuses_persisted_historial_xml(self, mock_consultar_capa, mock_preselecta, mock_historial):
+    def test_snapshot_reuses_persisted_historial_xml(self, mock_consultar_capa, mock_preselecta, mock_historial_client):
+        mock_historial = mock_historial_client.return_value.consult
         payload = self._create_solicitud(numero_identificacion="1020304060")
         solicitud_id = payload["solicitud"]["id"]
         solicitud = self._detail(solicitud_id).solicitud
         mock_consultar_capa.return_value = {"nombre": "VARGAS PRUEBA"}
-        mock_preselecta.return_value = {
+        mock_preselecta.return_value.evaluate.return_value = {
             "estado": "SUCCESS",
             "mensaje": "APROBADO",
             "engine_response": [{"key": "DECISION", "value": "APROBADO"}],
@@ -536,16 +539,19 @@ class ConsumoRobustFlowTests(TestCase):
         self.assertEqual(snapshot["historial_pago"]["source"], "stored_xml")
         self.assertIn("valor_pasivos", snapshot["historial_pago"]["metrics"])
         mock_historial.assert_not_called()
+        mock_historial_client.assert_not_called()
+        mock_preselecta.return_value.evaluate.assert_called_once()
 
-    @patch("apps.xcore_consumo.services.orchestration.HistorialPagoSOAPClient.consult")
-    @patch("apps.xcore_consumo.services.orchestration.PreselectaClient.evaluate")
+    @patch("apps.xcore_consumo.services.orchestration.HistorialPagoSOAPClient", autospec=True)
+    @patch("apps.xcore_consumo.services.orchestration.PreselectaClient", autospec=True)
     @patch("apps.xcore_consumo.services.orchestration.consultar_capa")
-    def test_snapshot_skips_stored_historial_when_identity_differs(self, mock_consultar_capa, mock_preselecta, mock_historial):
+    def test_snapshot_skips_stored_historial_when_identity_differs(self, mock_consultar_capa, mock_preselecta, mock_historial_client):
+        mock_historial = mock_historial_client.return_value.consult
         payload = self._create_solicitud(numero_identificacion="1020304061")
         solicitud_id = payload["solicitud"]["id"]
         solicitud = self._detail(solicitud_id).solicitud
         mock_consultar_capa.return_value = {"nombre": "GOMEZ PRUEBA"}
-        mock_preselecta.return_value = {
+        mock_preselecta.return_value.evaluate.return_value = {
             "estado": "SUCCESS",
             "mensaje": "APROBADO",
             "engine_response": [{"key": "DECISION", "value": "APROBADO"}],
@@ -604,17 +610,21 @@ class ConsumoRobustFlowTests(TestCase):
             snapshot["datos_preselecta"]["identidad_efectiva"]["primer_apellido"],
             "GARCIA",
         )
+        mock_preselecta.return_value.evaluate.assert_called_once()
+        mock_historial_client.assert_called_once_with()
+        mock_historial.assert_called_once()
 
-    @patch("apps.xcore_consumo.services.orchestration.HistorialPagoSOAPClient.consult")
-    @patch("apps.xcore_consumo.services.orchestration.PreselectaClient.evaluate")
+    @patch("apps.xcore_consumo.services.orchestration.HistorialPagoSOAPClient", autospec=True)
+    @patch("apps.xcore_consumo.services.orchestration.PreselectaClient", autospec=True)
     @patch("apps.xcore_consumo.services.orchestration.consultar_capa")
-    def test_otp_verify_moves_to_result_when_preselecta_rejects(self, mock_consultar_capa, mock_preselecta, mock_historial):
+    def test_otp_verify_moves_to_result_when_preselecta_rejects(self, mock_consultar_capa, mock_preselecta, mock_historial_client):
+        mock_historial = mock_historial_client.return_value.consult
         payload = self._create_solicitud(numero_identificacion="1090438586")
         solicitud_id = payload["solicitud"]["id"]
         self._register_consent(solicitud_id)
 
         mock_consultar_capa.return_value = {"nombre": "GOMEZ PRUEBA"}
-        mock_preselecta.return_value = {
+        mock_preselecta.return_value.evaluate.return_value = {
             "estado": "RECHAZADO",
             "mensaje": "Solicitud rechazada por politica inicial",
             "preaprobado": False,
@@ -641,6 +651,8 @@ class ConsumoRobustFlowTests(TestCase):
             "RECHAZADO",
         )
         mock_historial.assert_not_called()
+        mock_historial_client.assert_not_called()
+        mock_preselecta.return_value.evaluate.assert_called_once()
 
     def test_expired_otp_fails_verification(self):
         payload = self._create_solicitud()
@@ -665,16 +677,17 @@ class ConsumoRobustFlowTests(TestCase):
         challenge.refresh_from_db()
         self.assertEqual(challenge.estado, EstadoOtp.EXPIRADA)
 
-    @patch("apps.xcore_consumo.services.orchestration.HistorialPagoSOAPClient.consult")
-    @patch("apps.xcore_consumo.services.orchestration.PreselectaClient.evaluate")
+    @patch("apps.xcore_consumo.services.orchestration.HistorialPagoSOAPClient", autospec=True)
+    @patch("apps.xcore_consumo.services.orchestration.PreselectaClient", autospec=True)
     @patch("apps.xcore_consumo.services.orchestration.consultar_capa")
-    def test_preselecta_rechazo_no_consulta_historial(self, mock_consultar_capa, mock_preselecta, mock_historial):
+    def test_preselecta_rechazo_no_consulta_historial(self, mock_consultar_capa, mock_preselecta, mock_historial_client):
+        mock_historial = mock_historial_client.return_value.consult
         payload = self._create_solicitud(numero_identificacion="1110501568")
         solicitud_id = payload["solicitud"]["id"]
         detail = self._detail(solicitud_id)
 
         mock_consultar_capa.return_value = {"nombre": "VARGAS PRUEBA"}
-        mock_preselecta.return_value = {
+        mock_preselecta.return_value.evaluate.return_value = {
             "estado": "NEGADO",
             "mensaje": "Solicitud negada por politicas internas",
             "preaprobado": False,
@@ -690,6 +703,8 @@ class ConsumoRobustFlowTests(TestCase):
         self.assertEqual(snapshot["campos_editables"], [])
         self.assertEqual(snapshot["campos_faltantes"], [])
         mock_historial.assert_not_called()
+        mock_historial_client.assert_not_called()
+        mock_preselecta.return_value.evaluate.assert_called_once()
 
     def test_process_and_external_refresh_are_blocked_without_signed_consent(self):
         payload = self._create_solicitud()
@@ -710,8 +725,8 @@ class ConsumoRobustFlowTests(TestCase):
         self.assertEqual(process_response.status_code, 400)
 
     @patch("apps.xcore_consumo.services.otp.persist_orchestration_snapshot", side_effect=lambda detail: detail)
-    @patch("apps.xcore_consumo.services.pipeline.HistorialPagoSOAPClient")
-    @patch("apps.xcore_consumo.services.pipeline.PreselectaClient.evaluate")
+    @patch("apps.xcore_consumo.services.pipeline.HistorialPagoSOAPClient", autospec=True)
+    @patch("apps.xcore_consumo.services.pipeline.PreselectaClient", autospec=True)
     def test_process_returns_503_when_historial_cert_config_is_invalid(
         self,
         mock_preselecta,
@@ -739,7 +754,7 @@ class ConsumoRobustFlowTests(TestCase):
         detail.core_data = {"nombre": "GOMEZ PRUEBA"}
         detail.form_data = {"tipo_cliente": "ANTIGUO", "forma_pago": "NOMINA"}
         detail.save(update_fields=("oracle_consultado", "core_data", "form_data", "updated_at"))
-        mock_preselecta.return_value = {
+        mock_preselecta.return_value.evaluate.return_value = {
             "decision": "APROBADO",
             "risk_level": "VERDE",
             "mensaje": "Aprobado",
@@ -763,6 +778,8 @@ class ConsumoRobustFlowTests(TestCase):
         detail.refresh_from_db()
         self.assertEqual(detail.estado, EstadoSolicitudConsumo.FORMULARIO_XCORE_OK)
         self.assertIn("/app/erts/client_key.pem", detail.ultimo_error)
+        mock_preselecta.return_value.evaluate.assert_called_once()
+        mock_historial_client.assert_called_once_with()
 
     def test_otp_wrong_attempts_can_block_flow(self):
         payload = self._create_solicitud()
@@ -890,9 +907,10 @@ class ConsumoRobustFlowTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("solo permite letras y espacios", str(response.json()).lower())
 
+    @patch("apps.xcore_consumo.services.otp.persist_orchestration_snapshot", side_effect=lambda detail: detail)
     @patch("apps.xcore_consumo.services.pipeline.consultar_familiar")
     @patch("apps.xcore_consumo.services.pipeline._consultar_historial")
-    @patch("apps.xcore_consumo.services.pipeline.PreselectaClient.evaluate")
+    @patch("apps.xcore_consumo.services.pipeline.PreselectaClient", autospec=True)
     @patch("apps.xcore_consumo.services.pipeline.evaluar_xcore_consumo")
     def test_process_blocks_when_comision_garantia_returns_error(
         self,
@@ -900,8 +918,9 @@ class ConsumoRobustFlowTests(TestCase):
         mock_preselecta,
         mock_consultar_historial,
         mock_consultar_familiar,
+        _mock_snapshot,
     ):
-        mock_preselecta.return_value = {
+        mock_preselecta.return_value.evaluate.return_value = {
             "decision": "APROBADO",
             "risk_level": "Categoria D",
             "mensaje": "Aprobado",
@@ -951,6 +970,7 @@ class ConsumoRobustFlowTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "FNG EMP319 permite monto entre 1 y 6 SMMLV.")
         self.assertFalse(hasattr(detail.solicitud, "evaluacion_consumo"))
+        mock_preselecta.return_value.evaluate.assert_called_once()
 
 
 class OracleCapacidadMappingTests(TestCase):

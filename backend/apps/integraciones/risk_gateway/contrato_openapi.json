@@ -1,0 +1,1592 @@
+{
+  "source_repository": "PRESELECTA",
+  "source_commit": "78fff71328c95e2dc64d3fc9756db5adc34f522f",
+  "source_path": "docs/internal_api_v1.openapi.json",
+  "schemas": {
+    "ResultadoHDCNormalizado": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consulta_id",
+        "request_id",
+        "fecha_consulta",
+        "tipo_documento",
+        "tipo_documento_solicitado",
+        "estado_tecnico",
+        "codigo_respuesta_proveedor",
+        "atributos_informe_originales",
+        "obligaciones",
+        "cobertura",
+        "trazabilidad"
+      ],
+      "properties": {
+        "consulta_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "fecha_consulta": {
+          "type": "string",
+          "nullable": true
+        },
+        "tipo_documento": {
+          "$ref": "#/components/schemas/CodigoHDC"
+        },
+        "tipo_documento_solicitado": {
+          "type": "string",
+          "nullable": true
+        },
+        "estado_tecnico": {
+          "type": "string",
+          "enum": [
+            "COMPLETADO",
+            "SIN_INFORMACION",
+            "VALIDACION",
+            "ERROR_PROVEEDOR",
+            "ERROR_TECNICO"
+          ]
+        },
+        "codigo_respuesta_proveedor": {
+          "type": "string"
+        },
+        "atributos_informe_originales": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "obligaciones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/ObligacionHDC"
+          }
+        },
+        "cobertura": {
+          "$ref": "#/components/schemas/CoberturaHDC"
+        },
+        "trazabilidad": {
+          "$ref": "#/components/schemas/TrazabilidadHDC"
+        },
+        "endeudamiento_actual": {
+          "$ref": "#/components/schemas/EndeudamientoActualHDC"
+        }
+      },
+      "description": "HDC_NORMALIZADO_V1 ampliado aditivamente en 9F-B. endeudamiento_actual opcional en schema para compatibilidad; servidor actual siempre lo emite. Detalle monetario COP sin factor 1000; temporalidad NO_CERTIFICADA. Agregado InfoAgregada en miles, politica ADAPTACION_CONGENTE."
+    },
+    "CodigoHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codigo_original",
+        "codigo_catalogo",
+        "descripcion",
+        "nombre",
+        "comportamiento",
+        "clasificacion",
+        "semantica",
+        "fuente",
+        "referencia"
+      ],
+      "properties": {
+        "codigo_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "codigo_catalogo": {
+          "type": "string",
+          "nullable": true
+        },
+        "descripcion": {
+          "type": "string",
+          "nullable": true
+        },
+        "nombre": {
+          "type": "string",
+          "nullable": true
+        },
+        "comportamiento": {
+          "type": "string",
+          "nullable": true
+        },
+        "clasificacion": {
+          "type": "string",
+          "nullable": true
+        },
+        "semantica": {
+          "type": "string"
+        },
+        "fuente": {
+          "type": "string",
+          "enum": [
+            "DOCUMENTADO_PROVEEDOR",
+            "ADAPTACION_CONGENTE",
+            "LEGACY_NO_NORMATIVO",
+            null
+          ],
+          "nullable": true
+        },
+        "referencia": {
+          "type": "string",
+          "nullable": true
+        }
+      }
+    },
+    "ObligacionHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "posicion_original",
+        "tipo_estructural",
+        "nombre_estructural_original",
+        "identificador",
+        "entidad",
+        "codSuscriptor",
+        "tipoCuenta",
+        "tipoObligacion",
+        "sector",
+        "calidadDeudor",
+        "garantia",
+        "estadoPago",
+        "estadoCuenta",
+        "estadoOrigen",
+        "estadoPlastico",
+        "formaPago",
+        "bloqueada_original",
+        "fechas",
+        "valores",
+        "valor_actual",
+        "estado_obligacion_compuesto",
+        "datos_originales",
+        "advertencias"
+      ],
+      "properties": {
+        "posicion_original": {
+          "type": "integer"
+        },
+        "tipo_estructural": {
+          "type": "string"
+        },
+        "nombre_estructural_original": {
+          "type": "string"
+        },
+        "identificador": {
+          "$ref": "#/components/schemas/IdentificadorHDC"
+        },
+        "entidad": {
+          "type": "string",
+          "nullable": true
+        },
+        "codSuscriptor": {
+          "type": "string",
+          "nullable": true
+        },
+        "tipoCuenta": {
+          "$ref": "#/components/schemas/TipoCuentaHDC"
+        },
+        "tipoObligacion": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/CodigoHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "sector": {
+          "$ref": "#/components/schemas/CodigoHDC"
+        },
+        "calidadDeudor": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/CodigoHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "garantia": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/CodigoHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "estadoPago": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/CodigoHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "estadoCuenta": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/CodigoHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "estadoOrigen": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/CodigoHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "estadoPlastico": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/CodigoHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "formaPago": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/CodigoHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "bloqueada_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "fechas": {
+          "$ref": "#/components/schemas/FechasHDC"
+        },
+        "valores": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/ValorHDC"
+          }
+        },
+        "valor_actual": {
+          "$ref": "#/components/schemas/ValorActualHDC"
+        },
+        "estado_obligacion_compuesto": {
+          "$ref": "#/components/schemas/EstadoCompuestoHDC"
+        },
+        "datos_originales": {
+          "$ref": "#/components/schemas/NodoOriginalHDC"
+        },
+        "advertencias": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AdvertenciaHDC"
+          }
+        }
+      }
+    },
+    "IdentificadorHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "numero",
+        "identificacion"
+      ],
+      "properties": {
+        "numero": {
+          "type": "string",
+          "nullable": true
+        },
+        "identificacion": {
+          "type": "string",
+          "nullable": true
+        }
+      }
+    },
+    "TipoCuentaHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codigo_original",
+        "subtipo_original",
+        "codigo_catalogo",
+        "subcodigo_catalogo",
+        "abreviatura",
+        "descripcion",
+        "semantica",
+        "fuente",
+        "referencia",
+        "alternativas"
+      ],
+      "properties": {
+        "codigo_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "subtipo_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "codigo_catalogo": {
+          "type": "string",
+          "nullable": true
+        },
+        "subcodigo_catalogo": {
+          "type": "string",
+          "nullable": true
+        },
+        "abreviatura": {
+          "type": "string",
+          "nullable": true
+        },
+        "descripcion": {
+          "type": "string",
+          "nullable": true
+        },
+        "semantica": {
+          "type": "string"
+        },
+        "fuente": {
+          "type": "string",
+          "enum": [
+            "DOCUMENTADO_PROVEEDOR",
+            "ADAPTACION_CONGENTE",
+            "LEGACY_NO_NORMATIVO",
+            null
+          ],
+          "nullable": true
+        },
+        "referencia": {
+          "type": "string",
+          "nullable": true
+        },
+        "alternativas": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      }
+    },
+    "FechasHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apertura",
+        "vencimiento"
+      ],
+      "properties": {
+        "apertura": {
+          "type": "string",
+          "nullable": true
+        },
+        "vencimiento": {
+          "type": "string",
+          "nullable": true
+        }
+      }
+    },
+    "ValorHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "posicion_original",
+        "fecha",
+        "moneda",
+        "periodicidad",
+        "cuota",
+        "saldoActual",
+        "saldoMora",
+        "valorInicial",
+        "cupoTotal",
+        "datos_originales",
+        "advertencias"
+      ],
+      "properties": {
+        "posicion_original": {
+          "type": "integer"
+        },
+        "fecha": {
+          "type": "string",
+          "nullable": true
+        },
+        "moneda": {
+          "$ref": "#/components/schemas/CodigoHDC"
+        },
+        "periodicidad": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/CodigoHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "cuota": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ImporteHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "saldoActual": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ImporteHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "saldoMora": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ImporteHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "valorInicial": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ImporteHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "cupoTotal": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ImporteHDC"
+            }
+          ],
+          "nullable": true
+        },
+        "datos_originales": {
+          "$ref": "#/components/schemas/NodoOriginalHDC"
+        },
+        "advertencias": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AdvertenciaHDC"
+          }
+        }
+      }
+    },
+    "ImporteHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "valor_original",
+        "unidad_original",
+        "moneda_codigo",
+        "moneda_homologada",
+        "valor_monetario",
+        "disponible",
+        "estado_conversion",
+        "motivo",
+        "fuente",
+        "referencia"
+      ],
+      "properties": {
+        "valor_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "unidad_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "moneda_codigo": {
+          "type": "string",
+          "nullable": true
+        },
+        "moneda_homologada": {
+          "type": "string",
+          "nullable": true
+        },
+        "valor_monetario": {
+          "type": "string",
+          "description": "Decimal exacto serializado sin float",
+          "nullable": true
+        },
+        "disponible": {
+          "type": "boolean"
+        },
+        "estado_conversion": {
+          "type": "string"
+        },
+        "motivo": {
+          "type": "string",
+          "nullable": true
+        },
+        "fuente": {
+          "type": "string",
+          "enum": [
+            "DOCUMENTADO_PROVEEDOR",
+            "ADAPTACION_CONGENTE",
+            "LEGACY_NO_NORMATIVO",
+            null
+          ],
+          "nullable": true
+        },
+        "referencia": {
+          "type": "string",
+          "nullable": true
+        }
+      },
+      "description": "Detalle Valores/Valor: moneda legal en COP, no MILES_MONEDA. Correccion 9F-B del factor 1000 incorrecto de 9B; estructura/tipos y valor original intactos. No seleccionar valor_actual."
+    },
+    "NodoOriginalHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nombre",
+        "atributos",
+        "texto",
+        "hijos"
+      ],
+      "properties": {
+        "nombre": {
+          "type": "string"
+        },
+        "atributos": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "texto": {
+          "type": "string",
+          "nullable": true
+        },
+        "hijos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/NodoOriginalHDC"
+          }
+        }
+      }
+    },
+    "AdvertenciaHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codigo",
+        "campo",
+        "fuente"
+      ],
+      "properties": {
+        "codigo": {
+          "type": "string"
+        },
+        "campo": {
+          "type": "string"
+        },
+        "fuente": {
+          "type": "string",
+          "enum": [
+            "DOCUMENTADO_PROVEEDOR",
+            "ADAPTACION_CONGENTE",
+            "LEGACY_NO_NORMATIVO"
+          ]
+        }
+      }
+    },
+    "ValorActualHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disponible",
+        "motivo",
+        "posicion_original",
+        "fuente"
+      ],
+      "properties": {
+        "disponible": {
+          "type": "boolean"
+        },
+        "motivo": {
+          "type": "string"
+        },
+        "posicion_original": {
+          "type": "integer",
+          "nullable": true
+        },
+        "fuente": {
+          "type": "string",
+          "enum": [
+            "DOCUMENTADO_PROVEEDOR",
+            "ADAPTACION_CONGENTE",
+            "LEGACY_NO_NORMATIVO"
+          ]
+        }
+      }
+    },
+    "EstadoCompuestoHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "estado",
+        "nombre",
+        "motivo",
+        "entradas_originales",
+        "fuente",
+        "referencia"
+      ],
+      "properties": {
+        "estado": {
+          "type": "string"
+        },
+        "nombre": {
+          "type": "string",
+          "nullable": true
+        },
+        "motivo": {
+          "type": "string",
+          "nullable": true
+        },
+        "entradas_originales": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "nullable": true
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Par [nombre, valor_original]. El contrato del DTO exige nombre (posicion 0) string no nulo; valor_original (posicion 1) puede ser string o null. OpenAPI 3.0.3 no expresa tipado posicional de tuplas: este schema es un superset compatible del contrato runtime."
+          }
+        },
+        "fuente": {
+          "type": "string",
+          "enum": [
+            "DOCUMENTADO_PROVEEDOR",
+            "ADAPTACION_CONGENTE",
+            "LEGACY_NO_NORMATIVO"
+          ]
+        },
+        "referencia": {
+          "type": "string"
+        }
+      }
+    },
+    "CoberturaHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_obligaciones",
+        "total_carteras",
+        "total_tarjetas",
+        "total_ahorros",
+        "total_corrientes",
+        "total_otros",
+        "faltantes",
+        "advertencias"
+      ],
+      "properties": {
+        "total_obligaciones": {
+          "type": "integer"
+        },
+        "total_carteras": {
+          "type": "integer"
+        },
+        "total_tarjetas": {
+          "type": "integer"
+        },
+        "total_ahorros": {
+          "type": "integer"
+        },
+        "total_corrientes": {
+          "type": "integer"
+        },
+        "total_otros": {
+          "type": "integer"
+        },
+        "faltantes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "advertencias": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AdvertenciaHDC"
+          }
+        }
+      }
+    },
+    "TrazabilidadHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version_contrato",
+        "version_catalogos",
+        "fuente"
+      ],
+      "properties": {
+        "version_contrato": {
+          "type": "string"
+        },
+        "version_catalogos": {
+          "type": "string"
+        },
+        "fuente": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ResultadoPreselectaNormalizadoV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consulta_id",
+        "request_id",
+        "estado_tecnico",
+        "codigo_proveedor",
+        "codigo_proveedor_original",
+        "http_status",
+        "resultado_proveedor",
+        "cobertura",
+        "trazabilidad",
+        "error"
+      ],
+      "properties": {
+        "consulta_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "estado_tecnico": {
+          "type": "string",
+          "enum": [
+            "COMPLETADO",
+            "SIN_INFORMACION",
+            "VALIDACION",
+            "ERROR_PROVEEDOR",
+            "ERROR_TECNICO"
+          ]
+        },
+        "codigo_proveedor": {
+          "type": "string"
+        },
+        "codigo_proveedor_original": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "nullable": true,
+              "enum": [
+                null
+              ]
+            }
+          ]
+        },
+        "http_status": {
+          "type": "integer",
+          "nullable": true
+        },
+        "resultado_proveedor": {
+          "$ref": "#/components/schemas/ResultadoProveedorPreselecta"
+        },
+        "cobertura": {
+          "$ref": "#/components/schemas/CoberturaPreselecta"
+        },
+        "trazabilidad": {
+          "$ref": "#/components/schemas/TrazabilidadPreselecta"
+        },
+        "error": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ErrorPreselecta"
+            }
+          ],
+          "nullable": true
+        }
+      }
+    },
+    "ResultadoProveedorPreselecta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "riesgo",
+        "score",
+        "campos_motor",
+        "datos_documentados",
+        "naturaleza"
+      ],
+      "properties": {
+        "decision": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/CampoProveedorPreselecta"
+            }
+          ],
+          "nullable": true
+        },
+        "riesgo": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/CampoProveedorPreselecta"
+            }
+          ],
+          "nullable": true
+        },
+        "score": {
+          "type": "object",
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/CampoProveedorPreselecta"
+            }
+          ],
+          "nullable": true
+        },
+        "campos_motor": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/CampoProveedorPreselecta"
+          }
+        },
+        "datos_documentados": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "naturaleza": {
+          "type": "string"
+        }
+      }
+    },
+    "CampoProveedorPreselecta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codigo_original",
+        "valor_original",
+        "valor_homologado",
+        "fuente",
+        "referencia"
+      ],
+      "properties": {
+        "codigo_original": {
+          "type": "string"
+        },
+        "valor_original": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "nullable": true,
+              "enum": [
+                null
+              ]
+            }
+          ]
+        },
+        "valor_homologado": {
+          "type": "string",
+          "description": "Decimal exacto serializado sin float",
+          "nullable": true
+        },
+        "fuente": {
+          "type": "string",
+          "enum": [
+            "DOCUMENTADO_PROVEEDOR",
+            "ADAPTACION_CONGENTE",
+            "LEGACY_NO_NORMATIVO"
+          ]
+        },
+        "referencia": {
+          "type": "string"
+        }
+      }
+    },
+    "CoberturaPreselecta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "campos_presentes",
+        "campos_ausentes",
+        "advertencias"
+      ],
+      "properties": {
+        "campos_presentes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "campos_ausentes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "advertencias": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AdvertenciaPreselecta"
+          }
+        }
+      }
+    },
+    "AdvertenciaPreselecta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codigo",
+        "campo",
+        "fuente"
+      ],
+      "properties": {
+        "codigo": {
+          "type": "string"
+        },
+        "campo": {
+          "type": "string"
+        },
+        "fuente": {
+          "type": "string",
+          "enum": [
+            "DOCUMENTADO_PROVEEDOR",
+            "ADAPTACION_CONGENTE",
+            "LEGACY_NO_NORMATIVO"
+          ]
+        }
+      }
+    },
+    "TrazabilidadPreselecta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fecha_consulta",
+        "fecha_registro",
+        "consumidor",
+        "origen",
+        "reutilizada",
+        "version_contrato",
+        "fuente"
+      ],
+      "properties": {
+        "fecha_consulta": {
+          "type": "string",
+          "nullable": true
+        },
+        "fecha_registro": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "consumidor": {
+          "type": "string"
+        },
+        "origen": {
+          "type": "string"
+        },
+        "reutilizada": {
+          "type": "boolean"
+        },
+        "version_contrato": {
+          "type": "string"
+        },
+        "fuente": {
+          "type": "string"
+        }
+      }
+    },
+    "ErrorPreselecta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codigo",
+        "mensaje"
+      ],
+      "properties": {
+        "codigo": {
+          "type": "string"
+        },
+        "mensaje": {
+          "type": "string"
+        }
+      }
+    },
+    "JsonValue": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string",
+          "nullable": true,
+          "enum": [
+            null
+          ]
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        }
+      ]
+    },
+    "Identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tipo_documento",
+        "numero_documento",
+        "primer_apellido"
+      ],
+      "properties": {
+        "tipo_documento": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30,
+          "description": "Codigo REST 1..9 o alias reconocido por el catalogo del servidor; PEP=9."
+        },
+        "numero_documento": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "primer_apellido": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "Metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "consumidor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Debe coincidir con X-Internal-Client autenticado."
+        }
+      }
+    },
+    "Parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "LINEA_CREDITO",
+        "TIPO_ASOCIADO",
+        "MEDIO_PAGO",
+        "ACTIVIDAD"
+      ],
+      "properties": {
+        "LINEA_CREDITO": {
+          "type": "string",
+          "enum": [
+            "1",
+            "2",
+            "3"
+          ]
+        },
+        "TIPO_ASOCIADO": {
+          "type": "string",
+          "enum": [
+            "1",
+            "2",
+            "3"
+          ]
+        },
+        "MEDIO_PAGO": {
+          "type": "string",
+          "enum": [
+            "1",
+            "2",
+            "3"
+          ]
+        },
+        "ACTIVIDAD": {
+          "type": "string",
+          "enum": [
+            "1",
+            "2",
+            "3"
+          ]
+        }
+      }
+    },
+    "PreselectaRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identidad",
+        "estrategia_id",
+        "parametros"
+      ],
+      "properties": {
+        "identidad": {
+          "$ref": "#/components/schemas/Identity"
+        },
+        "estrategia_id": {
+          "type": "string",
+          "enum": [
+            "25674"
+          ]
+        },
+        "parametros": {
+          "$ref": "#/components/schemas/Parameters"
+        },
+        "metadata": {
+          "$ref": "#/components/schemas/Metadata"
+        }
+      }
+    },
+    "HDCRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "person_id_type",
+        "person_id_number"
+      ],
+      "properties": {
+        "persona": {
+          "type": "string",
+          "enum": [
+            "natural",
+            "juridica"
+          ],
+          "default": "natural"
+        },
+        "person_id_type": {
+          "type": "string",
+          "enum": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9"
+          ],
+          "description": "Catalogo SOAP independiente de REST; se envia sin homologacion nueva."
+        },
+        "person_id_number": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "person_last_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "razon_social": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "metadata": {
+          "$ref": "#/components/schemas/Metadata"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "persona": {
+              "enum": [
+                "natural"
+              ]
+            }
+          },
+          "required": [
+            "person_last_name"
+          ],
+          "not": {
+            "required": [
+              "razon_social"
+            ]
+          }
+        },
+        {
+          "properties": {
+            "persona": {
+              "enum": [
+                "juridica"
+              ]
+            }
+          },
+          "required": [
+            "persona",
+            "razon_social"
+          ],
+          "not": {
+            "required": [
+              "person_last_name"
+            ]
+          }
+        }
+      ]
+    },
+    "Error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "estadoTecnico",
+        "error"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "estadoTecnico": {
+          "type": "string",
+          "enum": [
+            "VALIDACION",
+            "ERROR_TECNICO",
+            "ERROR_PROVEEDOR"
+          ]
+        },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "codigo",
+            "mensaje"
+          ],
+          "properties": {
+            "codigo": {
+              "type": "string",
+              "minLength": 1
+            },
+            "mensaje": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "consultaId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "versionContrato": {
+          "type": "string",
+          "enum": [
+            "PRESELECTA_NORMALIZADO_V1",
+            "HDC_NORMALIZADO_V1"
+          ]
+        },
+        "codigoProveedor": {
+          "type": "string",
+          "pattern": "^(?:[0-9]{2})?$"
+        }
+      }
+    },
+    "PreselectaResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "versionContrato",
+        "resultado"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "versionContrato": {
+          "type": "string",
+          "enum": [
+            "PRESELECTA_NORMALIZADO_V1"
+          ]
+        },
+        "resultado": {
+          "$ref": "#/components/schemas/ResultadoPreselectaNormalizadoV1"
+        }
+      }
+    },
+    "HDCResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "versionContrato",
+        "resultado"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "versionContrato": {
+          "type": "string",
+          "enum": [
+            "HDC_NORMALIZADO_V1"
+          ]
+        },
+        "resultado": {
+          "$ref": "#/components/schemas/ResultadoHDCNormalizado"
+        }
+      }
+    },
+    "DesgloseEndeudamientoHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codigoTipo",
+        "tipo",
+        "calidadDeudor",
+        "cupo_original",
+        "cupo_pesos",
+        "saldo_original",
+        "saldo_pesos",
+        "saldo_mora_original",
+        "saldo_mora_pesos",
+        "cuota_original",
+        "cuota_pesos",
+        "estados_importes"
+      ],
+      "properties": {
+        "codigoTipo": {
+          "type": "string",
+          "nullable": true
+        },
+        "tipo": {
+          "type": "string",
+          "nullable": true
+        },
+        "calidadDeudor": {
+          "type": "string",
+          "nullable": true
+        },
+        "cupo_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "cupo_pesos": {
+          "type": "string",
+          "nullable": true,
+          "description": "Decimal exacto en COP serializado como string, nunca float."
+        },
+        "saldo_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "saldo_pesos": {
+          "type": "string",
+          "nullable": true,
+          "description": "Decimal exacto en COP serializado como string, nunca float."
+        },
+        "saldo_mora_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "saldo_mora_pesos": {
+          "type": "string",
+          "nullable": true,
+          "description": "Decimal exacto en COP serializado como string, nunca float."
+        },
+        "cuota_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "cuota_pesos": {
+          "type": "string",
+          "nullable": true,
+          "description": "Decimal exacto en COP serializado como string, nunca float."
+        },
+        "estados_importes": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "EndeudamientoActualHDC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disponible",
+        "cuota_mensual_original",
+        "cuota_mensual_pesos",
+        "cuota_control_original",
+        "saldo_total_original",
+        "saldo_total_pesos",
+        "saldo_mora_original",
+        "saldo_mora_pesos",
+        "calidad_deudor",
+        "unidad_original",
+        "moneda_homologada",
+        "fuente",
+        "referencia",
+        "estado_consistencia",
+        "desglose_tipo_cuenta",
+        "totales",
+        "advertencias"
+      ],
+      "properties": {
+        "disponible": {
+          "type": "boolean",
+          "description": "True solo para consulta efectiva, Resumen unico y una cuota Total Principal valida exactamente igual. Sin control no es utilizable."
+        },
+        "cuota_mensual_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "cuota_mensual_pesos": {
+          "type": "string",
+          "nullable": true,
+          "description": "Decimal exacto en COP serializado como string, nunca float."
+        },
+        "cuota_control_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "saldo_total_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "saldo_total_pesos": {
+          "type": "string",
+          "nullable": true,
+          "description": "Decimal exacto en COP serializado como string, nunca float."
+        },
+        "saldo_mora_original": {
+          "type": "string",
+          "nullable": true
+        },
+        "saldo_mora_pesos": {
+          "type": "string",
+          "nullable": true,
+          "description": "Decimal exacto en COP serializado como string, nunca float."
+        },
+        "calidad_deudor": {
+          "type": "string",
+          "enum": [
+            "Principal"
+          ]
+        },
+        "unidad_original": {
+          "type": "string",
+          "enum": [
+            "MILES_COP"
+          ]
+        },
+        "moneda_homologada": {
+          "type": "string",
+          "enum": [
+            "COP"
+          ]
+        },
+        "fuente": {
+          "type": "string",
+          "enum": [
+            "ADAPTACION_CONGENTE"
+          ]
+        },
+        "referencia": {
+          "type": "string"
+        },
+        "estado_consistencia": {
+          "type": "string",
+          "description": "CONSISTENTE, INCONSISTENTE, SIN_CONTROL_CRUZADO, TOTAL_PRINCIPAL_MULTIPLE, ESTRUCTURA_AMBIGUA, AUSENTE, CONTROL_*, NO_REPORTADO_PROVEEDOR, FORMATO_INVALIDO, VALOR_NEGATIVO_NO_DOCUMENTADO o CONSULTA_NO_EFECTIVA."
+        },
+        "desglose_tipo_cuenta": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/DesgloseEndeudamientoHDC"
+          },
+          "description": "Evidencia preservada sin filtrar sectores ni reconstruir el total."
+        },
+        "totales": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/DesgloseEndeudamientoHDC"
+          },
+          "description": "Incluye Principal, Codeudor y Otros por separado; solo Principal controla cuota."
+        },
+        "advertencias": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/AdvertenciaHDC"
+          }
+        }
+      }
+    }
+  }
+}

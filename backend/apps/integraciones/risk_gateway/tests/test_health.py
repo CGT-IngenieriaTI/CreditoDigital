@@ -404,7 +404,17 @@ class HealthTests(SimpleTestCase):
                 for name in imports:
                     self.assertFalse(name.startswith(forbidden), (source.name, name))
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                    self.assertNotIn(node.func.attr, {"post", "put", "patch", "delete", "delay", "apply_async"})
+                    self.assertNotIn(node.func.attr, {"put", "patch", "delete", "delay", "apply_async"})
+                    if node.func.attr == "post":
+                        self.assertEqual(source.name, "transporte.py")
+        transport = ast.parse((package / "transporte.py").read_text(encoding="utf-8"))
+        health = next(node for node in ast.walk(transport)
+                      if isinstance(node, ast.FunctionDef) and node.name == "health")
+        calls = [node for node in ast.walk(health) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Attribute) and node.func.attr == "_response"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].args[1].value, "GET")
+        self.assertEqual(calls[0].args[2].id, "HEALTH_PATH")
 
     def test_bloqueo_http_socket_dns(self):
         import socket

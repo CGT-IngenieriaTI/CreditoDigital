@@ -17,17 +17,19 @@ from .services.credihoy_shadow.servicio import ServicioEvaluacionCrediHoyShadow,
 
 @shared_task(name='credihoy.continuar_unico',ignore_result=True,
              acks_late=False,autoretry_for=(),max_retries=0)
-def continuar_credihoy_unico(*,solicitud_id,operador_id):
+def continuar_credihoy_unico(*,solicitud_id,operador_id,recuperar_existente=False):
     from django.contrib.auth import get_user_model
     from .services.orchestration import continuar_credihoy_unico as continuar
     operador=get_user_model().objects.get(pk=operador_id,is_active=True,is_staff=True)
-    return continuar(solicitud_id,operador=operador)
+    return continuar(solicitud_id,operador=operador,recuperar_existente=recuperar_existente)
 
 
 @shared_task(name='credihoy.continuar_unico_pendientes',ignore_result=True,
              acks_late=False,autoretry_for=(),max_retries=0)
 def continuar_credihoy_unico_pendientes(*,operador_id):
     """Existing worker polls durable authorization evidence, never a browser event."""
+    if getattr(settings,'CREDIHOY_CONTINUACION_MASIVA_ENABLED',False) is not True:
+        return 'CONTINUACION_MASIVA_NO_HABILITADA'
     if (getattr(settings,'RISK_GATEWAY_ORCHESTRATION_ENABLED',False) is not True
             or getattr(settings,'CREDIHOY_EVALUACION_AUTOGESTION_ENABLED',False) is not True):
         return 'CONTINUACION_OPERATIVA_NO_HABILITADA'

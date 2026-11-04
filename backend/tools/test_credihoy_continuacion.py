@@ -16,6 +16,7 @@ from tools.test_credihoy_autoservicio import AutoservicioTests
 
 
 @override_settings(RISK_GATEWAY_ORCHESTRATION_ENABLED=True,CREDIHOY_EVALUACION_AUTOGESTION_ENABLED=True,
+    CREDIHOY_CONTINUACION_MASIVA_ENABLED=True,
     CREDIHOY_AUTOSERVICIO_ENABLED=True,CREDIHOY_AUTOSERVICIO_DB_ALIAS='default',
     CREDIHOY_TITULAR_SECRET='SYNTHETIC_OWNER_'+'o'*64)
 class ContinuacionTests(TransactionTestCase):
@@ -54,6 +55,39 @@ class ContinuacionTests(TransactionTestCase):
     def test_invalid_authorization_never_calls_gateway(self):
         with patch('apps.xcore_consumo.services.credihoy_v2.unico.centrales_personal.verificar_autorizacion_centrales_personal',side_effect=ValueError),patch('apps.integraciones.risk_gateway.operaciones.servicio.OrquestadorGateway.ejecutar') as gateway:
             self.assertEqual(self.run_case()['estado'],'CONSENTIMIENTO_PENDIENTE');gateway.assert_not_called()
+
+    def test_typed_authorization_failure_is_durable_and_never_calls_gateway(self):
+        with patch('apps.xcore_consumo.services.credihoy_v2.unico.centrales_personal.verificar_autorizacion_centrales_personal',side_effect=OperacionError('AUTORIZACION_CENTRALES_PERSONAL_VERIFICABLE_REQUERIDA')),patch('apps.integraciones.risk_gateway.operaciones.servicio.OrquestadorGateway.ejecutar') as gateway:
+            self.assertEqual(self.run_case()['estado'],'CONSENTIMIENTO_PENDIENTE')
+            gateway.assert_not_called()
+
+    @override_settings(CREDIHOY_CONTINUACION_MASIVA_ENABLED=False)
+    def test_bulk_worker_is_closed_independently_of_financial_flags(self):
+        from apps.xcore_consumo.tasks import continuar_credihoy_unico_pendientes
+        with patch('apps.xcore_consumo.services.orchestration.continuar_credihoy_unico') as run:
+            self.assertEqual(continuar_credihoy_unico_pendientes.run(operador_id=self.operator.pk),'CONTINUACION_MASIVA_NO_HABILITADA')
+            run.assert_not_called()
+
+    @override_settings(RISK_GATEWAY_ORCHESTRATION_ENABLED=False,CREDIHOY_EVALUACION_AUTOGESTION_ENABLED=False)
+    def test_recovery_without_existing_evaluation_never_consumes(self):
+        with patch('apps.integraciones.risk_gateway.operaciones.servicio.OrquestadorGateway.ejecutar') as gateway:
+            result=continuar_credihoy_unico(self.sid,operador=self.operator,recuperar_existente=True)
+        self.assertEqual(result['codigo'],'SIN_EVALUACION_EXISTENTE_NO_CONSUMIR')
+        gateway.assert_not_called()
+
+    @override_settings(RISK_GATEWAY_ORCHESTRATION_ENABLED=False,CREDIHOY_EVALUACION_AUTOGESTION_ENABLED=False)
+    def test_verified_native_evaluation_is_recovered_without_global_flags_or_mutation(self):
+        evaluation=EvaluacionConsumo.objects.create(solicitud_id=self.sid,resultados={'immutable':'fixture'})
+        rules=[{'codigo':'UNICO_FILA_'+str(n),'estado':'CUMPLE'} for n in range(16)]
+        with patch('apps.xcore_consumo.services.credihoy_v2.unico.funcional.leer_estado_funcional',return_value={'resultado':{'reglas':rules}}),patch('apps.integraciones.risk_gateway.operaciones.servicio.OrquestadorGateway.ejecutar') as gateway:
+            first=continuar_credihoy_unico(self.sid,operador=self.operator,recuperar_existente=True)
+            self.assertEqual(first,continuar_credihoy_unico(self.sid,operador=self.operator,recuperar_existente=True))
+        self.assertEqual(first['estado'],'EVALUACION_EXISTENTE_RECUPERADA')
+        self.assertEqual(len(first['evaluacionConservada']['reglas']),16)
+        self.assertFalse(first['evaluacionConservada']['evaluacionNueva'])
+        evaluation.refresh_from_db();self.assertEqual(evaluation.resultados,{'immutable':'fixture'})
+        self.assertEqual(AuditLog.objects.filter(event='credihoy_continuacion_automatica').count(),1)
+        gateway.assert_not_called()
 
     @override_settings(RISK_GATEWAY_ORCHESTRATION_ENABLED=False)
     def test_closed_flags_are_not_overridden_and_duplicate_events_are_one(self):

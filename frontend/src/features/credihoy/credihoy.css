@@ -1,0 +1,255 @@
+.ch-app { min-height: 100vh; background: #f5f7f8; color: #24313b; font-family: Arial, sans-serif; font-size: 16px; letter-spacing: 0; display: flex; flex-direction: column; }
+.ch-app * { box-sizing: border-box; letter-spacing: 0; }
+.ch-container { width: min(1140px, calc(100% - 64px)); margin-inline: auto; }
+.ch-header { background: #fff; border-bottom: 1px solid #e1e6e9; }
+.ch-header-inner { display: flex; align-items: center; gap: 28px; min-height: 96px; padding-block: 16px; }
+.ch-logo { width: 164px; height: 52px; object-fit: contain; }
+.ch-header-product { border-left: 1px solid #dce2e6; padding-left: 28px; display: flex; flex-direction: column; }
+.ch-header-product strong { font-size: 23px; color: #075c99; }
+.ch-header-product span { font-size: 13px; color: #596873; }
+.ch-local { margin-left: auto; color: #52616c; font-size: 12px; border-left: 3px solid #df7c20; padding: 5px 0 5px 10px; }
+.ch-progress { background: #fff; border-bottom: 1px solid #e1e6e9; }
+.ch-progress ol { display: grid; grid-template-columns: repeat(6, 1fr); list-style: none; padding: 24px 0; margin: 0; gap: 16px; }
+.ch-progress li { display: flex; align-items: center; gap: 9px; color: #687781; font-size: 13px; }
+.ch-step-number { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; border: 1px solid #cbd4da; border-radius: 50%; background: #fff; }
+.ch-progress .is-current { color: #075c99; font-weight: 700; }
+.ch-progress .is-current .ch-step-number { background: #075c99; border-color: #075c99; color: #fff; }
+.ch-progress .is-complete .ch-step-number { color: #147453; border-color: #147453; }
+.ch-mobile-step { display: none; }
+.ch-main { padding-block: 40px 56px; flex: 1; }
+.ch-page-heading { margin-bottom: 32px; }
+.ch-app h1 { font-size: 32px; font-weight: 700; line-height: 1.2; margin: 8px 0 0; color: #24313b; }
+.ch-app h2 { font-size: 20px; font-weight: 700; line-height: 1.35; margin: 0 0 12px; }
+.ch-eyebrow { color: #075c99; font-size: 12px; text-transform: uppercase; font-weight: 700; margin-bottom: 8px; }
+.ch-workspace--summary { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 48px; }
+.ch-workspace-content { min-width: 0; }
+.ch-workspace:not(.ch-workspace--summary) .ch-workspace-content { max-width: 960px; margin-inline: auto; width: 100%; }
+.ch-money-input { position: relative; }
+.ch-money-input > span { position: absolute; z-index: 1; top: 12px; left: 14px; color: #43515b; }
+.ch-money-input .form-control { padding-left: 32px; font-variant-numeric: tabular-nums; }
+.ch-document-version { display: block; font-size: 12px; font-weight: 400; color: #5b6a75; margin-top: 4px; }
+.ch-dev-tools { padding-bottom: 16px; margin-bottom: 28px; border-bottom: 1px dashed #b8c5ce; }
+.ch-dev-tools > summary { font-size: 12px; color: #52616c; cursor: pointer; }
+.ch-dev-tool-controls { display: flex; align-items: end; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+.ch-dev-tools label { font-size: 12px; color: #52616c; flex: 1; min-width: 180px; }
+.ch-dev-tools .form-select { margin-top: 6px; min-height: 42px; font-size: 13px; }
+.ch-dev-tools .btn { min-height: 42px; font-size: 13px; }
+.ch-integration-error { border-color: #aa3630; }
+.ch-status-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 16px; }
+.ch-status--error .ch-status-mark { background: #fae9e7; color: #aa3630; }
+.ch-status--neutral .ch-status-mark { background: #e8edf0; color: #52616c; }
+.ch-page-fields { min-width: 0; border: 0; padding: 0; margin: 0; }
+.ch-side-summary { border-left: 1px solid #d9e1e6; padding-left: 28px; align-self: start; }
+.ch-section-heading p, .ch-help { font-size: 14px; line-height: 1.6; color: #5b6a75; }
+.ch-section-heading { margin-bottom: 24px; }
+.ch-section-heading p { margin: 0; }
+.ch-section-divider { border-top: 1px solid #dce3e8; margin-top: 32px; padding-top: 28px; }
+.ch-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.ch-field { min-width: 0; }
+.ch-field .form-label { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.ch-app .form-control, .ch-app .form-select { border-radius: 6px; border-color: #b8c5ce; min-height: 48px; background-color: #fff; font-size: 16px; font-family: inherit; }
+.ch-app .form-control:focus, .ch-app .form-select:focus { border-color: #075c99; box-shadow: 0 0 0 3px #075c991c; }
+.ch-help { margin-top: 8px; }
+.ch-app .btn { min-height: 46px; padding: 10px 22px; border-radius: 6px; font-size: 15px; font-weight: 600; white-space: normal; }
+.ch-app .btn-primary { background: #075c99; border-color: #075c99; }
+.ch-app .btn-primary:hover { background: #064c7d; border-color: #064c7d; }
+.ch-app .btn-outline-secondary { color: #344b5c; border-color: #8799a6; }
+.ch-actions { display: flex; justify-content: space-between; gap: 16px; border-top: 1px solid #dce3e8; padding-top: 24px; margin-top: 36px; }
+.ch-actions .btn-primary { margin-left: auto; }
+.ch-note { padding: 16px 20px; background: #fff; border-left: 3px solid #dd7b24; line-height: 1.6; font-size: 14px; margin-bottom: 24px; }
+.ch-note p:last-child { margin-bottom: 0; }
+.ch-note--neutral { border-color: #789aa9; background: #edf2f4; }
+.ch-payment-line { display: flex; justify-content: space-between; padding: 18px 0; margin-top: 20px; border-bottom: 1px solid #dce3e8; }
+.ch-range { margin-top: 14px; }
+.ch-checkbox { display: flex; align-items: flex-start; gap: 12px; font-size: 15px; line-height: 1.6; cursor: pointer; }
+.ch-checkbox input { width: 20px; height: 20px; flex: 0 0 20px; margin-top: 2px; accent-color: #075c99; }
+.ch-pickup-selection { margin-top: 20px; }
+.ch-detail-list { margin: 0; }
+.ch-detail-list > div { padding: 12px 0; border-bottom: 1px solid #dce3e8; }
+.ch-detail-list dt { color: #64727e; font-size: 13px; font-weight: 400; }
+.ch-detail-list dd { margin: 4px 0 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.ch-credit-state { width: 100%; min-width: 0; }
+.ch-credit-viewnav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid #dce3e8; margin-bottom: 24px; }
+.ch-credit-viewnav button { border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 12px 4px; font-size: 13px; color: #566b78; }
+.ch-credit-viewnav button[aria-current="page"] { border-bottom-color: #075c99; color: #075c99; font-weight: 700; }
+.ch-credit-viewnav button:disabled { opacity: .5; }
+.ch-functional-viewnav { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+@media (max-width: 540px) {
+  .ch-functional-viewnav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.ch-credit-perspectives { display: inline-grid; grid-template-columns: repeat(2, 116px); padding: 3px; background: #e8edf0; border-radius: 6px; margin-bottom: 28px; }
+.ch-credit-perspectives button { border: 0; border-radius: 4px; height: 38px; background: transparent; color: #51616c; font-size: 14px; font-weight: 600; }
+.ch-credit-perspectives button[aria-selected="true"] { background: #fff; color: #075c99; box-shadow: 0 1px 3px #24313b1a; }
+.ch-credit-perspectives button:focus-visible { outline: 2px solid #075c99; outline-offset: 2px; }
+.ch-credit-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+.ch-credit-heading h2 { font-size: 24px; margin: 0; }
+.ch-credit-heading .ch-eyebrow { margin: 0 0 5px; }
+.ch-credit-badge { flex: 0 1 auto; padding: 6px 10px; border-radius: 4px; background: #fff0dc; color: #82510b; font-size: 12px; font-weight: 700; text-align: center; }
+.ch-credit-badge--ELEGIBLE_PARA_RADICACION { background: #e1f2e8; color: #1c694a; }
+.ch-credit-badge--NO_ELEGIBLE { background: #fae8e6; color: #9b352c; }
+.ch-credit-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin: 0; }
+.ch-credit-summary dt, .ch-credit-metrics dt { font-weight: 400; color: #65747f; font-size: 13px; margin-bottom: 5px; }
+.ch-credit-summary dd { font-size: 24px; color: #193b51; font-weight: 700; margin: 0; overflow-wrap: anywhere; }
+.ch-credit-caption { color: #60717b; font-size: 13px; margin: 18px 0 0; line-height: 1.6; }
+.ch-credit-band { border-top: 1px solid #dce3e8; padding-top: 24px; margin-top: 26px; }
+.ch-credit-band h3 { font-size: 18px; font-weight: 700; margin: 0 0 18px; }
+.ch-credit-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 32px; margin: 0; }
+.ch-credit-metrics dd { font-size: 16px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.ch-quote-summary dd { font-size: 20px; color: #193b51; font-variant-numeric: tabular-nums; }
+.ch-credit-required { border-left-color: #bd5149; background: #fdf1ef; padding: 12px 16px; }
+.ch-quote-actions button { white-space: normal; max-width: 100%; min-height: 44px; }
+[data-testid="cotizacion-institucional"] .table td { white-space: nowrap; }
+@media (max-width: 540px) {
+  .ch-credit-heading { flex-direction: column; }
+  .ch-credit-heading .ch-credit-badge { max-width: 100%; text-align: left; }
+  .ch-credit-perspectives { margin-bottom: 18px; }
+  .ch-credit-band { padding-top: 18px; margin-top: 20px; }
+  .ch-credit-band h3 { font-size: 17px; margin-bottom: 14px; }
+  .ch-credit-summary { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+  .ch-credit-summary > div:last-child { grid-column: 1 / -1; }
+  .ch-credit-summary > div, .ch-credit-metrics > div { min-width: 0; }
+  .ch-credit-summary dd, .ch-quote-summary dd { font-size: 20px; }
+  .ch-credit-legend { grid-template-columns: 1fr; }
+  .ch-quote-actions { display: grid !important; grid-template-columns: 1fr; }
+  .ch-credit-state button, [data-testid="functional-flow"] > .d-flex button { white-space: normal; max-width: 100%; }
+}
+.ch-credit-rulebar { display: flex; gap: 2px; height: 12px; overflow: hidden; border-radius: 4px; background: #e3e8eb; }
+.ch-credit-rulebar > span { flex-basis: 0; min-width: 0; }
+.rule-CUMPLE { background: #218466; }
+.rule-PENDIENTE_POLITICA { background: #c18c28; }
+.rule-NO_EVALUABLE { background: #8d9ca6; }
+.rule-NO_CUMPLE { background: #bd5149; }
+.rule-NO_APLICA { background: #c5cfd5; }
+.rule-INACTIVA { background: #dce3e7; }
+.ch-credit-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 24px; padding: 0; list-style: none; margin: 16px 0 0; font-size: 13px; color: #465b69; }
+.ch-credit-legend li { display: flex; align-items: baseline; gap: 8px; }
+.ch-credit-dot { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; }
+.ch-credit-progress { list-style: none; padding: 0; margin: 0; display: grid; gap: 15px; }
+.ch-credit-progress li { display: flex; align-items: flex-start; gap: 12px; font-size: 14px; line-height: 1.5; }
+.ch-credit-step { display: grid; place-items: center; flex: 0 0 19px; width: 19px; height: 19px; border: 1.5px solid #b4c0c8; border-radius: 50%; font-size: 12px; font-weight: 700; color: #788993; margin-top: 1px; }
+.is-completo .ch-credit-step { border-color: #218466; color: #218466; }
+.is-revision .ch-credit-step { border-color: #be7919; color: #a2640b; }
+.ch-credit-pending { font-size: 14px; color: #4d5f6d; line-height: 1.65; padding-left: 20px; }
+.ch-credit-pending li { margin-bottom: 8px; }
+.ch-credit-next { border-left: 3px solid #075c99; padding: 8px 0 8px 16px; margin-top: 22px; font-size: 14px; }
+.ch-credit-next p { color: #536574; margin: 5px 0 0; line-height: 1.6; }
+.ch-credit-eligibility { color: #82510b; font-weight: 700; margin-bottom: 8px; }
+.ch-credit-blockers { padding-left: 20px; font-size: 13px; line-height: 1.7; }
+.ch-credit-blockers code { color: #73532c; overflow-wrap: anywhere; }
+.ch-credit-table { max-width: 100%; overflow-x: auto; border: 1px solid #dce3e8; border-radius: 4px; }
+.ch-credit-table table { width: 100%; min-width: 650px; border-collapse: collapse; font-size: 13px; }
+.ch-credit-table th, .ch-credit-table td { padding: 12px 14px; border-bottom: 1px solid #e3e8ec; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.ch-credit-table thead th { color: #506571; background: #edf2f5; white-space: nowrap; font-weight: 600; }
+.ch-credit-table tbody th { width: 34%; font-weight: 500; }
+.ch-credit-table small { display: block; font-size: 10px; color: #748692; margin-bottom: 4px; }
+.ch-credit-rule-status { display: inline-block; border-radius: 4px; padding: 3px 6px; background: #e9eef1; color: #4c606e; font-size: 11px; font-weight: 600; }
+.status-CUMPLE { background: #e1f2e8; color: #22684e; }
+.status-PENDIENTE_POLITICA { background: #fff0dc; color: #82510b; }
+.status-NO_CUMPLE { background: #fae8e6; color: #9b352c; }
+.ch-credit-history { list-style: none; padding: 0; margin: 0; }
+.ch-credit-history li { border-bottom: 1px solid #e1e7eb; padding: 12px 0; font-size: 13px; color: #506571; }
+.ch-credit-history li > div { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 4px; color: #24313b; }
+.ch-credit-history-current { color: #075c99; font-size: 11px; }
+.ch-credit-mode { font-size: 14px; color: #7e5a21; border-left: 3px solid #c18c28; padding-left: 12px; }
+.ch-credit-pending-details { padding: 0; list-style: none; font-size: 14px; }
+.ch-credit-pending-details > li { padding: 14px 0; border-bottom: 1px solid #e1e7eb; }
+.ch-credit-pending-details p { margin: 8px 0; line-height: 1.6; color: #4d5f6d; }
+.ch-credit-pending-code { display: block; font-size: 11px; color: #627583; margin-top: 5px; }
+.ch-credit-pending-details dl { margin: 8px 0 0; font-size: 12px; }
+.ch-credit-pending-details dt { font-weight: 600; color: #4d5f6d; }
+.ch-credit-pending-details dd { margin-bottom: 8px; color: #627583; }
+.ch-credit-read-confirmation { padding: 12px 0; margin-top: 20px; border-top: 1px solid #dce3e8; color: #22684e; font-size: 13px; line-height: 1.6; }
+.ch-tasas-admin { max-width: 1100px; margin-inline: auto; }
+.ch-tasas-admin h1 { font-size: 26px; }
+.ch-tasas-admin .ch-credit-viewnav { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.ch-tasas-admin [role="tab"][aria-selected="true"] { border-bottom-color: #075c99; color: #075c99; font-weight: 700; }
+.ch-tasas-admin form > .ch-field { display: block; margin: 16px 0; }
+.ch-tasas-admin .ch-credit-table .btn { min-height: 34px; padding: 4px 10px; font-size: 12px; }
+.ch-tasas-admin .ch-credit-table table { min-width: 920px; table-layout: fixed; }
+.ch-tasas-admin .ch-credit-table tbody th { width: auto; }
+.ch-tasas-admin .ch-credit-table thead th:nth-child(1) { width: 14%; }
+.ch-tasas-admin .ch-credit-table thead th:nth-child(2) { width: 18%; }
+.ch-tasas-admin .ch-credit-table thead th:nth-child(3) { width: 14%; }
+.ch-tasas-admin .ch-credit-table thead th:nth-child(4) { width: 16%; }
+.ch-tasas-admin .ch-credit-table thead th:nth-child(5) { width: 25%; }
+.ch-tasas-admin .ch-credit-table thead th:nth-child(6) { width: 13%; }
+.ch-tasas-admin .ch-credit-table .btn { white-space: nowrap; min-width: 70px; }
+@media (max-width: 620px) {
+  .ch-credit-heading { align-items: flex-start; gap: 12px; }
+  .ch-credit-heading h2 { font-size: 21px; }
+  .ch-credit-badge { max-width: 140px; }
+  .ch-credit-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+  .ch-credit-summary > div:last-child { grid-column: 1 / -1; }
+  .ch-credit-summary dd { font-size: 22px; }
+  .ch-credit-metrics { gap: 18px; }
+  .ch-credit-legend { gap: 10px 14px; font-size: 12px; }
+}
+.ch-side-summary h2 { font-size: 20px; }
+.ch-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; }
+.ch-detail-list--wide > div { display: flex; justify-content: space-between; gap: 20px; align-items: center; }
+.ch-consent { border-bottom: 1px solid #dce3e8; padding: 18px 0; }
+.ch-consent details { font-size: 14px; line-height: 1.6; margin-bottom: 16px; }
+.ch-consent summary { color: #075c99; font-weight: 600; cursor: pointer; }
+.ch-consent details p { margin: 12px 0; }
+.ch-start { max-width: 960px; margin-inline: auto; }
+.ch-start-brand { display: flex; align-items: center; gap: 14px; margin-bottom: 32px; color: #596873; font-size: 14px; }
+.ch-start-brand img { width: 58px; height: 58px; object-fit: contain; }
+.ch-start h1 { font-size: 56px; color: #075c99; }
+.ch-intro { font-size: 20px; line-height: 1.5; margin-top: 16px; max-width: 650px; }
+.ch-start-copy { color: #5b6a75; max-width: 570px; line-height: 1.7; margin: 16px 0 28px; }
+.ch-start-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; border-top: 1px solid #dce3e8; margin-top: 44px; padding: 28px 0; }
+.ch-start-facts strong { display: block; font-size: 16px; margin-bottom: 8px; }
+.ch-start-facts p { font-size: 14px; color: #5b6a75; line-height: 1.6; }
+.ch-fact-number { color: #c36514; font-size: 13px; display: block; margin-bottom: 12px; }
+.ch-status { max-width: 680px; margin-inline: auto; text-align: center; padding-block: 12px; }
+.ch-status-mark { width: 64px; height: 64px; display: grid; place-items: center; border-radius: 50%; margin: 0 auto 24px; font-size: 30px; background: #e3f1eb; color: #147453; }
+.ch-status--rechazada .ch-status-mark { background: #fae9e7; color: #aa3630; }
+.ch-status--validacion .ch-status-mark { background: #fff0dc; color: #90530e; }
+.ch-status .ch-intro { margin-inline: auto; }
+.ch-status-message { color: #5b6a75; line-height: 1.7; }
+.ch-status-summary { display: flex; justify-content: center; gap: 48px; padding: 24px 0; border-block: 1px solid #dce3e8; margin: 28px 0; }
+.ch-status-summary dt { font-size: 13px; color: #64727e; font-weight: 400; }
+.ch-status-summary dd { font-weight: 600; margin: 8px 0 0; }
+.ch-footer { border-top: 1px solid #dce3e8; background: #fff; font-size: 12px; color: #64727e; }
+.ch-footer .ch-container { display: flex; justify-content: space-between; gap: 16px; padding-block: 22px; }
+.ch-app :focus-visible { outline: 3px solid #df7c20; outline-offset: 3px; }
+.ch-app .btn-brand { background: #c94d09; border-color: #c94d09; color: #fff; box-shadow: none; }
+.ch-app .btn-brand:hover, .ch-app .btn-brand:focus-visible { background: #aa4005; border-color: #aa4005; color: #fff; }
+.ch-app h1:focus { outline: none; }
+.ch-shadow-result { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.ch-shadow-result .table { table-layout: fixed; min-width: 340px; font-size: 13px; }
+.ch-shadow-result .table th:first-child { width: 40%; }
+.ch-shadow-result .table th, .ch-shadow-result .table td { overflow-wrap: anywhere; }
+@media (max-width: 900px) {
+  .ch-container { width: calc(100% - 40px); }
+  .ch-workspace--summary { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  .ch-side-summary { border-left: 0; border-top: 1px solid #d9e1e6; padding: 24px 0 0; }
+  .ch-progress ol { gap: 10px; }
+  .ch-progress li { flex-direction: column; text-align: center; font-size: 12px; }
+}
+@media (max-width: 540px) {
+  .ch-header-inner { flex-wrap: wrap; gap: 16px; min-height: 80px; }
+  .ch-logo { width: 115px; height: 42px; }
+  .ch-header-product { padding-left: 16px; }
+  .ch-header-product strong { font-size: 20px; }
+  .ch-header-product span { font-size: 11px; }
+  .ch-local { width: 100%; margin: 0; }
+  .ch-progress ol { padding: 0 0 16px; }
+  .ch-progress li > span:last-child { display: none; }
+  .ch-progress li { flex-direction: row; justify-content: center; }
+  .ch-mobile-step { display: block; font-size: 13px; margin: 16px 0; }
+  .ch-main { padding-block: 28px 36px; }
+  .ch-app h1 { font-size: 28px; }
+  .ch-start h1 { font-size: 44px; }
+  .ch-start-brand { margin-bottom: 24px; }
+  .ch-fields, .ch-summary-grid, .ch-start-facts { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .ch-start-facts { margin-top: 32px; }
+  .ch-start-facts > div { display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: 12px; }
+  .ch-start-facts p { grid-column: 2; margin: 0; }
+  .ch-intro { font-size: 18px; }
+  .ch-actions { gap: 12px; }
+  .ch-actions .btn { padding-inline: 16px; }
+  .ch-status-summary { flex-direction: column; gap: 16px; }
+  .ch-detail-list--wide > div { flex-wrap: wrap; gap: 8px; }
+  .ch-footer .ch-container { flex-direction: column; gap: 6px; }
+}

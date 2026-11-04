@@ -1,7 +1,8 @@
-"""Configuracion diferida: importar settings no habilita ni consulta el gateway."""
+"""Configuracion inerte y validacion diferida, sin lectura de secretos en logs."""
 
 from dataclasses import dataclass, field
 import math
+import os
 from pathlib import Path
 import re
 from urllib.parse import urlsplit
@@ -28,40 +29,64 @@ def _timeout(valor, default):
         if not math.isfinite(resultado) or resultado <= 0:
             raise ValueError
         return resultado
-    except (ValueError, TypeError, OverflowError):
+    except (TypeError, ValueError, OverflowError):
         raise GatewayConfigurationError() from None
 
 
-@dataclass(frozen=True, kw_only=True, repr=False)
-class RiskGatewayConfig:
+def _secreto(settings):
+    value = getattr(settings, "RISK_GATEWAY_INTERNAL_SECRET", "")
+    reference = getattr(settings, "RISK_GATEWAY_INTERNAL_SECRET_FILE", "")
+    if not reference:
+        return value
+    try:
+        if value or type(reference) is not str:
+            raise ValueError
+        path = Path(reference)
+        if not path.is_absolute() or str(path).startswith(("\\\\", "//")):
+            raise ValueError
+        path = path.resolve(strict=True)
+        if not path.is_file() or any((p / ".git").exists() for p in path.parents):
+            raise ValueError
+        if os.name != "nt" and path.stat().st_mode & 0o007:
+            raise ValueError
+        with path.open("rb") as secret:
+            raw = secret.read(261)
+        if len(raw) > 260:
+            raise ValueError
+        value = raw.decode("ascii").rstrip("\r\n")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,256}", value):
+            raise ValueError
+        return value
+    except (OSError, ValueError, UnicodeError, RuntimeError):
+        raise GatewayConfigurationError() from None
+
+
+@dataclass(frozen=True, kw_only=True)
+class GatewayConfig:
     enabled: bool = False
-    base_url: str = ""
+    base_url: str = field(default="", repr=False)
     internal_client: str = ""
     internal_secret: str = field(default="", repr=False)
     verify_ssl: bool = True
-    ca_bundle: str = ""
+    ca_bundle: str = field(default="", repr=False)
     connect_timeout: float = 5
     read_timeout: float = 30
-    debug: bool = False
-
-    def __repr__(self):
-        return "RiskGatewayConfig(<redacted>)"
 
     @classmethod
     def from_settings(cls, settings=None):
         if settings is None:
             from django.conf import settings
-        if not _bandera(getattr(settings, "RISK_GATEWAY_ENABLED", "N")):
+        enabled = _bandera(getattr(settings, "RISK_GATEWAY_ENABLED", "N"))
+        if not enabled:
             return cls()
         return cls(enabled=True,
             base_url=getattr(settings, "RISK_GATEWAY_BASE_URL", ""),
             internal_client=getattr(settings, "RISK_GATEWAY_INTERNAL_CLIENT", ""),
-            internal_secret=getattr(settings, "RISK_GATEWAY_INTERNAL_SECRET", ""),
+            internal_secret=_secreto(settings),
             verify_ssl=_bandera(getattr(settings, "RISK_GATEWAY_VERIFY_SSL", "Y")),
             ca_bundle=getattr(settings, "RISK_GATEWAY_CA_BUNDLE", ""),
             connect_timeout=_timeout(getattr(settings, "RISK_GATEWAY_CONNECT_TIMEOUT", ""), 5),
-            read_timeout=_timeout(getattr(settings, "RISK_GATEWAY_READ_TIMEOUT", ""), 30),
-            debug=getattr(settings, "DEBUG", False))
+            read_timeout=_timeout(getattr(settings, "RISK_GATEWAY_READ_TIMEOUT", ""), 30))
 
     def validar(self):
         if type(self.enabled) is not bool:
@@ -83,12 +108,9 @@ class RiskGatewayConfig:
             if not isinstance(self.internal_secret, str) or not re.fullmatch(
                     r"[A-Za-z0-9_-]{32,256}", self.internal_secret):
                 raise ValueError
-            if type(self.verify_ssl) is not bool or type(self.debug) is not bool:
+            if type(self.verify_ssl) is not bool or not isinstance(self.ca_bundle, str):
                 raise ValueError
-            if not self.verify_ssl and not self.debug:
-                raise ValueError
-            if not isinstance(self.ca_bundle, str) or (self.ca_bundle and (
-                    not self.verify_ssl or not Path(self.ca_bundle).is_file())):
+            if self.ca_bundle and (not self.verify_ssl or not Path(self.ca_bundle).is_file()):
                 raise ValueError
             if any(type(v) not in (int, float) for v in (self.connect_timeout, self.read_timeout)):
                 raise ValueError

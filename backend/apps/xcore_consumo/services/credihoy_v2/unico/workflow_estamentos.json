@@ -1,0 +1,341 @@
+{
+  "version": "ESTAMENTOS_SELECT_20261026_V1",
+  "soloLectura": true,
+  "noEsConfiguracionVigenteAutomatica": true,
+  "recibos": [
+    "cd6-integracion-contrato-efa661dc361a4f19be81e744cbefcc59.sealed.json",
+    "cd6-integracion-contrato-aeb4d76813fd42f886881910ecad90e8.sealed.json"
+  ],
+  "catalogo": [
+    {
+      "K_IDACTI": 121,
+      "N_ACTIVI": "Seleccionar la instancia que aprobara la solicitud de cr\u00e9dito o rechazar la solicitud de cr\u00e9dito",
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "I_RESPON": "GRL",
+      "N_ACCION": "PK_WF_MOVIMIENTO.PR_EJECUTA_EVALUACION",
+      "N_COMAND": null
+    },
+    {
+      "K_IDACTI": 5997,
+      "N_ACTIVI": "Se traslada la actividad al comite de creditos para su vaidaci\u00f3n u aprobaci\u00f3n",
+      "I_EJECUC": "A",
+      "I_CAPTUR": "N",
+      "I_RESPON": "USA",
+      "N_ACCION": "PK_WF_MOVIMIENTO.PR_EJECUTA_EVALUACION",
+      "N_COMAND": null
+    },
+    {
+      "K_IDACTI": 6094,
+      "N_ACTIVI": "Se traslada la actividad a la Gerencia para realizar Geston de Cr\u00e9dito",
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "I_RESPON": "USL",
+      "N_ACCION": null,
+      "N_COMAND": null
+    },
+    {
+      "K_IDACTI": 6759,
+      "N_ACTIVI": "Valida el tipo de garantia segun el monto del credito y el requisto 327",
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "I_RESPON": "USL",
+      "N_ACCION": "PK_WF_MOVIMIENTO.PR_EJECUTA_EVALUACION",
+      "N_COMAND": null
+    },
+    {
+      "K_IDACTI": 6774,
+      "N_ACTIVI": "Realiza la aprobacion de una solicitud de credito, capturando previamente la fecha de aprobacion y la fecha tentativa de desembolso. Puede ejecutarse de manera individual o masiva.",
+      "I_EJECUC": "A",
+      "I_CAPTUR": "N",
+      "I_RESPON": "USL",
+      "N_ACCION": "PK_CA_WF_SOLICITUD_CREDITO.PR_APRUEBA_SOLICITUD",
+      "N_COMAND": null
+    },
+    {
+      "K_IDACTI": 7265,
+      "N_ACTIVI": "El analista indica si es viable o no la solicitud",
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "I_RESPON": "USL",
+      "N_ACCION": "PK_WF_MOVIMIENTO.PR_EJECUTA_EVALUACION",
+      "N_COMAND": null
+    }
+  ],
+  "rutas": [
+    {
+      "K_IDRUTA": 10002852,
+      "K_SERIE": 7423,
+      "Q_TRANSI": 1,
+      "K_IDACTI": 121,
+      "I_TRANSI": "AC",
+      "N_REGLA": null,
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "N_ACCION": "PK_WF_MOVIMIENTO.PR_EJECUTA_EVALUACION"
+    },
+    {
+      "K_IDRUTA": 10002852,
+      "K_SERIE": 7424,
+      "Q_TRANSI": 2,
+      "K_IDACTI": 121,
+      "I_TRANSI": "DH",
+      "N_REGLA": null,
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "N_ACCION": "PK_WF_MOVIMIENTO.PR_EJECUTA_EVALUACION"
+    },
+    {
+      "K_IDRUTA": 10002856,
+      "K_SERIE": 7440,
+      "Q_TRANSI": 1,
+      "K_IDACTI": 6094,
+      "I_TRANSI": "AC",
+      "N_REGLA": null,
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "N_ACCION": null
+    },
+    {
+      "K_IDRUTA": 10002856,
+      "K_SERIE": 7441,
+      "Q_TRANSI": 2,
+      "K_IDACTI": 6094,
+      "I_TRANSI": "DH",
+      "N_REGLA": null,
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "N_ACCION": null
+    },
+    {
+      "K_IDRUTA": 10002991,
+      "K_SERIE": 8060,
+      "Q_TRANSI": 1,
+      "K_IDACTI": 5997,
+      "I_TRANSI": "AC",
+      "N_REGLA": null,
+      "I_EJECUC": "A",
+      "I_CAPTUR": "N",
+      "N_ACCION": "PK_WF_MOVIMIENTO.PR_EJECUTA_EVALUACION"
+    },
+    {
+      "K_IDRUTA": 10002991,
+      "K_SERIE": 8061,
+      "Q_TRANSI": 2,
+      "K_IDACTI": null,
+      "I_TRANSI": "PA",
+      "N_REGLA": null,
+      "I_EJECUC": null,
+      "I_CAPTUR": null,
+      "N_ACCION": null
+    },
+    {
+      "K_IDRUTA": 10002991,
+      "K_SERIE": 8062,
+      "Q_TRANSI": 3,
+      "K_IDACTI": 0,
+      "I_TRANSI": "AC",
+      "N_REGLA": null,
+      "I_EJECUC": "A",
+      "I_CAPTUR": "N",
+      "N_ACCION": "PK_WF_MOVIMIENTO.PR_EJECUTA_EVALUACION"
+    },
+    {
+      "K_IDRUTA": 10002991,
+      "K_SERIE": 8063,
+      "Q_TRANSI": 4,
+      "K_IDACTI": 149,
+      "I_TRANSI": "AC",
+      "N_REGLA": null,
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "N_ACCION": "PK_WF_MOVIMIENTO.PR_EJECUTA_EVALUACION"
+    },
+    {
+      "K_IDRUTA": 10002991,
+      "K_SERIE": 8064,
+      "Q_TRANSI": 5,
+      "K_IDACTI": 149,
+      "I_TRANSI": "DH",
+      "N_REGLA": null,
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "N_ACCION": "PK_WF_MOVIMIENTO.PR_EJECUTA_EVALUACION"
+    },
+    {
+      "K_IDRUTA": 10002992,
+      "K_SERIE": 8052,
+      "Q_TRANSI": 1,
+      "K_IDACTI": 7238,
+      "I_TRANSI": "AC",
+      "N_REGLA": null,
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "N_ACCION": "PK_CA_WF_SOLICITUD_CREDITO.PR_ACEPTA_COMITE"
+    },
+    {
+      "K_IDRUTA": 10002993,
+      "K_SERIE": 8053,
+      "Q_TRANSI": 1,
+      "K_IDACTI": 7239,
+      "I_TRANSI": "AC",
+      "N_REGLA": null,
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "N_ACCION": "PK_CA_WF_SOLICITUD_CREDITO.PR_ACEPTA_COMITE"
+    },
+    {
+      "K_IDRUTA": 10002994,
+      "K_SERIE": 8054,
+      "Q_TRANSI": 1,
+      "K_IDACTI": 7240,
+      "I_TRANSI": "AC",
+      "N_REGLA": null,
+      "I_EJECUC": "H",
+      "I_CAPTUR": "N",
+      "N_ACCION": "PK_CA_WF_SOLICITUD_CREDITO.PR_ACEPTA_COMITE"
+    }
+  ],
+  "caminos": [
+    {
+      "K_IDRUTA": 10002852,
+      "K_SERIE": 7424,
+      "K_IDCAMI": 4198,
+      "I_DEFAUL": "N",
+      "N_CONDIC": "COMITE DE CREDITOS INTERNO",
+      "K_IDRUTA_CAM": 10002853,
+      "K_IDACTI_CAM": null,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002852,
+      "K_SERIE": 7424,
+      "K_IDCAMI": 4199,
+      "I_DEFAUL": "N",
+      "N_CONDIC": "COMITE FABRICA DE CR\u00c9DITO",
+      "K_IDRUTA_CAM": 10002987,
+      "K_IDACTI_CAM": null,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002852,
+      "K_SERIE": 7424,
+      "K_IDCAMI": 4200,
+      "I_DEFAUL": "N",
+      "N_CONDIC": "COMITE DE GERENCIA",
+      "K_IDRUTA_CAM": 10002855,
+      "K_IDACTI_CAM": null,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002852,
+      "K_SERIE": 7424,
+      "K_IDCAMI": 4201,
+      "I_DEFAUL": "N",
+      "N_CONDIC": "CONSEJO DE ADMINISTRACION",
+      "K_IDRUTA_CAM": 10002856,
+      "K_IDACTI_CAM": null,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002852,
+      "K_SERIE": 7424,
+      "K_IDCAMI": 4651,
+      "I_DEFAUL": "N",
+      "N_CONDIC": "COMIT\u00c9 INSTITUCIONAL DE CREDITO",
+      "K_IDRUTA_CAM": 10002991,
+      "K_IDACTI_CAM": null,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002852,
+      "K_SERIE": 7424,
+      "K_IDCAMI": 4921,
+      "I_DEFAUL": "N",
+      "N_CONDIC": "COMITE FABRICA CREDIHOY",
+      "K_IDRUTA_CAM": 10003054,
+      "K_IDACTI_CAM": null,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002852,
+      "K_SERIE": 7424,
+      "K_IDCAMI": 5535,
+      "I_DEFAUL": "N",
+      "N_CONDIC": "COMIT\u00c9 DE F\u00c1BRICA MENOR MONTO",
+      "K_IDRUTA_CAM": 10003307,
+      "K_IDACTI_CAM": null,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002856,
+      "K_SERIE": 7441,
+      "K_IDCAMI": 4217,
+      "I_DEFAUL": "N",
+      "N_CONDIC": "RECHAZAR",
+      "K_IDRUTA_CAM": null,
+      "K_IDACTI_CAM": 122,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002856,
+      "K_SERIE": 7441,
+      "K_IDCAMI": 4218,
+      "I_DEFAUL": "N",
+      "N_CONDIC": "APROBAR",
+      "K_IDRUTA_CAM": 10002857,
+      "K_IDACTI_CAM": null,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002991,
+      "K_SERIE": 8061,
+      "K_IDCAMI": 4646,
+      "I_DEFAUL": "N",
+      "N_CONDIC": null,
+      "K_IDRUTA_CAM": 10002992,
+      "K_IDACTI_CAM": null,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002991,
+      "K_SERIE": 8061,
+      "K_IDCAMI": 4647,
+      "I_DEFAUL": "N",
+      "N_CONDIC": null,
+      "K_IDRUTA_CAM": 10002993,
+      "K_IDACTI_CAM": null,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002991,
+      "K_SERIE": 8061,
+      "K_IDCAMI": 4648,
+      "I_DEFAUL": "N",
+      "N_CONDIC": null,
+      "K_IDRUTA_CAM": 10002994,
+      "K_IDACTI_CAM": null,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002991,
+      "K_SERIE": 8064,
+      "K_IDCAMI": 4649,
+      "I_DEFAUL": "N",
+      "N_CONDIC": "APROBAR",
+      "K_IDRUTA_CAM": 10002857,
+      "K_IDACTI_CAM": null,
+      "Q_PRIORI": 1
+    },
+    {
+      "K_IDRUTA": 10002991,
+      "K_SERIE": 8064,
+      "K_IDCAMI": 4650,
+      "I_DEFAUL": "N",
+      "N_CONDIC": "RECHAZAR",
+      "K_IDRUTA_CAM": null,
+      "K_IDACTI_CAM": 122,
+      "Q_PRIORI": 1
+    }
+  ]
+}

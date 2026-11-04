@@ -1,1 +1,1 @@
-"""Health estructural del gateway; sin consultas financieras."""
+"""Consumidor interno offline/shadow; no activa consultas al importarse."""

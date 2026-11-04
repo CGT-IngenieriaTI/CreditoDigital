@@ -138,6 +138,97 @@ READONLY_NOTICE = (
 )
 logger = logging.getLogger("credito")
 
+
+def continuar_credihoy_unico(solicitud_id, *, operador):
+    """Worker continuation of a native dossier; never a browser financial command."""
+    from uuid import UUID, NAMESPACE_URL, uuid5
+    from django.core.exceptions import ObjectDoesNotExist
+    from django.db import connection, transaction
+    from apps.utils.models import AuditLog
+    from apps.xcore_consumo.models import EvaluacionConsumo
+    from apps.integraciones.risk_gateway.contratos import HDCRequest
+    from apps.integraciones.risk_gateway.configuracion import GatewayConfig
+    from apps.integraciones.risk_gateway.errores import GatewayError
+    from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
+    from apps.integraciones.risk_gateway.operaciones.servicio import OrquestadorGateway
+    from apps.integraciones.risk_gateway.operaciones.validacion import validar, TIPOS_DOCUMENTO
+    from apps.integraciones.risk_gateway.operaciones.errores import OperacionError
+    from .credihoy_v2.unico import autoservicio, centrales_personal, funcional
+    from .credihoy_v2.base import Hecho
+
+    sid=str(UUID(str(solicitud_id)))
+    if connection.in_atomic_block or not connection.get_autocommit():
+        raise ValueError('CONTINUACION_REQUIERE_COMMIT_DURABLE')
+    if (not operador.is_authenticated or not operador.is_active or not operador.is_staff
+            or not operador.has_perm('xcore_consumo.add_evaluacionconsumo')):
+        raise ValueError('OPERADOR_TECNICO_CONTINUACION_NO_AUTORIZADO')
+    detail=SolicitudConsumo.objects.select_related('solicitud__solicitante').get(solicitud_id=sid)
+    case=autoservicio.validar_vinculo_consumo(detail.solicitud)
+    case.consumo_detail=detail
+    try:consent=case.consentimiento_consumo
+    except ObjectDoesNotExist:consent=None
+    correlation=str(uuid5(NAMESPACE_URL,'credihoy-continuacion:'+sid+':'+(consent.text_hash if consent else 'SIN_CONSENTIMIENTO')))
+
+    def record(estado,codigo,operation=None):
+        packet={'estado':estado,'codigo':codigo,'solicitudId':sid,'requestId':correlation,
+            'operacionId':str(operation.operacion_id) if operation else None,
+            'decisionCrediticia':'NO_AUTORIZADA','START':0,'desembolso':False}
+        with transaction.atomic(durable=True):
+            SolicitudConsumo.objects.select_for_update().get(pk=detail.pk)
+            # Same evidence/transition is one journal event even with duplicate tasks.
+            query=AuditLog.objects.filter(solicitud_id=sid,event='credihoy_continuacion_automatica',request_id=correlation)
+            if not query.filter(payload=packet).exists():
+                AuditLog.objects.create(solicitud_id=sid,event='credihoy_continuacion_automatica',
+                    request_id=correlation,actor='user:'+str(operador.pk),payload=packet)
+        return packet
+
+    if consent is None:
+        return record('CONSENTIMIENTO_PENDIENTE','DOCUMENTO_PERSONAL_PENDIENTE_ACEPTACION')
+    try:
+        centrales_personal.verificar_autorizacion_centrales_personal(case,consent)
+    except (ValueError,ObjectDoesNotExist):
+        return record('CONSENTIMIENTO_PENDIENTE','AUTORIZACION_CENTRALES_VIGENTE_REQUERIDA')
+    if (getattr(settings,'RISK_GATEWAY_ORCHESTRATION_ENABLED',False) is not True
+            or getattr(settings,'CREDIHOY_EVALUACION_AUTOGESTION_ENABLED',False) is not True):
+        return record('AUTORIZACIONES_COMPLETAS','CONTINUACION_OPERATIVA_NO_HABILITADA')
+    try:
+        config=GatewayConfig.from_settings().validar()
+        request=HDCRequest.desde_payload({'persona':'natural',
+            'person_id_type':TIPOS_DOCUMENTO[case.solicitante.tipo_identificacion],
+            'person_id_number':case.solicitante.numero_identificacion,
+            'person_last_name':case.solicitante.primer_apellido,
+            'metadata':{'consumidor':config.internal_client}})
+        validar(case,request)
+    except OperacionError as exc:
+        return record('AUTORIZACIONES_COMPLETAS',exc.codigo)
+    except GatewayError:
+        return record('AUTORIZACIONES_COMPLETAS','CONEXION_INSTITUCIONAL_NO_DISPONIBLE')
+    # A completed engine result is immutable. Do not consume another bureau report.
+    evaluation=EvaluacionConsumo.objects.filter(solicitud_id=sid).first()
+    if evaluation is not None:
+        funcional.leer_estado_funcional(case)
+        return record('EVALUACION_COMPLETADA','EVALUACION_EXISTENTE_CONSERVADA')
+    prior=OperacionGateway.objects.filter(solicitud_id=sid,proveedor='HDC').first()
+    if prior is not None and prior.estado not in {'PENDIENTE'}:
+        return record('PENDIENTE_CONCILIACION','HDC_EXISTENTE_NO_REENVIAR')
+    try:
+        result=OrquestadorGateway().ejecutar(sid,request)
+    except OperacionError as exc:
+        return record('PENDIENTE_CONCILIACION',exc.codigo)
+    if result.respuesta is None or result.reutilizada:
+        return record('PENDIENTE_CONCILIACION','HDC_RESPUESTA_PERSISTIDA_REQUIERE_RECUPERACION',result)
+    if result.estado not in {'COMPLETADA','SIN_INFORMACION'}:
+        return record('PENDIENTE_CONCILIACION','HDC_RESULTADO_NO_COMPLETADO',result)
+    try:
+        funcional.registrar_resultado_consulta_hdc(sid,operador,operacion=result,
+            ingresos=Hecho(fuente='INGRESO_COMPUTABLE_PENDIENTE_ACREDITACION'),
+            hechos_reglas=funcional._reglas_precarga(case),autogestion=True)
+    except Exception:
+        # The external result may be durable already. Never repeat it on failure.
+        record('PENDIENTE_CONCILIACION','EVALUACION_PERSISTENCIA_NO_CONFIRMADA',result)
+        raise
+    return record('EVALUACION_COMPLETADA','EVALUACION_REGISTRADA_DECISION_INSTITUCIONAL_PENDIENTE',result)
+
 PRESELECTA_USER_FRIENDLY_REJECTION = (
     "Por ahora no es posible continuar con la solicitud de credito. "
     "Si necesitas mas informacion, comunicate con la cooperativa."

@@ -1,0 +1,23 @@
+{
+  "version": "SP_CONSULTAFAMILIAR_INSTALADO_20261026_V1",
+  "owner": "SYS",
+  "procedimiento": "SP_CONSULTAFAMILIAR",
+  "sinonimo": {"owner": "L2K", "targetOwner": "SYS"},
+  "firma": [[1,"CEDULA","IN","VARCHAR2"],[2,"LISTADO","OUT","REF CURSOR"]],
+  "columnasPositivas": ["RESULTADO","TIPOFAMILIAR"],
+  "tiposPositivos": ["DB_TYPE_VARCHAR","DB_TYPE_VARCHAR"],
+  "columnasNegativas": ["'NO'","'NINGUNA'"],
+  "tiposNegativos": ["DB_TYPE_CHAR","DB_TYPE_CHAR"],
+  "salidaSinNovedades": ["NO","NINGUNA"],
+  "fuenteSha256": "87e80479c7ee6cfad51f0e692ba7751bf69b2e39e5103cafccca92a296fed834",
+  "reciboFuente": "cd6-integracion-contrato-efa661dc361a4f19be81e744cbefcc59.sealed.json",
+  "reciboMetadata": "cd6-integracion-contrato-aeb4d76813fd42f886881910ecad90e8.sealed.json",
+  "tablaAuxiliar": "SYS.TEMP_REVISIONPERSONAL",
+  "tablaTemporal": false,
+  "deleteSinFiltro": true,
+  "dml": ["DELETE","INSERT","UPDATE"],
+  "commitsExplicitos": 3,
+  "lecturaSalidaFiltradaPorCedula": false,
+  "ejecucionHabilitada": false,
+  "bloqueo": "TABLA_COMPARTIDA_DELETE_GLOBAL_COMMITS_Y_RIESGO_CRUCE_CONCURRENTE"
+}

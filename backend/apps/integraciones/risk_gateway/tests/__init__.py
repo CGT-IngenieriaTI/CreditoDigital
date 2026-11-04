@@ -1,1 +1,1 @@
-"""Tests sinteticos de Health; sin datos personales ni proveedores."""
+"""Pruebas offline; fixtures exclusivamente sinteticos."""

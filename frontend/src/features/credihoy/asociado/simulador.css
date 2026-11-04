@@ -1,0 +1,13 @@
+.ca-local-simulator{min-width:0;max-width:100%;border-bottom:1px solid #d9dfe0;padding-bottom:24px;margin-bottom:24px}
+.ca-local-simulator h3{font-size:1.25rem}
+.ca-local-simulator h4{font-size:1rem;margin-top:20px}
+.ca-local-simulator p,.ca-local-simulator label{overflow-wrap:anywhere}
+.ca-local-simulator input{min-width:0;width:100%}
+.ca-local-simulator button{max-width:100%;white-space:normal;min-height:44px;gap:8px}
+.ca-local-simulator details{margin:20px 0}
+.ca-local-simulator summary{cursor:pointer;font-weight:600;padding:10px 0}
+.ca-amortizacion{width:100%;max-width:100%;overflow-x:auto}
+.ca-amortizacion table{border-collapse:collapse;font-size:.875rem;width:100%;font-variant-numeric:tabular-nums}
+.ca-amortizacion th,.ca-amortizacion td{border-bottom:1px solid #d9dfe0;padding:10px;text-align:right;white-space:nowrap}
+.ca-amortizacion caption{text-align:left}
+@media(max-width:600px){.ca-local-simulator .ca-metrics{grid-template-columns:minmax(0,1fr)}.ca-local-simulator .ca-form-grid{grid-template-columns:minmax(0,1fr)}}

@@ -1,36 +1,49 @@
-"""Transporte S2S comun: una llamada explicita, sin retry ni persistencia."""
+"""Una llamada por operacion, sin retry, redireccion, cache ni persistencia."""
 
-from contextlib import contextmanager
 from decimal import Decimal
 import re
 from uuid import UUID, uuid4
 
 import requests
 
-from .configuracion import RiskGatewayConfig
-from .consultas import HDCNormalizado, HDCRequest, PreselectaNormalizado, PreselectaRequest
-from .contratos import HealthResponse, validar_request_id
+from .configuracion import GatewayConfig
+from .contratos import HDCNormalizado, HDCRequest, PreselectaNormalizado, PreselectaRequest
 from .evidencia import EvidenciaPDFHDC, MAX_PDF_BYTES, PDF_PATH
 from .errores import (
-    GatewayContentTypeError, GatewayCorrelationError, GatewayEvidenceConflict,
-    GatewayEvidenceNotFound, GatewayForbidden, GatewayIdempotencyConflict,
-    GatewayInvalidResponse, GatewayJSONError, GatewayNetworkError, GatewayPDFError,
-    GatewayProviderError, GatewayRateLimited, GatewayRedirectError, GatewaySchemaError,
-    GatewayTimeout, GatewayUnauthorized, GatewayValidationError,
+    GatewayConfigurationError,
+    GatewayEvidenceConflict, GatewayEvidenceNotFound, GatewayForbidden,
+    GatewayIdempotencyConflict, GatewayInvalidResponse,
+    GatewayNetworkError, GatewayProviderError, GatewayRateLimited, GatewayTimeout,
+    GatewayUnauthorized, GatewayValidationError,
 )
 
 
-HEALTH_PATH = "/api/internal/v1/health/"
-PRESELECTA_PATH = "/api/internal/v1/preselecta/consultar/"
-HDC_PATH = "/api/internal/v1/hdc/consultar/"
+_STATUS_ERROR = {
+    400: GatewayValidationError, 401: GatewayUnauthorized, 403: GatewayForbidden,
+    405: GatewayValidationError, 406: GatewayValidationError, 409: GatewayIdempotencyConflict,
+    415: GatewayValidationError, 422: GatewayValidationError, 429: GatewayRateLimited,
+    500: GatewayProviderError, 502: GatewayProviderError, 503: GatewayProviderError,
+    504: GatewayTimeout,
+}
+_OPERACIONES = {
+    PreselectaRequest: ("/api/internal/v1/preselecta/consultar/", PreselectaNormalizado),
+    HDCRequest: ("/api/internal/v1/hdc/consultar/", HDCNormalizado),
+}
 
 
-def _pares_unicos(pares):
+def _request_id(valor):
+    try:
+        return str(UUID(str(valor)))
+    except (ValueError, TypeError, AttributeError):
+        return str(uuid4())
+
+
+def _objeto_unico(pares):
     resultado = {}
-    for clave, valor in pares:
-        if clave in resultado:
+    for k, v in pares:
+        if k in resultado:
             raise ValueError
-        resultado[clave] = valor
+        resultado[k] = v
     return resultado
 
 
@@ -38,88 +51,45 @@ def _constante_invalida(_):
     raise ValueError
 
 
-def _json_compatible(content_type):
-    media = content_type.split(";", 1)[0].strip().lower()
-    return media == "application/json" or (media.startswith("application/") and media.endswith("+json"))
-
-
-def _request_id(value):
-    return str(uuid4()) if value is None else str(UUID(validar_request_id(value)))
-
-
-def _idempotency_key(value):
-    if value is not None and (type(value) is not str or not re.fullmatch(
-            r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", value)):
-        raise GatewayValidationError()
-    return value
-
-
-def _headers(config, rid, accept, key):
-    headers = {"Authorization": "Bearer " + config.internal_secret,
-               "X-Internal-Client": config.internal_client,
-               "X-Request-ID": rid, "Accept": accept}
-    if key is not None:
-        headers["Idempotency-Key"] = key
-    return headers
-
-
-def _estado_200(response, rid, operation):
-    status = response.status_code
-    if status == 200:
-        return
-    error = {401: GatewayUnauthorized, 403: GatewayForbidden,
-             429: GatewayRateLimited, 504: GatewayTimeout}.get(status)
-    if error is None and operation == "consulta":
-        error = {400: GatewayValidationError, 405: GatewayValidationError,
-                 406: GatewayValidationError, 415: GatewayValidationError,
-                 422: GatewayValidationError, 409: GatewayIdempotencyConflict}.get(status)
-    if error is None and operation == "pdf":
-        error = {404: GatewayEvidenceNotFound, 409: GatewayEvidenceConflict}.get(status)
-    if error is None:
-        if 500 <= status <= 599:
-            error = GatewayProviderError
-        elif 300 <= status <= 399 and operation != "health":
-            error = GatewayRedirectError
-        else:
-            error = GatewayInvalidResponse
-    raise error(status=status, request_id=rid)
-
-
-def _json(response, rid, *, health=False):
-    invalid_type = GatewayInvalidResponse if health else GatewayContentTypeError
-    if not _json_compatible(response.headers.get("Content-Type", "")):
-        raise invalid_type(status=200, request_id=rid)
-    try:
-        return response.json(object_pairs_hook=_pares_unicos,
-                             parse_constant=_constante_invalida, parse_float=Decimal)
-    except (ValueError, TypeError, RecursionError):
-        error = GatewayInvalidResponse if health else GatewayJSONError
-        raise error(status=200, request_id=rid) from None
+def _headers(config, rid, accept):
+    return {"Authorization": f"Bearer {config.internal_secret}",
+            "X-Internal-Client": config.internal_client, "X-Request-ID": rid,
+            "Accept": accept}
 
 
 class GatewayTransport:
     def __init__(self, config=None):
-        self.config = config if config is not None else RiskGatewayConfig.from_settings()
+        self.config = config if config is not None else GatewayConfig.from_settings()
 
-    @contextmanager
-    def _response(self, config, method, path, rid, *, payload=None, key=None, pdf=False):
-        headers = _headers(config, rid, "application/pdf" if pdf else "application/json", key)
-        options = {"headers": headers, "timeout": (config.connect_timeout, config.read_timeout),
-                   "verify": config.verify, "allow_redirects": False}
-        if payload is not None:
-            options.update(json=payload)
-            headers["Content-Type"] = "application/json"
-        if pdf:
-            options["stream"] = True
+    def verificar_health(self, *, request_id=None):
+        """GET autenticado, sin consultas ni prueba implicita de scopes o tarifas."""
+        config = self.config.validar()
+        if config.verify_ssl is not True:
+            raise GatewayConfigurationError()
+        rid = _request_id(request_id)
         try:
             with requests.Session() as session:
                 session.trust_env = False
-                if method == "GET":
-                    response = session.get(config.base_url.rstrip("/") + path, **options)
-                else:
-                    response = session.post(config.base_url.rstrip("/") + path, **options)
+                response = session.get(config.base_url.rstrip("/") + "/api/internal/v1/health/",
+                    headers=_headers(config, rid, "application/json"),
+                    timeout=(config.connect_timeout, config.read_timeout),
+                    verify=config.verify, allow_redirects=False)
                 try:
-                    yield response
+                    if response.status_code != 200:
+                        error = _STATUS_ERROR.get(response.status_code, GatewayInvalidResponse)
+                        raise error(status=response.status_code, request_id=rid)
+                    try:
+                        if response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                            raise ValueError
+                        p = response.json(object_pairs_hook=_objeto_unico, parse_constant=_constante_invalida)
+                        if (type(p) is not dict or set(p) != {"requestId", "status", "apiVersion", "providerChecks"}
+                                or p["requestId"] != rid or response.headers.get("X-Request-ID") != rid
+                                or p["status"] != "ready" or p["apiVersion"] != "v1"
+                                or p["providerChecks"] is not False):
+                            raise ValueError
+                        return p
+                    except (ValueError, TypeError, requests.RequestException):
+                        raise GatewayInvalidResponse(status=200, request_id=rid) from None
                 finally:
                     response.close()
         except requests.Timeout:
@@ -127,69 +97,103 @@ class GatewayTransport:
         except requests.RequestException:
             raise GatewayNetworkError(request_id=rid) from None
 
-    def health(self, *, request_id=None) -> HealthResponse:
+    def consultar(self, request, *, request_id=None, idempotency_key=None):
         config = self.config.validar()
-        rid = validar_request_id(str(uuid4()) if request_id is None else request_id)
-        with self._response(config, "GET", HEALTH_PATH, rid) as response:
-            _estado_200(response, rid, "health")
-            try:
-                return HealthResponse.desde_payload(_json(response, rid, health=True),
-                    request_id=rid, header_request_id=response.headers.get("X-Request-ID"))
-            except (ValueError, TypeError, RecursionError, GatewayInvalidResponse):
-                raise GatewayInvalidResponse(status=200, request_id=rid) from None
-
-    def consultar_preselecta(self, request, *, request_id=None, idempotency_key=None):
-        return self._consultar(request, PreselectaRequest, PreselectaNormalizado, PRESELECTA_PATH,
-            request_id=request_id, idempotency_key=idempotency_key)
-
-    def consultar_hdc(self, request, *, request_id=None, idempotency_key=None):
-        return self._consultar(request, HDCRequest, HDCNormalizado, HDC_PATH,
-            request_id=request_id, idempotency_key=idempotency_key)
-
-    def _consultar(self, request, request_type, response_type, path, *, request_id, idempotency_key):
-        config = self.config.validar()
-        if type(request) is not request_type:
+        if type(request) not in _OPERACIONES:
             raise GatewayValidationError()
-        rid, key = _request_id(request_id), _idempotency_key(idempotency_key)
+        rid = _request_id(request_id)
+        if idempotency_key is not None and (not isinstance(idempotency_key, str) or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", idempotency_key)):
+            raise GatewayValidationError(request_id=rid)
         metadata = request.get("metadata")
         if metadata is not None and metadata.get("consumidor", config.internal_client) != config.internal_client:
             raise GatewayValidationError(request_id=rid)
-        with self._response(config, "POST", path, rid, payload=request.a_dict(), key=key) as response:
-            _estado_200(response, rid, "consulta")
-            payload = _json(response, rid)
-            try:
-                result = response_type.desde_payload(payload)
-            except GatewayInvalidResponse:
-                raise GatewaySchemaError(status=200, request_id=rid) from None
-            if (response.headers.get("X-Request-ID") != rid or result["requestId"] != rid
-                    or result["resultado"]["request_id"] != rid):
-                raise GatewayCorrelationError(status=200, request_id=rid)
-            if (response.headers.get("Idempotency-Key") != key
-                    or response.headers.get("X-Idempotency-Status") != (
-                        "IDEMPOTENCIA_DE_NEGOCIO_PENDIENTE" if key is not None else None)):
-                raise GatewayCorrelationError(status=200, request_id=rid)
-            return result
+        headers = _headers(config, rid, "application/json")
+        headers["Content-Type"] = "application/json"
+        if idempotency_key is not None:
+            headers["Idempotency-Key"] = idempotency_key
+        endpoint, dto = _OPERACIONES[type(request)]
+        try:
+            # Sesion propia: adapters requests por defecto sin retries; no netrc/proxies implicitos.
+            with requests.Session() as session:
+                session.trust_env = False
+                response = session.post(config.base_url.rstrip("/") + endpoint,
+                    json=request.a_dict(), headers=headers,
+                    timeout=(config.connect_timeout, config.read_timeout),
+                    verify=config.verify, allow_redirects=False)
+                try:
+                    if response.status_code != 200:
+                        error = _STATUS_ERROR.get(response.status_code, GatewayInvalidResponse)
+                        raise error(status=response.status_code, request_id=rid)
+                    try:
+                        if response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                            raise ValueError
+                        payload = response.json(parse_float=Decimal, parse_constant=_constante_invalida,
+                                                object_pairs_hook=_objeto_unico)
+                        resultado = dto.desde_payload(payload)
+                        body_id = resultado["requestId"]
+                        if (response.headers.get("X-Request-ID") != body_id
+                                or UUID(body_id) != UUID(rid)
+                                or resultado["resultado"]["request_id"] != body_id):
+                            raise ValueError
+                        r = resultado["resultado"]
+                        if (r["estado_tecnico"] not in {"COMPLETADO", "SIN_INFORMACION"}
+                                or r["trazabilidad"]["version_contrato"] != resultado["versionContrato"]):
+                            raise ValueError
+                        if isinstance(resultado, PreselectaNormalizado) and r["resultado_proveedor"]["naturaleza"] != "RESULTADO_PROVEEDOR":
+                            raise ValueError
+                        return resultado
+                    except (ValueError, TypeError, KeyError, RecursionError, GatewayInvalidResponse):
+                        raise GatewayInvalidResponse(status=200, request_id=rid) from None
+                finally:
+                    response.close()
+        except requests.Timeout:
+            raise GatewayTimeout(request_id=rid) from None
+        except requests.RequestException:
+            raise GatewayNetworkError(request_id=rid) from None
 
-    def obtener_pdf_hdc(self, consulta_id, *, request_id=None) -> EvidenciaPDFHDC:
+    def obtener_pdf(self, consulta_id, *, request_id=None) -> EvidenciaPDFHDC:
         config = self.config.validar()
-        cid = str(UUID(validar_request_id(consulta_id)))
         rid = _request_id(request_id)
-        with self._response(config, "GET", PDF_PATH.format(consulta_id=cid), rid, pdf=True) as response:
-            _estado_200(response, rid, "pdf")
-            if response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/pdf":
-                raise GatewayContentTypeError(status=200, request_id=rid)
-            if response.headers.get("X-Request-ID") != rid:
-                raise GatewayCorrelationError(status=200, request_id=rid)
-            try:
-                length = response.headers.get("Content-Length")
-                if length is not None and (not re.fullmatch(r"[0-9]+", length)
-                        or not 0 < int(length) <= MAX_PDF_BYTES):
-                    raise ValueError
-                content = bytearray()
-                for chunk in response.iter_content(chunk_size=64 * 1024):
-                    if len(content) + len(chunk) > MAX_PDF_BYTES:
-                        raise ValueError
-                    content.extend(chunk)
-                return EvidenciaPDFHDC(consulta_id=cid, request_id=rid, contenido=bytes(content))
-            except (ValueError, TypeError):
-                raise GatewayPDFError(status=200, request_id=rid) from None
+        try:
+            if type(consulta_id) is not str or str(UUID(consulta_id)) != consulta_id.lower():
+                raise ValueError
+            consulta_id = str(UUID(consulta_id))
+        except (ValueError, TypeError, AttributeError):
+            raise GatewayValidationError(request_id=rid) from None
+        try:
+            with requests.Session() as session:
+                session.trust_env = False
+                response = session.get(config.base_url.rstrip("/") + PDF_PATH.format(consulta_id=consulta_id),
+                    headers=_headers(config, rid, "application/pdf"), stream=True,
+                    timeout=(config.connect_timeout, config.read_timeout),
+                    verify=config.verify, allow_redirects=False)
+                try:
+                    if response.status_code != 200:
+                        error = {404: GatewayEvidenceNotFound, 409: GatewayEvidenceConflict}.get(
+                            response.status_code, _STATUS_ERROR.get(response.status_code, GatewayInvalidResponse))
+                        raise error(status=response.status_code, request_id=rid)
+                    try:
+                        if response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/pdf":
+                            raise ValueError
+                        header_id = response.headers.get("X-Request-ID")
+                        if type(header_id) is not str or str(UUID(header_id)) != header_id.lower() or UUID(header_id) != UUID(rid):
+                            raise ValueError
+                        length = response.headers.get("Content-Length")
+                        if length is not None and (not re.fullmatch(r"[0-9]+", length)
+                                or not 0 < int(length) <= MAX_PDF_BYTES):
+                            raise ValueError
+                        contenido = bytearray()
+                        for bloque in response.iter_content(chunk_size=64 * 1024):
+                            if len(contenido) + len(bloque) > MAX_PDF_BYTES:
+                                raise ValueError
+                            contenido.extend(bloque)
+                        return EvidenciaPDFHDC(consulta_id=consulta_id, request_id=rid, contenido=bytes(contenido))
+                    except (ValueError, TypeError):
+                        raise GatewayInvalidResponse(status=200, request_id=rid) from None
+                finally:
+                    response.close()
+        except requests.Timeout:
+            raise GatewayTimeout(request_id=rid) from None
+        except requests.RequestException:
+            raise GatewayNetworkError(request_id=rid) from None

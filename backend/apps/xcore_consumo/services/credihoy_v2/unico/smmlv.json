@@ -1,0 +1,20 @@
+{
+  "version": "SMMLV_CO_2026_20261019",
+  "unidad": "COP",
+  "valor": "1750905",
+  "incluyeAuxilioTransporte": false,
+  "desde": "2026-01-01",
+  "hastaExclusivo": "2027-01-01",
+  "verificadoAl": "2026-10-19",
+  "normaBase": "Decreto 1469 de 2025, articulos 1 y 2",
+  "fuente": "https://www.cancilleria.gov.co/normograma/compilacion/docs/decreto_1469_2025.htm",
+  "antecedenteTransitorio": "Decreto 159 de 2026, publicado 2026-02-19; mismo importe. No se presenta como fundamento exclusivo vigente en octubre.",
+  "fuenteAntecedente": "https://www.cancilleria.gov.co/normograma/compilacion/docs/decreto_0159_2026.htm",
+  "controlJudicial": "Consejo de Estado, comunicacion 2026-07-17: revocacion de suspension del Decreto 1469; no modifica el importe. Sujeto a decision definitiva.",
+  "fuenteControlJudicial": "https://www.consejodeestado.gov.co/ordenesdeldia/prensa/fina.php",
+  "matrizSha256": "a0339ce8c28be642d362bcaf5d21d363c095b1979126c5a64b063f4195a1b232",
+  "perfil": ["390", "111", "CFA"],
+  "referenciaAplicabilidad": "Matriz CREDIHOY UNICO (NUEVO), filas 12 y 17, GER-PO.030 Anexo 14, ficha 3 Credihoy p.141. Contexto del expediente confirmado 390/111/CFA, sin excepcion documentada; no se extiende a otros productos.",
+  "fechaEfectivaMatriz": null,
+  "limitacionFechaMatriz": "El snapshot no acredita la fecha original de aprobacion del manual. No retroatribuir esa fecha al decreto ni a evaluaciones historicas; nuevas revisiones con esta integracion, sin reescribir resultados historicos."
+}

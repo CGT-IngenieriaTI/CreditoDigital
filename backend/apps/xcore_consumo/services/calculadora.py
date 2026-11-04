@@ -12,6 +12,13 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from scipy.stats import weibull_min
 
+from .decision_consistencia import (
+    DecisionConsumoBloqueada,
+    validar_limite_aprobacion,
+    validar_monto_aprobado,
+    validar_monto_solicitado,
+)
+
 try:
     from pypdf import PdfReader, PdfWriter
 except Exception:  # pragma: no cover - fallback for alternate envs
@@ -574,6 +581,7 @@ def calcular_perfil_riesgo(total_homologado):
 
 
 def calcular_decision(total_ingresos, forma_pago, perfil_credito, capacidad_pago_decision, endeudamiento_directo, afectacion_directa, afectacion_total, endeudamiento, endeudamiento_credito, monto_max_aprobado, monto_solicitado):
+    validar_monto_solicitado(monto_solicitado)
     if any([to_float(endeudamiento_directo) > 50, to_float(afectacion_directa) > 80, to_float(afectacion_total) > 100, to_float(endeudamiento) > 80, to_float(endeudamiento_credito) > 100]):
         return "Crédito Negado"
     if to_float(total_ingresos) == 0:
@@ -584,6 +592,9 @@ def calcular_decision(total_ingresos, forma_pago, perfil_credito, capacidad_pago
         return "Crédito Negado"
     if perfil_credito == "Fuera del apetito":
         return "Zona gris"
+    if perfil_credito != "Sujeto de crédito" or capacidad_pago_decision != "Con capacidad":
+        raise DecisionConsumoBloqueada("INFORMACION_INSUFICIENTE", "DECISION_NO_EVALUABLE")
+    validar_limite_aprobacion(monto_max_aprobado, monto_solicitado)
     return "Crédito Aprobado"
 
 
@@ -625,7 +636,12 @@ def calcular_monto_max_aprobacion(monto1, monto2):
 def decision_mostrar_monto_max(monto_max_aprobado, monto_solicitado, endeudamiento_directo, afectacion_directa, afectacion_total, endeudamiento, endeudamiento_credito, decision):
     if decision == "Crédito Negado":
         return 0
-    return min(to_float(monto_max_aprobado), to_float(monto_solicitado))
+    if decision == "Crédito Aprobado":
+        validar_limite_aprobacion(monto_max_aprobado, monto_solicitado)
+    monto = min(to_float(monto_max_aprobado), to_float(monto_solicitado))
+    if decision == "Crédito Aprobado":
+        validar_monto_aprobado(monto, monto_solicitado)
+    return monto
 
 
 def determinar_estamento(monto, linea_credito, flags):
@@ -681,6 +697,7 @@ def construir_flags_novedad(tiene_novedad, novedad_descripcion):
 
 
 def evaluar_xcore_consumo(form_data, core_data, historial_data, preselecta_data):
+    validar_monto_solicitado(form_data.get("monto_solicitado"))
     parametros = {
         "Estrato": form_data.get("estrato"),
         "Nivel de estudios": form_data.get("nivel_estudios"),
@@ -813,6 +830,9 @@ def _build_pdf_context(solicitud, evaluacion):
     form_data = detail.form_data if detail else {}
     core_data = detail.core_data if detail else {}
     resultados = evaluacion.resultados or {}
+    if evaluacion.decision_final == "Crédito Aprobado":
+        validar_monto_aprobado(evaluacion.monto_max_posible,
+                              form_data.get("monto_solicitado", solicitud.monto_solicitado))
 
     nombre = (
         form_data.get("nombre")

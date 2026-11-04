@@ -1,0 +1,1596 @@
+{
+  "COLO-FO.001": {
+    "archivo": "COLO-FO.001_v13_20260701.pdf",
+    "version": "13",
+    "fecha": "2026-07-01",
+    "sha256": "93a8f53214a95fdbeb249572f40cac9c751d3b8ac481372e9d11dfa75899cc9e",
+    "paginas": 3,
+    "codigo": "COLO-FO.001",
+    "campos": [
+      {
+        "pagina": 1,
+        "nombre": "Sucursal",
+        "tipo": "/Tx",
+        "rect": [
+          "48.72",
+          "710.28",
+          "230.88",
+          "724.44"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Ciudad",
+        "tipo": "/Tx",
+        "rect": [
+          "232.44",
+          "710.28",
+          "411",
+          "724.44"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Nombres y Apellidos o Raz\u00f3n Social",
+        "tipo": "/Tx",
+        "rect": [
+          "48.84",
+          "671.64",
+          "528.72",
+          "690"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "N identificaci\u00f3n",
+        "tipo": "/Tx",
+        "rect": [
+          "248.16",
+          "641.4",
+          "528.6",
+          "662.52"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Direcci\u00f3n",
+        "tipo": "/Tx",
+        "rect": [
+          "48.72",
+          "619.08",
+          "332.88",
+          "632.52"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Tel\u00e9fono m\u00f3vil",
+        "tipo": "/Tx",
+        "rect": [
+          "334.44",
+          "619.08",
+          "528.84",
+          "632.52"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Direcci\u00f3n de correo electr\u00f3nico",
+        "tipo": "/Tx",
+        "rect": [
+          "48.72",
+          "596.04",
+          "528.84",
+          "610.2"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Reestructuracion",
+        "tipo": "/Tx",
+        "rect": [
+          "135.12",
+          "577.32",
+          "151.08",
+          "585.96"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "No De obligaciones a reestructurar",
+        "tipo": "/Tx",
+        "rect": [
+          "317.04",
+          "577.32",
+          "333",
+          "585.96"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Monto solicitado",
+        "tipo": "/Tx",
+        "rect": [
+          "173.64",
+          "543.48",
+          "315.36",
+          "565.32"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Plazo",
+        "tipo": "/Tx",
+        "rect": [
+          "317.4",
+          "543.48",
+          "388.8",
+          "565.32"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Periodicidad",
+        "tipo": "/Tx",
+        "rect": [
+          "390.84",
+          "543.48",
+          "528.6",
+          "565.32"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Destino del cr\u00e9dito",
+        "tipo": "/Tx",
+        "rect": [
+          "173.64",
+          "512.16",
+          "315.36",
+          "533.64"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "undefined",
+        "tipo": "/Tx",
+        "rect": [
+          "463.56",
+          "531.6",
+          "498.72",
+          "542.64"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Fecha de inicio del plan de pagos Dia",
+        "tipo": "/Tx",
+        "rect": [
+          "317.28",
+          "512.16",
+          "528.72",
+          "530.28"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Tasa de inter\u00e9s EA",
+        "tipo": "/Tx",
+        "rect": [
+          "173.64",
+          "480.48",
+          "315.36",
+          "502.32"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Modalidad de la cuota  Fija Variable",
+        "tipo": "/Tx",
+        "rect": [
+          "447.12",
+          "480.48",
+          "528.36",
+          "509.28"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "undefined_2",
+        "tipo": "/Tx",
+        "rect": [
+          "352.32",
+          "484.44",
+          "368.28",
+          "495.24"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "undefined_3",
+        "tipo": "/Tx",
+        "rect": [
+          "429.72",
+          "484.44",
+          "445.68",
+          "495.24"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Nombre del codeudor o descripci\u00f3n de la garant\u00eda",
+        "tipo": "/Tx",
+        "rect": [
+          "153.24",
+          "423.48",
+          "427.56",
+          "460.44"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Valor de la Comision",
+        "tipo": "/Tx",
+        "rect": [
+          "430.56",
+          "423.48",
+          "528.12",
+          "460.44"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "N identificacion",
+        "tipo": "/Tx",
+        "rect": [
+          "152.76",
+          "391.8",
+          "246.12",
+          "413.64"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Tel\u00e9fono m\u00f3vil_2",
+        "tipo": "/Tx",
+        "rect": [
+          "248.16",
+          "391.8",
+          "350.64",
+          "413.64"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Direcci\u00f3n de correo electr\u00f3nico_2",
+        "tipo": "/Tx",
+        "rect": [
+          "352.68",
+          "391.8",
+          "528.6",
+          "413.64"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Direccion",
+        "tipo": "/Tx",
+        "rect": [
+          "153.24",
+          "345.36",
+          "314.88",
+          "381.84"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Actividad",
+        "tipo": "/Tx",
+        "rect": [
+          "317.88",
+          "345.36",
+          "528.12",
+          "381.84"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Ingresos",
+        "tipo": "/Tx",
+        "rect": [
+          "153.24",
+          "298.92",
+          "230.16",
+          "335.4"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Gastos",
+        "tipo": "/Tx",
+        "rect": [
+          "233.16",
+          "298.92",
+          "314.88",
+          "335.4"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Activos",
+        "tipo": "/Tx",
+        "rect": [
+          "317.88",
+          "298.92",
+          "427.56",
+          "335.4"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Pasivos",
+        "tipo": "/Tx",
+        "rect": [
+          "430.56",
+          "298.92",
+          "528.12",
+          "335.4"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Texto1",
+        "tipo": "/Tx",
+        "rect": [
+          "412.556",
+          "710.127",
+          "446.717",
+          "722.74"
+        ],
+        "aparienciaDisponible": false,
+        "aparienciaDefault": "",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Texto2",
+        "tipo": "/Tx",
+        "rect": [
+          "444.615",
+          "710.127",
+          "480.352",
+          "722.215"
+        ],
+        "aparienciaDisponible": false,
+        "aparienciaDefault": "",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Texto3",
+        "tipo": "/Tx",
+        "rect": [
+          "481.929",
+          "710.127",
+          "529.754",
+          "722.215"
+        ],
+        "aparienciaDisponible": false,
+        "aparienciaDefault": "",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box4",
+        "tipo": "/Btn",
+        "rect": [
+          "65.6934",
+          "646.011",
+          "81.7226",
+          "655.734"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box5",
+        "tipo": "/Btn",
+        "rect": [
+          "100.642",
+          "645.485",
+          "116.409",
+          "655.471"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box6",
+        "tipo": "/Btn",
+        "rect": [
+          "134.803",
+          "645.223",
+          "151.095",
+          "655.734"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box7",
+        "tipo": "/Btn",
+        "rect": [
+          "172.905",
+          "645.223",
+          "189.197",
+          "655.734"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box8",
+        "tipo": "/Btn",
+        "rect": [
+          "211.533",
+          "645.485",
+          "230.978",
+          "655.471"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box11",
+        "tipo": "/Btn",
+        "rect": [
+          "481.577",
+          "577.865",
+          "497.519",
+          "586.098"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box13",
+        "tipo": "/Btn",
+        "rect": [
+          "498.92",
+          "577.251",
+          "511.095",
+          "585.66"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box14",
+        "tipo": "/Btn",
+        "rect": [
+          "135.066",
+          "547.733",
+          "151.007",
+          "558.594"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box15",
+        "tipo": "/Btn",
+        "rect": [
+          "135.241",
+          "531.967",
+          "151.007",
+          "542.478"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box16",
+        "tipo": "/Btn",
+        "rect": [
+          "135.241",
+          "515.85",
+          "150.832",
+          "526.711"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box17",
+        "tipo": "/Btn",
+        "rect": [
+          "135.066",
+          "500.609",
+          "151.007",
+          "511.12"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box18",
+        "tipo": "/Btn",
+        "rect": [
+          "117.723",
+          "444.726",
+          "133.489",
+          "454.886"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box19",
+        "tipo": "/Btn",
+        "rect": [
+          "117.898",
+          "428.259",
+          "133.664",
+          "439.12"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box20",
+        "tipo": "/Btn",
+        "rect": [
+          "117.898",
+          "412.142",
+          "133.664",
+          "422.478"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box21",
+        "tipo": "/Btn",
+        "rect": [
+          "117.898",
+          "396.375",
+          "133.664",
+          "406.536"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box22",
+        "tipo": "/Btn",
+        "rect": [
+          "117.898",
+          "380.784",
+          "133.314",
+          "390.77"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box23",
+        "tipo": "/Btn",
+        "rect": [
+          "117.898",
+          "365.543",
+          "133.139",
+          "375.529"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box24",
+        "tipo": "/Btn",
+        "rect": [
+          "117.898",
+          "349.777",
+          "132.964",
+          "360.113"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box25",
+        "tipo": "/Btn",
+        "rect": [
+          "117.723",
+          "318.419",
+          "134.015",
+          "328.58"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box26",
+        "tipo": "/Btn",
+        "rect": [
+          "117.898",
+          "303.003",
+          "133.664",
+          "313.339"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box27",
+        "tipo": "/Btn",
+        "rect": [
+          "272.759",
+          "272.872",
+          "290.89",
+          "278.128"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 1,
+        "nombre": "Check Box28",
+        "tipo": "/Btn",
+        "rect": [
+          "303.241",
+          "272.872",
+          "320.847",
+          "278.128"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 2,
+        "nombre": "Check Box29",
+        "tipo": "/Btn",
+        "rect": [
+          "173.256",
+          "125.543",
+          "188.847",
+          "134.477"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 2,
+        "nombre": "Check Box30",
+        "tipo": "/Btn",
+        "rect": [
+          "232.292",
+          "125.543",
+          "246.307",
+          "134.477"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/ZaDb 0 Tf 0 g",
+        "estados": [
+          "/Off",
+          "/S\u00ed"
+        ]
+      },
+      {
+        "pagina": 3,
+        "nombre": "Nombre de la entidad1",
+        "tipo": "/Tx",
+        "rect": [
+          "65.88",
+          "697.56",
+          "246.48",
+          "708.12"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Saldo a cancelar1",
+        "tipo": "/Tx",
+        "rect": [
+          "247.8",
+          "697.56",
+          "411.12",
+          "708.12"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Numero de la obligaci\u00f3n1",
+        "tipo": "/Tx",
+        "rect": [
+          "412.44",
+          "697.56",
+          "528.96",
+          "708.12"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Nombre de la entidad2",
+        "tipo": "/Tx",
+        "rect": [
+          "65.88",
+          "686.04",
+          "246.48",
+          "696.48"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Saldo a cancelar2",
+        "tipo": "/Tx",
+        "rect": [
+          "247.8",
+          "686.04",
+          "411.12",
+          "696.48"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Numero de la obligaci\u00f3n2",
+        "tipo": "/Tx",
+        "rect": [
+          "412.44",
+          "686.04",
+          "528.96",
+          "696.48"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Nombre de la entidad3",
+        "tipo": "/Tx",
+        "rect": [
+          "65.88",
+          "674.52",
+          "246.48",
+          "684.96"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Saldo a cancelar3",
+        "tipo": "/Tx",
+        "rect": [
+          "247.8",
+          "674.52",
+          "411.12",
+          "684.96"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Numero de la obligaci\u00f3n3",
+        "tipo": "/Tx",
+        "rect": [
+          "412.44",
+          "674.52",
+          "528.96",
+          "684.96"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Nombre de la entidad4",
+        "tipo": "/Tx",
+        "rect": [
+          "65.88",
+          "663",
+          "246.48",
+          "673.44"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Saldo a cancelar4",
+        "tipo": "/Tx",
+        "rect": [
+          "247.8",
+          "663",
+          "411.12",
+          "673.44"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Numero de la obligaci\u00f3n4",
+        "tipo": "/Tx",
+        "rect": [
+          "412.44",
+          "663",
+          "528.96",
+          "673.44"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Nombre de la entidad5",
+        "tipo": "/Tx",
+        "rect": [
+          "65.88",
+          "651.48",
+          "246.48",
+          "661.92"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Saldo a cancelar5",
+        "tipo": "/Tx",
+        "rect": [
+          "247.8",
+          "651.48",
+          "411.12",
+          "661.92"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Numero de la obligaci\u00f3n5",
+        "tipo": "/Tx",
+        "rect": [
+          "412.44",
+          "651.48",
+          "528.96",
+          "661.92"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Nombre de la entidad6",
+        "tipo": "/Tx",
+        "rect": [
+          "65.88",
+          "639.96",
+          "246.48",
+          "650.4"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Saldo a cancelar6",
+        "tipo": "/Tx",
+        "rect": [
+          "247.8",
+          "639.96",
+          "411.12",
+          "650.4"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Numero de la obligaci\u00f3n6",
+        "tipo": "/Tx",
+        "rect": [
+          "412.44",
+          "639.96",
+          "528.96",
+          "650.4"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Nombre de la entidad7",
+        "tipo": "/Tx",
+        "rect": [
+          "65.88",
+          "628.44",
+          "246.48",
+          "638.88"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Saldo a cancelar7",
+        "tipo": "/Tx",
+        "rect": [
+          "247.8",
+          "628.44",
+          "411.12",
+          "638.88"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Numero de la obligaci\u00f3n7",
+        "tipo": "/Tx",
+        "rect": [
+          "412.44",
+          "628.44",
+          "528.96",
+          "638.88"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Nombre de la entidad8",
+        "tipo": "/Tx",
+        "rect": [
+          "66",
+          "613.68",
+          "246.36",
+          "627.24"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Saldo a cancelar8",
+        "tipo": "/Tx",
+        "rect": [
+          "247.92",
+          "613.68",
+          "411",
+          "627.24"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Numero de la obligaci\u00f3n8",
+        "tipo": "/Tx",
+        "rect": [
+          "412.56",
+          "613.68",
+          "528.84",
+          "627.24"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Nombre de la entidad9",
+        "tipo": "/Tx",
+        "rect": [
+          "65.88",
+          "602.16",
+          "246.48",
+          "612.6"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Saldo a cancelar9",
+        "tipo": "/Tx",
+        "rect": [
+          "247.8",
+          "602.16",
+          "411.12",
+          "612.6"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Numero de la obligaci\u00f3n9",
+        "tipo": "/Tx",
+        "rect": [
+          "412.44",
+          "602.16",
+          "528.96",
+          "612.6"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Nombre de la entidad10",
+        "tipo": "/Tx",
+        "rect": [
+          "65.88",
+          "590.64",
+          "246.48",
+          "601.08"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Saldo a cancelar10",
+        "tipo": "/Tx",
+        "rect": [
+          "247.8",
+          "590.64",
+          "411.12",
+          "601.08"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Numero de la obligaci\u00f3n10",
+        "tipo": "/Tx",
+        "rect": [
+          "412.44",
+          "590.64",
+          "528.96",
+          "601.08"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Saldo a cancelarTotal saldo a cancelar",
+        "tipo": "/Tx",
+        "rect": [
+          "247.8",
+          "579.12",
+          "411.12",
+          "589.56"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Destino y descripci\u00f3n de la Inversion",
+        "tipo": "/Tx",
+        "rect": [
+          "265.08",
+          "541.68",
+          "528.96",
+          "551.4"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "fill_37",
+        "tipo": "/Tx",
+        "rect": [
+          "268.8",
+          "530.88",
+          "528.96",
+          "540.6"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "fill_38",
+        "tipo": "/Tx",
+        "rect": [
+          "268.8",
+          "520.08",
+          "528.96",
+          "529.8"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "fill_39",
+        "tipo": "/Tx",
+        "rect": [
+          "268.8",
+          "509.28",
+          "528.96",
+          "519"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Texto31",
+        "tipo": "/Tx",
+        "rect": [
+          "182.592",
+          "388.753",
+          "448.606",
+          "399.393"
+        ],
+        "aparienciaDisponible": false,
+        "aparienciaDefault": "/Arial 0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Texto32",
+        "tipo": "/Tx",
+        "rect": [
+          "139.178",
+          "376.409",
+          "448.606",
+          "387.05"
+        ],
+        "aparienciaDisponible": false,
+        "aparienciaDefault": "/Arial 0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Texto33",
+        "tipo": "/Tx",
+        "rect": [
+          "183.017",
+          "285.752",
+          "451.585",
+          "295.967"
+        ],
+        "aparienciaDisponible": false,
+        "aparienciaDefault": "/Arial 0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Texto34",
+        "tipo": "/Tx",
+        "rect": [
+          "137.901",
+          "272.983",
+          "450.733",
+          "283.198"
+        ],
+        "aparienciaDisponible": false,
+        "aparienciaDefault": "/Arial 0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Texto35",
+        "tipo": "/Tx",
+        "rect": [
+          "181.315",
+          "179.772",
+          "453.287",
+          "190.838"
+        ],
+        "aparienciaDisponible": false,
+        "aparienciaDefault": "/Arial 0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 3,
+        "nombre": "Texto36",
+        "tipo": "/Tx",
+        "rect": [
+          "138.327",
+          "169.131",
+          "454.99",
+          "178.921"
+        ],
+        "aparienciaDisponible": false,
+        "aparienciaDefault": "/Arial 0 Tf 0 g",
+        "estados": []
+      }
+    ],
+    "observaciones": [
+      "PAGINACION_IMPRESA_1_DE_1_EN_ORIGINAL_DE_3_PAGINAS"
+    ]
+  },
+  "COLO-FO.023": {
+    "archivo": "COLO-FO.023_v10_20260525.pdf",
+    "version": "10",
+    "fecha": "2026-05-25",
+    "sha256": "01dd898c75e81a7c8e027784a896600f49c0486db9ef7b3ee72fc2290becf20c",
+    "paginas": 1,
+    "codigo": "COLO-FO.023",
+    "campos": [
+      {
+        "pagina": 1,
+        "nombre": "Est\u00e1 de acuerdo con que nos comuniquemos a trav\u00e9s de los medios y en los horarios antes indicados Si",
+        "tipo": "/Tx",
+        "rect": [
+          "444.96",
+          "444.96",
+          "463.56",
+          "454.56"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "No",
+        "tipo": "/Tx",
+        "rect": [
+          "478.8",
+          "444.96",
+          "497.4",
+          "454.56"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "En constancia",
+        "tipo": "/Tx",
+        "rect": [
+          "55.8",
+          "423.96",
+          "168",
+          "433.56"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "a los",
+        "tipo": "/Tx",
+        "rect": [
+          "194.04",
+          "423.96",
+          "231.36",
+          "433.56"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "d\u00edas del mes de",
+        "tipo": "/Tx",
+        "rect": [
+          "294.84",
+          "423.96",
+          "402.36",
+          "433.56"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "del a\u00f1o",
+        "tipo": "/Tx",
+        "rect": [
+          "431.4",
+          "423.96",
+          "468.72",
+          "433.56"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Nombre",
+        "tipo": "/Tx",
+        "rect": [
+          "99.84",
+          "382.8",
+          "259.08",
+          "394.853"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "CC  NIT",
+        "tipo": "/Tx",
+        "rect": [
+          "99.84",
+          "366.24",
+          "259.08",
+          "378.293"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      },
+      {
+        "pagina": 1,
+        "nombre": "Telefono",
+        "tipo": "/Tx",
+        "rect": [
+          "99.84",
+          "349.68",
+          "259.08",
+          "361.382"
+        ],
+        "aparienciaDisponible": true,
+        "aparienciaDefault": "/Helv  0 Tf 0 g",
+        "estados": []
+      }
+    ],
+    "observaciones": []
+  }
+}

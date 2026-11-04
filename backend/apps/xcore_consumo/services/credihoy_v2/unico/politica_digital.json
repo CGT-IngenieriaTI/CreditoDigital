@@ -1,0 +1,23 @@
+{
+  "version": "CREDIHOY_DIGITAL_390_111_CFA_20261026_V1",
+  "responsable": "Nancy, Directora de Credito y Cartera",
+  "fechaDecision": "2026-10-26",
+  "perfil": ["390", "111", "CFA"],
+  "referencia": "DIRECTIVAS_EB17A273_Y_ADENDA_A8BA5BA8_20261026",
+  "directivaSha256": "e6eaba8d7e69e90576d8ecf98d49ec42fa48df380e84d282584de6893869d938",
+  "adendaSha256": "4256333c870901b8251679f94a0b456512e4241510bb55ac75767b7dd50930e0",
+  "plazoMinimo": 1,
+  "rangosSMMLV": [
+    {"desde": "0.2", "hasta": "1.5", "incluyeDesde": true, "incluyeHasta": true, "plazoMaximo": 24},
+    {"desde": "1.5", "hasta": "3", "incluyeDesde": true, "incluyeHasta": true, "plazoMaximo": 36},
+    {"desde": "3.1", "hasta": "40", "incluyeDesde": true, "incluyeHasta": true, "plazoMaximo": 48}
+  ],
+  "superposicion": "MENOR_PLAZO_COMUN_SIN_AMPLIAR",
+  "intervaloSinRango": "BLOQUEAR_PLAZO_HASTA_PRECISION_NORMATIVA",
+  "excepcionEmbargos": "CUMPLE_FUNCIONAL_CON_ALERTA_HECHO_ORIGINAL_PRESERVADO",
+  "curuba": "MATRIZ_16_REGLAS_SIN_SCORE_ADICIONAL",
+  "recogida111Obligatoria": true,
+  "aprobacionOrdinaria": "AUTOMATICA",
+  "desembolsoOrdinario": "AUTOMATICO_SUJETO_A_PRECONDICIONES",
+  "transporteInstitucionalHabilitado": false
+}

@@ -1,0 +1,294 @@
+{
+  "archivo": "Variables Credihoy Curuba.xlsx",
+  "sha256": "a0339ce8c28be642d362bcaf5d21d363c095b1979126c5a64b063f4195a1b232",
+  "hoja": "Sheet0",
+  "reglas_unico": [
+    {
+      "fila": 2,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Capacidad de Pago",
+        "C": "CAPACIDAD DE PAGO",
+        "D": "1. Tomar los Ingresos de LINIX\n2. Sumar las cuotas de los cr\u00e9ditos y tarjetas de cr\u00e9dito  vigentes (abiertas)  de la consulta de datacr\u00e9dito, excepto los de congente.\n3. Sumar las cuotas de los cr\u00e9ditos y tarjetas de cr\u00e9dito  vigentes (abiertas)  de LINIX.\n4. Cuota del Cr\u00e9dito: Valor del cr\u00e9dito / Periodicidad\n5. Gastos familiares = Ingresos * 0.25\n6. F\u00f3rmula Curuba: 1 menos 2 menos 3 menos 4 menos 5",
+        "E": "0",
+        "F": "A",
+        "G": "No se encuentra establecido en la pol\u00edtica dicho procedimiento",
+        "H": "GER-PO.068 MANUAL METODOL\u00d3GICO PARA LA COLOCACI\u00d3N\nDE CR\u00c9DITO (SEGMENTO ASALARIADOS,\nPENSIONADOS Y OTROS) - Numeral 6.2.3.3 An\u00e1lisis de la capacidad de pago\n"
+      }
+    },
+    {
+      "fila": 4,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Consulta Centrales",
+        "C": "CONSULTA CENTRALES",
+        "D": "Data credito experiam",
+        "E": "0",
+        "F": "A",
+        "G": "GER-PO.030 MANUAL DEL SISTEMA DE ADMINISTRACI\u00d3N DE RIESGO DE CR\u00c9DITO SARC - Anexo 14 Fichas de Productos Establecidas en Congente - 3. Credihoy // P\u00e1gina 141",
+        "H": "Condiciones: Se realiza consulta una central de riesgo con Datacredito Experiam."
+      }
+    },
+    {
+      "fila": 6,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Cuentas Embargadas",
+        "C": "CUENTAS EMBARGADAS",
+        "D": "Se valida que no tenga cuentas embargadas con la informaci\u00f3n de datacredito",
+        "E": "0",
+        "F": "A",
+        "G": "* GER-PO.068 MANUAL METODOL\u00d3GICO PARA LA COLOCACI\u00d3N\nDE CR\u00c9DITO (SEGMENTO ASALARIADOS,\nPENSIONADOS Y OTROS) - Numeral 6.2.3.9 An\u00e1lisis de la voluntad de pago:\n* GER.PO.030 MANUAL DEL SISTEMA DE ADMINISTRACI\u00d3N DE\nRIESGO DE CR\u00c9DITO SARC - Anexo 13 Requisitos m\u00ednimos para ser beneficiario de cr\u00e9dito // Oficio de desembargo con radicaci\u00f3n de la\nentidad destinataria (cuando aplique)",
+        "H": "Los casos donde se presenten cuentas embargadas se atender\u00e1n en las siguientes condiciones: "
+      }
+    },
+    {
+      "fila": 9,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Datos Actualizados",
+        "C": "DATOS ACTUALIZADOS",
+        "D": "VALIDAR ACTUALIZACION INF. A 1 MES",
+        "E": "30",
+        "F": "A",
+        "G": "GER-PO.030 MANUAL DEL SISTEMA DE ADMINISTRACI\u00d3N DE\nRIESGO DE CR\u00c9DITO SARC - Numeral 6.4.3 Pol\u00edtica de actualizaci\u00f3n de datos"
+      }
+    },
+    {
+      "fila": 10,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Edad",
+        "C": "EDAD",
+        "D": "Se valida que el asociado sea mayor de edad",
+        "E": "18",
+        "F": "A",
+        "G": "GER-PO.030 MANUAL DEL SISTEMA DE ADMINISTRACI\u00d3N DE RIESGO DE CR\u00c9DITO SARC - Numeral 7.3 Sujetos de cr\u00e9dito (Deudores y Codeudores).\n",
+        "H": "Ser\u00e1n sujeto de cr\u00e9dito los asociados personas naturales mayores de edad,\nlegalmente capaces, que desarrollen actividades productivas licitas en la zona de\ninfluencia de la Cooperativa y que cumplan con los criterios m\u00ednimos de otorgamiento. "
+      }
+    },
+    {
+      "fila": 12,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Monto M\u00e1ximo SMLV",
+        "C": "MONTO MAXIMO",
+        "D": "Que el monto no sea mayor a 40 SMLV",
+        "E": "40",
+        "F": "A",
+        "G": "GER-PO.030 MANUAL DEL SISTEMA DE ADMINISTRACI\u00d3N DE RIESGO DE CR\u00c9DITO SARC - Anexo 14 Fichas de Productos Establecidas en Congente - 3. Credihoy // P\u00e1gina 141",
+        "H": "Monto M\u00e1ximo: Hasta 40 SMLV"
+      }
+    },
+    {
+      "fila": 14,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Monto M\u00e1ximo Aportes",
+        "C": "MONTO MAXIMO APORTES",
+        "D": "Que el monto del cr\u00e9dito no sea mayor al 90% de los aportes",
+        "E": "90",
+        "F": "A",
+        "G": "GER-PO.030 MANUAL DEL SISTEMA DE ADMINISTRACI\u00d3N DE RIESGO DE CR\u00c9DITO SARC - Anexo 14 Fichas de Productos Establecidas en Congente - 3. Credihoy // P\u00e1gina 141",
+        "H": "Relaci\u00f3n de Aporte: Hasta el 90% de los aportes"
+      }
+    },
+    {
+      "fila": 17,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Monto M\u00ednimo",
+        "C": "MONTO MINIMO",
+        "D": "Desde el 20% de SMMLV",
+        "E": "20",
+        "F": "A",
+        "G": "GER-PO.030 MANUAL DEL SISTEMA DE ADMINISTRACI\u00d3N DE RIESGO DE CR\u00c9DITO SARC - Anexo 14 Fichas de Productos Establecidas en Congente - 3. Credihoy // P\u00e1gina 141",
+        "H": "Monto M\u00ednimo: Desde el 20% de SMMLV"
+      }
+    },
+    {
+      "fila": 21,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Mora Interna",
+        "C": "MORA INTERNA",
+        "D": "Para la renovaci\u00f3n y otorgamiento de cr\u00e9ditos, la calificaci\u00f3n interna del asociado deber\u00e1 ser A. \n",
+        "E": "0",
+        "F": "A",
+        "G": "GER-PO.068 MANUAL METODOL\u00d3GICO PARA LA COLOCACI\u00d3N\nDE CR\u00c9DITO (SEGMENTO ASALARIADOS,\nPENSIONADOS Y OTROS) - Numeral 6.2.3.7 An\u00e1lisis de Car\u00e1cter",
+        "H": "Para la renovaci\u00f3n y otorgamiento de cr\u00e9ditos, la calificaci\u00f3n interna del asociado\ndeber\u00e1 ser A."
+      }
+    },
+    {
+      "fila": 23,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Periodicidad",
+        "C": "PERIODICIDAD",
+        "D": "SOLO DEBE SER MENSUAL",
+        "E": "30",
+        "F": "A",
+        "G": "GER-PO.030 MANUAL DEL SISTEMA DE ADMINISTRACI\u00d3N DE RIESGO DE CR\u00c9DITO SARC - Anexo 14 Fichas de Productos Establecidas en Congente - 3. Credihoy // P\u00e1gina 141",
+        "H": "Sistema de Amortizaci\u00f3n: Mensual"
+      }
+    },
+    {
+      "fila": 24,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Persona Natural",
+        "C": "PERSONA NATURAL",
+        "D": "VALIDAR QUE SEA PERSONA NATURAL",
+        "E": "0",
+        "F": "A",
+        "G": "GER-PO.030 MANUAL DEL SISTEMA DE ADMINISTRACI\u00d3N DE RIESGO DE CR\u00c9DITO SARC - Anexo 14 Fichas de Productos Establecidas en Congente - 3. Credihoy // P\u00e1gina 141",
+        "H": "Mercado Objetivo: Asociado persona natural que demuestre capacidad de pago."
+      }
+    },
+    {
+      "fila": 27,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Plazo M\u00e1ximo",
+        "C": "PLAZO MAXIMO",
+        "D": "48 MESES",
+        "E": "48",
+        "F": "A",
+        "G": "GER-PO.030 MANUAL DEL SISTEMA DE ADMINISTRACI\u00d3N DE RIESGO DE CR\u00c9DITO SARC - Anexo 14 Fichas de Productos Establecidas en Congente - 3. Credihoy // P\u00e1gina 141",
+        "H": "Plazo m\u00e1ximo: 48 meses"
+      }
+    },
+    {
+      "fila": 28,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Plazo M\u00ednimo",
+        "C": "PLAZO MINIMO",
+        "D": "1 MES",
+        "E": "1",
+        "F": "A",
+        "G": "GER-PO.030 MANUAL DEL SISTEMA DE ADMINISTRACI\u00d3N DE RIESGO DE CR\u00c9DITO SARC - Anexo 14 Fichas de Productos Establecidas en Congente - 3. Credihoy // P\u00e1gina 141",
+        "H": "Plazo m\u00ednimo: 1 mes"
+      }
+    },
+    {
+      "fila": 30,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Cr\u00e9ditos Vigentes",
+        "C": "PRODUCTOS INTERNOS - CR\u00c9DITOS VIGENTES",
+        "D": "Tiene credito vigentes internos con la cooperativa\n",
+        "E": "0",
+        "F": "I",
+        "G": "No se encuentra establecido en la pol\u00edtica"
+      }
+    },
+    {
+      "fila": 31,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Promedio Mora ",
+        "C": "PROMEDIO MORA INTERNA",
+        "D": "Promedio de mora menor a 28 dias (ultimo credito )",
+        "E": "28",
+        "F": "A",
+        "G": "GER-PO.068 MANUAL METODOL\u00d3GICO PARA LA COLOCACI\u00d3N\nDE CR\u00c9DITO (SEGMENTO ASALARIADOS,\nPENSIONADOS Y OTROS) - Numeral 6.2.3.7 An\u00e1lisis de Car\u00e1cter",
+        "H": "Se aceptar\u00e1n moras vigentes de cualquier altura solo para la renovaci\u00f3n del credihoy\n\u00fanico, siempre y cuando presenten mora promedio inferior a 28 d\u00edas en el credihoy vigente y\nal cierre del mes anterior en calificaci\u00f3n A."
+      }
+    },
+    {
+      "fila": 32,
+      "celdas_originales": {
+        "A": "CREDIHOY UNICO (NUEVO)",
+        "B": "Saldo Pendiente",
+        "C": "SALDO PENDIENTE",
+        "D": "Si tiene saldo pendiente por \nrecoger de la misma modalidad\n",
+        "E": "0",
+        "F": "A",
+        "G": "No se encuentra establecido en la pol\u00edtica"
+      }
+    }
+  ],
+  "filas_excluidas": [
+    {
+      "fila": 3,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "CAPACIDAD DE PAGO"
+    },
+    {
+      "fila": 5,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "CONSULTA CENTRALES"
+    },
+    {
+      "fila": 7,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "CUENTAS EMBARGADAS"
+    },
+    {
+      "fila": 8,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "DATOS ACTUALIZADOS"
+    },
+    {
+      "fila": 11,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "EDAD"
+    },
+    {
+      "fila": 13,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "MONTO MAXIMO"
+    },
+    {
+      "fila": 15,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "MONTO MAXIMO APORTES"
+    },
+    {
+      "fila": 16,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "MONTO MINIMO"
+    },
+    {
+      "fila": 18,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "MORA EXTERNA - EXCEPTO SECTOR REAL Y TELCOS"
+    },
+    {
+      "fila": 19,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "MORA EXTERNA - SUMATORIA MORA MENOR A 1 SMMLV"
+    },
+    {
+      "fila": 20,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "MORA INTERNA"
+    },
+    {
+      "fila": 22,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "PERIODICIDAD"
+    },
+    {
+      "fila": 25,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "PERSONA NATURAL"
+    },
+    {
+      "fila": 26,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "PLAZO MAXIMO"
+    },
+    {
+      "fila": 29,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "PLAZO MINIMO"
+    },
+    {
+      "fila": 33,
+      "producto": "CREDIHOY ADICIONAL - RENOVACION O REFINANCIACION",
+      "variable": "SALDO PENDIENTE"
+    }
+  ]
+}

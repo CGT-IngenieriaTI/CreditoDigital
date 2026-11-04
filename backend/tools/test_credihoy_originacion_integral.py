@@ -116,6 +116,57 @@ class OriginacionIntegralTests(SimuladorLocalTests):
         expired=self.post({'borradorId':ref,'operacion':'simular'})
         self.assertNotEqual(expired.status_code,200)
 
+    @override_settings(CREDIHOY_CENTRALES_OTP_ENABLED=True)
+    def test_expired_bureau_attempt_is_reconciled_then_replaced_only_by_a_new_personal_act_atomically(self):
+        from copy import deepcopy
+        from unittest.mock import patch
+        from apps.utils.models import AuditLog
+        from apps.xcore_consumo.services.credihoy_v2.unico import centrales_personal as bureau
+        self.test_native_submitted_choices_reach_bureau_intent_without_another_complement_or_provider()
+        sid=self.save_body['clave']
+        identity={**self.identity,'canal':'SMS','_scopeAutorizacion':'solicitudes:autorizar',
+            '_scopeLectura':'solicitudes:leer','_requestId':str(uuid4())}
+        with override_settings(CREDIHOY_PUBLICO_RESTRINGIDO=False,CREDIHOY_AUTORIZACION_SOLICITUDES=[sid]):
+            detail=SolicitudConsumo.objects.get(solicitud_id=sid)
+            binding=detail.orchestration_data[bureau.KEY]['vinculo']
+            verification='VE'+'2'*32;verification_hash=bureau._sha(verification.encode())
+            result={'vinculo':binding,'estado':'ENVIADO','verificationReferencia':verification_hash,
+                'operacionVerify':str(uuid4()),'confirmadoEn':None,'estadoProveedor':'pending'}
+            bureau.registrar_resultado(sid,identity,bureau._token(result,bureau.SALT_PROVEEDOR))
+            detail.refresh_from_db();old=deepcopy(detail.orchestration_data[bureau.KEY])
+            later=timezone.now()+timedelta(minutes=11)
+            with patch.object(bureau.timezone,'now',return_value=later):
+                proof={'solicitudId':sid,'operacionId':binding['operacionId'],'verificationSha256':verification_hash,
+                    'cuentaSid':'AC'+'0'*32,'servicioSid':'VA'+'1'*32,'estadoProveedor':'expired',
+                    'origen':'TWILIO_CONSOLE_CONFIRMADO_RESPONSABLE',
+                    'referenciaFuente':'https://1console.twilio.com/account/AC'+'0'*32+'/us1/verify/logs/'+verification,
+                    'creadaProveedorEn':binding['aceptadoEn'],'journalSha256':bureau._sha(bureau._canonical(old))}
+                case=Solicitud.objects.select_related('solicitante','consumo_detail').get(pk=sid)
+                bureau.registrar_expiracion_conciliada(case,'default',proof)
+                bureau.registrar_expiracion_conciliada(case,'default',proof)
+                self.assertEqual(AuditLog.objects.filter(solicitud_id=sid,event=bureau.EXPIRACION_EVENTO).count(),1)
+                detail.refresh_from_db();self.assertEqual(detail.orchestration_data[bureau.KEY],old)
+                identity={**identity,'_sesionReferencia':str(uuid4()),'_sesionExpiraAt':(later+timedelta(minutes=15)).isoformat()}
+                operation=str(uuid4())
+                self.assertEqual(bureau.consultar(sid,identity)['centrales']['estado'],'SIN_ACEPTACION')
+                presentation=bureau.presentar(sid,identity,operation)['presentacion']
+                real_save=bureau._guardar
+                def fail_after_save(*args):
+                    real_save(*args)
+                    raise RuntimeError('SYNTHETIC_COMMIT_FAILURE')
+                with patch.object(bureau,'_guardar',side_effect=fail_after_save),self.assertRaises(RuntimeError):
+                    bureau.aceptar(sid,identity,operation,presentation,True)
+                detail.refresh_from_db()
+                self.assertEqual(detail.orchestration_data[bureau.KEY],old)
+                self.assertNotIn(bureau.ARCHIVO_KEY,detail.orchestration_data)
+                bureau.aceptar(sid,identity,operation,presentation,True)
+                detail.refresh_from_db()
+                self.assertEqual(detail.orchestration_data[bureau.ARCHIVO_KEY][binding['operacionId']]['journal'],old)
+                self.assertEqual(detail.orchestration_data[bureau.KEY]['vinculo']['operacionId'],operation)
+                self.assertEqual(detail.orchestration_data[bureau.KEY]['estado'],'PENDIENTE_OTP')
+                self.assertFalse(AuditLog.objects.filter(solicitud_id=sid,event='credihoy_continuacion_solicitada_v1').exists())
+                self.assertFalse(EvaluacionConsumo.objects.filter(solicitud_id=sid).exists())
+
     def test_open_trial_does_not_admit_an_unlisted_historical_case(self):
         from apps.xcore_consumo.services.credihoy_v2.unico import simulacion_lectura as sim
         from django.http import Http404

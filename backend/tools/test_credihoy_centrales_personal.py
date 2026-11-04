@@ -189,6 +189,74 @@ class CentralesPersonalTests(SimpleTestCase):
         service.consultar(self.sid,self.identity)
         self.continuation_event.assert_called_once()
 
+    def expired_attempt(self):
+        self.accept()
+        verification='VE'+'2'*32
+        verification_hash=service._sha(verification.encode())
+        self.record(self.result('ENVIADO',verificationReferencia=verification_hash))
+        journal=deepcopy(self.detail.orchestration_data[service.KEY])
+        later=self.now+timedelta(minutes=11)
+        self.enter(patch.object(service.timezone,'now',return_value=later))
+        self.audit.filter.return_value.first.return_value=None
+        proof={'solicitudId':self.sid,'operacionId':self.operation,'verificationSha256':verification_hash,
+            'cuentaSid':'AC'+'0'*32,'servicioSid':'VA'+'1'*32,'estadoProveedor':'expired',
+            'origen':'TWILIO_CONSOLE_CONFIRMADO_RESPONSABLE',
+            'referenciaFuente':'https://1console.twilio.com/account/AC'+'0'*32+'/us1/verify/logs/'+verification,
+            'creadaProveedorEn':self.now.isoformat(),'journalSha256':service._sha(service._canonical(journal))}
+        return journal,proof
+
+    def test_expiry_reconciliation_is_not_an_authorization_and_never_changes_the_old_journal(self):
+        journal,proof=self.expired_attempt()
+        before=deepcopy(self.detail.orchestration_data)
+        result=service.registrar_expiracion_conciliada(self.case,'cotizacion',proof)
+        self.assertEqual(result['estadoProveedor'],'expired')
+        self.assertEqual({k:v for k,v in self.detail.orchestration_data.items() if k!=service.CONCILIACIONES_KEY},before)
+        self.assertEqual(self.detail.orchestration_data[service.KEY],journal)
+        self.continuation_event.assert_not_called()
+        self.audit.filter.return_value.first.return_value=SimpleNamespace(payload=result)
+        self.assertEqual(service.registrar_expiracion_conciliada(self.case,'cotizacion',proof),result)
+
+    def test_reconciled_expiry_requires_a_new_personal_session_and_archives_only_on_personal_acceptance(self):
+        journal,proof=self.expired_attempt()
+        result=service.registrar_expiracion_conciliada(self.case,'cotizacion',proof)
+        self.audit.filter.return_value.first.return_value=SimpleNamespace(payload=result)
+        before=deepcopy(self.detail.orchestration_data)
+        identity={**self.identity,'_sesionReferencia':str(uuid4())}
+        operation=str(uuid4())
+        self.assertEqual(service.consultar(self.sid,identity)['centrales']['estado'],'SIN_ACEPTACION')
+        presented=service.presentar(self.sid,identity,operation)
+        self.assertEqual(self.detail.orchestration_data,before)
+        with self.assertRaises(ValueError):service.aceptar(self.sid,identity,operation,presented['presentacion'],False)
+        service.aceptar(self.sid,identity,operation,presented['presentacion'],True)
+        self.assertEqual(self.detail.orchestration_data[service.ARCHIVO_KEY][self.operation]['journal'],journal)
+        self.assertEqual(self.detail.orchestration_data[service.KEY]['estado'],'PENDIENTE_OTP')
+        self.assertEqual(self.detail.orchestration_data[service.KEY]['vinculo']['operacionId'],operation)
+        self.continuation_event.assert_not_called()
+        with self.assertRaises(ValueError):service.presentar(self.sid,identity,str(uuid4()))
+
+    def test_expiry_without_reconciliation_cannot_open_another_intent(self):
+        self.expired_attempt()
+        identity={**self.identity,'_sesionReferencia':str(uuid4())}
+        with self.assertRaisesRegex(ValueError,'CENTRALES_OTRA_OPERACION_EXISTENTE'):
+            service.presentar(self.sid,identity,str(uuid4()))
+
+    def test_expiry_proof_for_a_different_verification_cannot_reopen_the_intent(self):
+        _,proof=self.expired_attempt()
+        with self.assertRaisesRegex(ValueError,'CENTRALES_EXPIRACION_REFERENCIA_DIFIERE'):
+            service.registrar_expiracion_conciliada(self.case,'cotizacion',{**proof,'verificationSha256':'c'*64})
+        self.continuation_event.assert_not_called()
+
+    def test_retry_reads_its_sealed_receipt_without_granting_access_to_audit_payloads(self):
+        _,proof=self.expired_attempt()
+        service.registrar_expiracion_conciliada(self.case,'cotizacion',proof)
+        self.audit.filter.side_effect=AssertionError('AUDIT_SELECT_FORBIDDEN')
+        identity={**self.identity,'_sesionReferencia':str(uuid4())}
+        self.assertEqual(service.consultar(self.sid,identity)['centrales']['estado'],'SIN_ACEPTACION')
+        stored=self.detail.orchestration_data[service.CONCILIACIONES_KEY][self.operation]
+        stored['sha256']='0'*64
+        with self.assertRaisesRegex(ValueError,'CENTRALES_CONCILIACION_NO_INTEGRA'):
+            service.consultar(self.sid,identity)
+
     def complement(self):
         operation = str(uuid4())
         value = {'version': 1, 'solicitudId': self.sid, 'operacionEnvioOriginal': self.send,

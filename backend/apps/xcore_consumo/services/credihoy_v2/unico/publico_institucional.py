@@ -24,6 +24,47 @@ class NoEncontrado(NoDisponible):
     pass
 
 
+RECHAZOS = {
+    'AUTHORIZATION_WINDOW_EXPIRED': (403, 'El periodo de prueba finalizo. Solicita una nueva habilitacion.', 'CONTACTAR_ENTIDAD'),
+    'DOCUMENT_PRESENTATION_EXPIRED': (410, 'La revision del documento vencio. Actualiza la autorizacion y revisala de nuevo.', 'ACTUALIZAR_AUTORIZACION'),
+    'AUTHORIZATION_CONFLICT': (409, 'La autorizacion tiene un estado diferente. Consulta su estado antes de continuar.', 'CONSULTAR_ESTADO'),
+    'AUTHORIZATION_SECURITY_REJECTED': (403, 'No pudimos validar esta autorizacion. Ingresa nuevamente de forma personal.', 'INICIAR_SESION'),
+    'AUTHORIZATION_UNAVAILABLE': (503, 'No pudimos confirmar la operacion. Consulta su estado antes de continuar.', 'CONSULTAR_ESTADO'),
+}
+
+
+class RechazoOperacion(Exception):
+    def __init__(self, codigo):
+        if codigo not in RECHAZOS:raise ValueError('CODIGO_RECHAZO_NO_PERMITIDO')
+        self.codigo=codigo
+        self.status_code,self.mensaje,self.accion=RECHAZOS[codigo]
+        super().__init__(codigo)
+
+
+def clasificar_rechazo(error):
+    from django.core.signing import SignatureExpired, BadSignature
+    from django.db import DatabaseError
+    if isinstance(error,RechazoOperacion):return error
+    if isinstance(error,SignatureExpired):return RechazoOperacion('DOCUMENT_PRESENTATION_EXPIRED')
+    if isinstance(error,BadSignature):return RechazoOperacion('AUTHORIZATION_SECURITY_REJECTED')
+    if isinstance(error,DatabaseError):
+        cause=error.__cause__ or error
+        state=getattr(cause,'sqlstate',None) or getattr(cause,'pgcode',None)
+        if state=='P0001':
+            if 'AUTHORIZATION_WINDOW_EXPIRED' in str(cause):return RechazoOperacion('AUTHORIZATION_WINDOW_EXPIRED')
+            return RechazoOperacion('AUTHORIZATION_SECURITY_REJECTED')
+        if state=='23505':return RechazoOperacion('AUTHORIZATION_CONFLICT')
+        return RechazoOperacion('AUTHORIZATION_UNAVAILABLE')
+    if isinstance(error,ValueError) and str(error) in {'AUTORIZACION_EXISTENTE_NO_SOBRESCRIBIR','ETAPA_AUTORIZACION_NO_DISPONIBLE'}:
+        return RechazoOperacion('AUTHORIZATION_CONFLICT')
+    return None
+
+
+def respuesta_rechazo(error, rid=None):
+    return {'versionContrato':VERSION,'requestId':rid,'codigo':error.codigo,
+        'mensaje':error.mensaje,'accion':error.accion}
+
+
 def secret():
     key = getattr(settings, 'CREDIHOY_INSTITUCIONAL_SECRET', '')
     if not isinstance(key, str) or len(key) < 48:
@@ -79,6 +120,12 @@ def request_packet(origin, path, body, rid, request_headers):
     try:
         with requests.post(origin.rstrip('/') + path, data=body, headers=request_headers,
                 timeout=(5, 20), allow_redirects=False, verify=True) as response:
+            if response.status_code in (403,409,410,503) and response.headers.get('X-Request-ID')==rid and 'application/json' in response.headers.get('Content-Type',''):
+                rejection=response.json()
+                code=rejection.get('codigo') if type(rejection) is dict else None
+                if (code in RECHAZOS and RECHAZOS[code][0]==response.status_code
+                        and rejection.get('versionContrato')==VERSION and rejection.get('requestId')==rid):
+                    raise RechazoOperacion(code)
             if response.status_code == 404:
                 raise NoEncontrado
             if (response.status_code != 200 or response.headers.get('X-Request-ID') != rid
@@ -217,76 +264,6 @@ def project_progress_notice(row):
             or type(row['presentacion']) is not str or not 1<=len(row['presentacion'])<=2048
             or row['inactividadSegundos']!=3600):raise NoDisponible
     return dict(row)
-
-
-def project_simulation(row):
-    """Closed orientative contract shared by relay and public boundaries."""
-    from decimal import Decimal
-    from .simulacion_lectura import AVISO_SIMULACION, CONCEPTOS_PENDIENTES
-    def fields(value, names):
-        if type(value) is not dict or set(value) != set(names.split()):raise ValueError
-    def money(value):
-        if type(value) is not str or not re.fullmatch(r'[0-9]{1,12}\.[0-9]{2}', value):raise ValueError
-        return Decimal(value)
-    def decimal(value):
-        if type(value) is not str or not re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,55})?', value):raise ValueError
-        return Decimal(value)
-    try:
-        target='borradorId' if 'borradorId' in row else 'solicitudId'
-        fields(row, 'versionContrato '+target+' requestId alcance limites tasa seguro resultado aviso ofertable autorizaDecision autorizaStart autorizaDesembolso')
-        if (row['versionContrato'] != 'credihoy-simulacion-local-v1' or row['aviso'] != AVISO_SIMULACION
-                or row['alcance'] != 'ESTIMACION_GENERICA_NO_ELEGIBILIDAD'
-                or any(row[k] is not False for k in ('ofertable','autorizaDecision','autorizaStart','autorizaDesembolso'))
-                or any(str(UUID(row[k])) != row[k] for k in (target,'requestId'))):raise ValueError
-        l, t, s, r = (row[k] for k in ('limites','tasa','seguro','resultado'))
-        fields(l, 'version referencia montoMinimo montoMaximo cuotasMinimas cuotasMaximas')
-        if (any(type(l[k]) is not str or not 1 <= len(l[k]) <= 240 for k in ('version','referencia'))
-                or not 0 < Decimal(l['montoMinimo']) <= money(l['montoMaximo'])
-                or any(type(l[k]) is not int for k in ('cuotasMinimas','cuotasMaximas'))
-                or not 1 <= l['cuotasMinimas'] <= l['cuotasMaximas'] <= 48):raise ValueError
-        if type(l['montoMinimo']) is not str or not re.fullmatch(r'[0-9]{1,10}(\.[0-9]{1,2})?',l['montoMinimo']):raise ValueError
-        fields(t, 'valor unidad tarifaId version documento versionDocumento referencia soporteSha256 linea')
-        if (t['linea'] not in {'LIBRANZA','VENTANILLA'} or decimal(t['valor']) !=
-                {'LIBRANZA':Decimal('16.67'),'VENTANILLA':Decimal('17.69')}[t['linea']]
-                or t['unidad'] != 'PORCENTAJE_NAMV'
-                or any(type(t[k]) is not int or t[k] < 1 for k in ('tarifaId','version'))
-                or any(type(t[k]) is not str or not 1 <= len(t[k]) <= 240 for k in ('documento','versionDocumento','referencia'))
-                or not re.fullmatch('[a-f0-9]{64}',t['soporteSha256'])):raise ValueError
-        fields(s, 'tasaMensualDecimal base fuente comparacionLinix')
-        if (not 0 <= decimal(s['tasaMensualDecimal']) <= Decimal('0.01') or s['base'] != 'CAPITAL_INICIAL'
-                or s['fuente'] != 'calculadora.calcular_vida_deudores'
-                or s['comparacionLinix'] != 'BASE_Y_REDONDEO_NO_CONCILIADOS'):raise ValueError
-        if r is not None:
-            fields(r, 'estado unidad monto plazoMeses periodicidad tasaMensualDecimal tasaEaPorcentaje plazoMaximoParaMonto cuotaCapitalInteres seguro cuotaEstimada totalCapital totalIntereses totalSeguroEstimado totalEstimado amortizacion conceptosNoAcreditados fuente precision')
-            if (r['estado'] != 'ORIENTATIVA' or r['unidad'] != 'COP' or r['periodicidad'] != 'MENSUAL'
-                    or type(r['plazoMeses']) is not int or type(r['plazoMaximoParaMonto']) is not int
-                    or not l['cuotasMinimas'] <= r['plazoMeses'] <= min(l['cuotasMaximas'],r['plazoMaximoParaMonto']) <= 48
-                    or not Decimal(l['montoMinimo']) <= money(r['monto']) <= money(l['montoMaximo'])
-                    or decimal(r['tasaMensualDecimal']) != decimal(t['valor']) / Decimal(1200)
-                    or decimal(r['tasaEaPorcentaje']) <= 0
-                    or r['conceptosNoAcreditados'] != CONCEPTOS_PENDIENTES
-                    or r['fuente'] != 'calculadora.calcular_valor_cuota/numpy_financial.pmt'
-                    or r['precision'] != 'PMT_LEGACY_2_DECIMALES_INTERES_HALF_UP_AJUSTE_ULTIMA_CUOTA_NO_CONTRACTUAL'):raise ValueError
-            fields(r['seguro'], 'tasaMensualDecimal base baseCOP valorMensualEstimado fuente comparacionLinix')
-            if (any(r['seguro'][k] != v for k,v in s.items()) or r['seguro']['baseCOP'] != r['monto']
-                    or money(r['cuotaEstimada']) != money(r['cuotaCapitalInteres']) + money(r['seguro']['valorMensualEstimado'])
-                    or type(r['amortizacion']) is not list or len(r['amortizacion']) != r['plazoMeses']):raise ValueError
-            balance, capital, interest, premium, total = money(r['monto']), Decimal(0), Decimal(0), Decimal(0), Decimal(0)
-            for n, a in enumerate(r['amortizacion'], 1):
-                fields(a, 'numero saldoInicial capital intereses subtotalCapitalInteres seguroEstimado cuotaEstimada saldoFinal')
-                if (type(a['numero']) is not int or a['numero'] != n or money(a['saldoInicial']) != balance
-                        or money(a['capital']) <= 0 or money(a['saldoFinal']) != balance - money(a['capital'])
-                        or money(a['subtotalCapitalInteres']) != money(a['capital']) + money(a['intereses'])
-                        or money(a['seguroEstimado']) != money(r['seguro']['valorMensualEstimado'])
-                        or money(a['cuotaEstimada']) != money(a['subtotalCapitalInteres']) + money(a['seguroEstimado'])
-                        or (n < r['plazoMeses'] and a['subtotalCapitalInteres'] != r['cuotaCapitalInteres'])):raise ValueError
-                balance = money(a['saldoFinal']);capital += money(a['capital']);interest += money(a['intereses'])
-                premium += money(a['seguroEstimado']);total += money(a['cuotaEstimada'])
-            if (balance != 0 or capital != money(r['monto']) or capital != money(r['totalCapital'])
-                    or interest != money(r['totalIntereses']) or premium != money(r['totalSeguroEstimado'])
-                    or total != money(r['totalEstimado'])):raise ValueError
-        return json.loads(json.dumps(row))
-    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):raise NoDisponible from None
 
 
 def project_quote(row):
@@ -480,7 +457,6 @@ def project_row(row):
     except (TypeError,KeyError,ValueError,AttributeError):
         raise NoDisponible from None
 
-
 def project_study(value, solicitud_id):
     from datetime import datetime, timezone
     try:
@@ -518,3 +494,74 @@ def project_study(value, solicitud_id):
         import copy
         return copy.deepcopy(value)
     except (KeyError,ValueError,TypeError,AttributeError):raise NoDisponible from None
+
+
+def project_simulation(row):
+    """Closed orientative contract shared by relay and public boundaries."""
+    from decimal import Decimal
+    from .simulacion_lectura import AVISO_SIMULACION, CONCEPTOS_PENDIENTES
+    def fields(value, names):
+        if type(value) is not dict or set(value) != set(names.split()):raise ValueError
+    def money(value):
+        if type(value) is not str or not re.fullmatch(r'[0-9]{1,12}\.[0-9]{2}', value):raise ValueError
+        return Decimal(value)
+    def decimal(value):
+        if type(value) is not str or not re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,55})?', value):raise ValueError
+        return Decimal(value)
+    try:
+        target='borradorId' if 'borradorId' in row else 'solicitudId'
+        fields(row, 'versionContrato '+target+' requestId alcance limites tasa seguro resultado aviso ofertable autorizaDecision autorizaStart autorizaDesembolso')
+        if (row['versionContrato'] != 'credihoy-simulacion-local-v1' or row['aviso'] != AVISO_SIMULACION
+                or row['alcance'] != 'ESTIMACION_GENERICA_NO_ELEGIBILIDAD'
+                or any(row[k] is not False for k in ('ofertable','autorizaDecision','autorizaStart','autorizaDesembolso'))
+                or any(str(UUID(row[k])) != row[k] for k in (target,'requestId'))):raise ValueError
+        l, t, s, r = (row[k] for k in ('limites','tasa','seguro','resultado'))
+        fields(l, 'version referencia montoMinimo montoMaximo cuotasMinimas cuotasMaximas')
+        if (any(type(l[k]) is not str or not 1 <= len(l[k]) <= 240 for k in ('version','referencia'))
+                or not 0 < Decimal(l['montoMinimo']) <= money(l['montoMaximo'])
+                or any(type(l[k]) is not int for k in ('cuotasMinimas','cuotasMaximas'))
+                or not 1 <= l['cuotasMinimas'] <= l['cuotasMaximas'] <= 48):raise ValueError
+        if type(l['montoMinimo']) is not str or not re.fullmatch(r'[0-9]{1,10}(\.[0-9]{1,2})?',l['montoMinimo']):raise ValueError
+        fields(t, 'valor unidad tarifaId version documento versionDocumento referencia soporteSha256 linea')
+        if (t['linea'] not in {'LIBRANZA','VENTANILLA'} or decimal(t['valor']) !=
+                {'LIBRANZA':Decimal('16.67'),'VENTANILLA':Decimal('17.69')}[t['linea']]
+                or t['unidad'] != 'PORCENTAJE_NAMV'
+                or any(type(t[k]) is not int or t[k] < 1 for k in ('tarifaId','version'))
+                or any(type(t[k]) is not str or not 1 <= len(t[k]) <= 240 for k in ('documento','versionDocumento','referencia'))
+                or not re.fullmatch('[a-f0-9]{64}',t['soporteSha256'])):raise ValueError
+        fields(s, 'tasaMensualDecimal base fuente comparacionLinix')
+        if (not 0 <= decimal(s['tasaMensualDecimal']) <= Decimal('0.01') or s['base'] != 'CAPITAL_INICIAL'
+                or s['fuente'] != 'calculadora.calcular_vida_deudores'
+                or s['comparacionLinix'] != 'BASE_Y_REDONDEO_NO_CONCILIADOS'):raise ValueError
+        if r is not None:
+            fields(r, 'estado unidad monto plazoMeses periodicidad tasaMensualDecimal tasaEaPorcentaje plazoMaximoParaMonto cuotaCapitalInteres seguro cuotaEstimada totalCapital totalIntereses totalSeguroEstimado totalEstimado amortizacion conceptosNoAcreditados fuente precision')
+            if (r['estado'] != 'ORIENTATIVA' or r['unidad'] != 'COP' or r['periodicidad'] != 'MENSUAL'
+                    or type(r['plazoMeses']) is not int or type(r['plazoMaximoParaMonto']) is not int
+                    or not l['cuotasMinimas'] <= r['plazoMeses'] <= min(l['cuotasMaximas'],r['plazoMaximoParaMonto']) <= 48
+                    or not Decimal(l['montoMinimo']) <= money(r['monto']) <= money(l['montoMaximo'])
+                    or decimal(r['tasaMensualDecimal']) != decimal(t['valor']) / Decimal(1200)
+                    or decimal(r['tasaEaPorcentaje']) <= 0
+                    or r['conceptosNoAcreditados'] != CONCEPTOS_PENDIENTES
+                    or r['fuente'] != 'calculadora.calcular_valor_cuota/numpy_financial.pmt'
+                    or r['precision'] != 'PMT_LEGACY_2_DECIMALES_INTERES_HALF_UP_AJUSTE_ULTIMA_CUOTA_NO_CONTRACTUAL'):raise ValueError
+            fields(r['seguro'], 'tasaMensualDecimal base baseCOP valorMensualEstimado fuente comparacionLinix')
+            if (any(r['seguro'][k] != v for k,v in s.items()) or r['seguro']['baseCOP'] != r['monto']
+                    or money(r['cuotaEstimada']) != money(r['cuotaCapitalInteres']) + money(r['seguro']['valorMensualEstimado'])
+                    or type(r['amortizacion']) is not list or len(r['amortizacion']) != r['plazoMeses']):raise ValueError
+            balance, capital, interest, premium, total = money(r['monto']), Decimal(0), Decimal(0), Decimal(0), Decimal(0)
+            for n, a in enumerate(r['amortizacion'], 1):
+                fields(a, 'numero saldoInicial capital intereses subtotalCapitalInteres seguroEstimado cuotaEstimada saldoFinal')
+                if (type(a['numero']) is not int or a['numero'] != n or money(a['saldoInicial']) != balance
+                        or money(a['capital']) <= 0 or money(a['saldoFinal']) != balance - money(a['capital'])
+                        or money(a['subtotalCapitalInteres']) != money(a['capital']) + money(a['intereses'])
+                        or money(a['seguroEstimado']) != money(r['seguro']['valorMensualEstimado'])
+                        or money(a['cuotaEstimada']) != money(a['subtotalCapitalInteres']) + money(a['seguroEstimado'])
+                        or (n < r['plazoMeses'] and a['subtotalCapitalInteres'] != r['cuotaCapitalInteres'])):raise ValueError
+                balance = money(a['saldoFinal']);capital += money(a['capital']);interest += money(a['intereses'])
+                premium += money(a['seguroEstimado']);total += money(a['cuotaEstimada'])
+            if (balance != 0 or capital != money(r['monto']) or capital != money(r['totalCapital'])
+                    or interest != money(r['totalIntereses']) or premium != money(r['totalSeguroEstimado'])
+                    or total != money(r['totalEstimado'])):raise ValueError
+        return json.loads(json.dumps(row))
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):raise NoDisponible from None
+

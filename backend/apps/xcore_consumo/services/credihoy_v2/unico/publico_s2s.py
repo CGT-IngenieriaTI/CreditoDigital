@@ -36,6 +36,8 @@ class InstitucionalView(APIView):
 
     def handle_exception(self, exc):
         # No exception text, provider payloads, contact values or OTP are logged.
+        if isinstance(exc,wire.RechazoOperacion):
+            return Response(wire.respuesta_rechazo(exc,getattr(self,'rid',None)),status=exc.status_code)
         code = 404 if isinstance(exc, (Http404, wire.NoEncontrado)) else 503 if isinstance(exc, wire.NoDisponible) else 403
         return Response({'mensaje': 'Operacion no disponible'}, status=code)
 

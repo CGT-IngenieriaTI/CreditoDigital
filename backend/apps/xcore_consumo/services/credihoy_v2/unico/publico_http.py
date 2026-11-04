@@ -48,6 +48,9 @@ class PublicView(APIView):
         return response
 
     def handle_exception(self,exc):
+        from . import publico_institucional as wire
+        if isinstance(exc,wire.RechazoOperacion):
+            return Response(wire.respuesta_rechazo(exc),status=exc.status_code)
         if isinstance(exc,Http404):status=404
         elif isinstance(exc,service.AccesoDenegado):status=401
         elif isinstance(exc,ValueError):status=400

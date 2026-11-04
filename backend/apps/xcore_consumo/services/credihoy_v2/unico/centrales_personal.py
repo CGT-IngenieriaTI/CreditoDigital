@@ -49,9 +49,6 @@ RESULTADO_KEYS = frozenset({
 })
 ESTADOS = {'ENVIADO', 'CONFIRMADA', 'RECHAZADA', 'INDETERMINADA'}
 FINALES = {'OTP_CONFIRMADA', 'RECHAZADA'}
-EXPIRACION_EVENTO = 'credihoy_centrales_expiracion_conciliada_v1'
-ARCHIVO_KEY = 'credihoy_centrales_intentos_conservados_v1'
-CONCILIACIONES_KEY = 'credihoy_centrales_conciliaciones_v1'
 
 
 @dataclass(frozen=True)
@@ -61,7 +58,7 @@ class AutorizacionCentralesVerificada:
     texto_sha256: str
     pdf_sha256: str
     confirmado_en: datetime
-    vigente_hasta: datetime
+    vigente_hasta: datetime | None
 
 
 def _canonical(value):
@@ -248,20 +245,14 @@ def _mensaje_evidencia(payload):
 
 
 def _sellar(case, binding, result):
-    until = _fecha(settings.CREDIHOY_PUBLICO_AUTORIZACION_HASTA)
-    if until <= timezone.now():
-        raise ValueError('CENTRALES_VIGENCIA_AUTORIZACION_VENCIDA')
-    payload = {**binding, 'operacionEnvioOriginal': case.metadatos['envio']['operacionId'],
-               'autorizacionVigenteHasta': until.isoformat(),
-               **{k: result[k] for k in RESULTADO_KEYS - {'vinculo'}}}
-    signature = _clave_owner().sign(_mensaje_evidencia(payload))
-    # A configured public key must agree with the owner's derivation.
-    _clave_publica(owner=True).verify(signature, _mensaje_evidencia(payload))
-    return {'algoritmo': 'Ed25519', 'payload': payload,
-            'firmaBase64': base64.b64encode(signature).decode('ascii')}
+    from .consentimiento_uso import sellar
+    return sellar(case,binding,result)
 
 
 def _verificar_comprobante(case, consent, journal, *, vigente=True, owner=False):
+    if (journal.get('comprobante') or {}).get('payload',{}).get('versionEvidencia')==2:
+        from .consentimiento_uso import verificar_v2
+        return verificar_v2(case,consent,journal,owner=owner)
     proof = journal['comprobante']
     if (type(proof) is not dict or set(proof) != {'algoritmo', 'payload', 'firmaBase64'}
             or proof['algoritmo'] != 'Ed25519'):
@@ -426,100 +417,14 @@ def _guardar(case, alias, detail, journal, event, now):
                  'registroSha256': journal['registros'][-1]['sha256'], 'registradoEn': now.isoformat()})
 
 
-def _expiracion_conciliada(case, journal, alias, now):
-    if (journal['estado'] != 'ENVIADO' or journal['comprobante'] is not None
-            or _fecha(journal['vinculo']['vigenteHasta']) > now):
-        return None
-    stored = case.consumo_detail.orchestration_data.get(CONCILIACIONES_KEY, {}).get(journal['vinculo']['operacionId'])
-    if stored is None:
-        return None
-    if type(stored) is not dict or set(stored) != {'sha256', 'contenidoCifrado'}:
-        raise ValueError('CENTRALES_CONCILIACION_NO_INTEGRA')
-    raw = decrypt_text(stored['contenidoCifrado']).encode()
-    if _sha(raw) != stored['sha256']:
-        raise ValueError('CENTRALES_CONCILIACION_NO_INTEGRA')
-    proof = json.loads(raw)
-    if (type(proof) is not dict or proof.get('version') != 1
-            or proof.get('estadoProveedor') != 'expired'
-            or proof.get('origen') != 'TWILIO_CONSOLE_CONFIRMADO_RESPONSABLE'
-            or proof.get('solicitudId') != str(case.pk)
-            or proof.get('operacionId') != journal['vinculo']['operacionId']
-            or proof.get('journalSha256') != _sha(_canonical(journal))
-            or proof.get('nuevoIntentoMaximo') != 1):
-        raise ValueError('CENTRALES_CONCILIACION_NO_INTEGRA')
-    return proof
-
-
-def registrar_expiracion_conciliada(case, alias, evidencia):
-    """Internal operator reconciliation, never an authorization or provider check."""
-    expected = {'solicitudId', 'operacionId', 'verificationSha256', 'cuentaSid',
-                'servicioSid', 'estadoProveedor', 'origen', 'referenciaFuente',
-                'creadaProveedorEn', 'journalSha256'}
-    if (type(evidencia) is not dict or set(evidencia) != expected
-            or evidencia['solicitudId'] != str(case.pk)
-            or evidencia['estadoProveedor'] != 'expired'
-            or evidencia['origen'] != 'TWILIO_CONSOLE_CONFIRMADO_RESPONSABLE'
-            or re.fullmatch(r'AC[a-fA-F0-9]{32}', evidencia['cuentaSid']) is None
-            or re.fullmatch(r'VA[a-fA-F0-9]{32}', evidencia['servicioSid']) is None
-            or not evidencia['referenciaFuente'].startswith('https://1console.twilio.com/account/'+evidencia['cuentaSid']+'/')):
-        raise ValueError('CENTRALES_EXPIRACION_EVIDENCIA_INVALIDA')
-    _hash(evidencia['verificationSha256']);_hash(evidencia['journalSha256'])
-    source = re.fullmatch(r'https://1console\.twilio\.com/account/'+re.escape(evidencia['cuentaSid'])+
-        r'/us1/verify/logs/(VE[a-fA-F0-9]{32})', evidencia['referenciaFuente'])
-    if source is None or _sha(source.group(1).encode()) != evidencia['verificationSha256']:
-        raise ValueError('CENTRALES_EXPIRACION_REFERENCIA_DIFIERE')
-    with transaction.atomic(using=alias):
-        detail = SolicitudConsumo.objects.using(alias).select_for_update().get(solicitud=case)
-        case.consumo_detail = detail
-        consent = ConsentimientoConsumo.objects.using(alias).get(solicitud=case)
-        journal, events = _leer_journal(case, consent)
-        now = timezone.now()
-        if (not journal or journal['estado'] != 'ENVIADO' or journal['comprobante'] is not None
-                or journal['vinculo']['operacionId'] != evidencia['operacionId']
-                or _sha(_canonical(journal)) != evidencia['journalSha256']
-                or _fecha(journal['vinculo']['vigenteHasta']) > now
-                or not _fecha(journal['vinculo']['aceptadoEn']) - timedelta(seconds=5)
-                    <= _fecha(evidencia['creadaProveedorEn']) <= _fecha(journal['vinculo']['vigenteHasta'])
-                or not events[1:] or any(e['estado'] != 'ENVIADO' for e in events[1:])
-                or any(e['resultado']['verificationReferencia'] != evidencia['verificationSha256'] for e in events[1:])):
-            raise ValueError('CENTRALES_EXPIRACION_NO_CONCILIA')
-        prior = _expiracion_conciliada(case, journal, alias, now)
-        if prior is not None:
-            if any(prior.get(k) != v for k, v in evidencia.items()):
-                raise ValueError('CENTRALES_CONCILIACION_EXISTENTE_DIFIERE')
-            return prior
-        proof = {**evidencia, 'version': 1, 'nuevoIntentoMaximo': 1, 'conciliadoEn': now.isoformat()}
-        raw = _canonical(proof)
-        records = deepcopy(detail.orchestration_data.get(CONCILIACIONES_KEY, {}))
-        records[journal['vinculo']['operacionId']] = {'sha256': _sha(raw),
-            'contenidoCifrado': encrypt_text(raw.decode())}
-        detail.orchestration_data = {**detail.orchestration_data, CONCILIACIONES_KEY: records}
-        detail.save(using=alias, update_fields=['orchestration_data', 'updated_at'])
-        AuditLog.objects.using(alias).create(solicitud=case, event=EXPIRACION_EVENTO,
-            actor='operador:conciliacion-proveedor', request_id=journal['vinculo']['operacionId'], payload=proof)
-        return proof
-
-
-def _reintento_personal(case, journal, identity, alias, now):
-    proof = _expiracion_conciliada(case, journal, alias, now)
-    if proof is None or identity['_sesionReferencia'] == journal['vinculo']['sesionReferencia']:
-        return False
-    _limite(identity, now)
-    return True
-
-
 def presentar(sid, identity, operacion_id):
     """Read the already accepted original; the presentation is not a signature."""
     _habilitar()
     operation = _uuid(str(operacion_id))
-    case, alias, _, consent, base = _contexto(sid, identity)
+    case, _, _, consent, base = _contexto(sid, identity)
     pdf = _pdf_original(case, consent, identity)
     now = timezone.now()
     journal, events = _leer_journal(case, consent)
-    if journal and _reintento_personal(case, journal, identity, alias, now):
-        if operation == journal['vinculo']['operacionId']:
-            raise ValueError('CENTRALES_REINTENTO_REQUIERE_NUEVA_OPERACION')
-        journal = None
     if journal:
         if journal['vinculo']['operacionId'] != operation:
             raise ValueError('CENTRALES_OTRA_OPERACION_EXISTENTE')
@@ -556,22 +461,8 @@ def aceptar(sid, identity, operacion_id, presentacion, acepta):
         _validar_presentacion(presentation, base, operation, identity, now)
         _pdf_original(case, consent, identity)
         if leer_complemento_personal(case) is None:
-            from .autoservicio import validar_procedencia_formulario
-            try:validar_procedencia_formulario(case,detail.form_data)
-            except (ValueError,KeyError,TypeError,AttributeError):
-                raise ValueError('CENTRALES_COMPLEMENTO_PERSONAL_REQUERIDO') from None
+            raise ValueError('CENTRALES_COMPLEMENTO_PERSONAL_REQUERIDO')
         journal, events = _leer_journal(case, consent)
-        if journal and _reintento_personal(case, journal, identity, alias, now):
-            previous = journal['vinculo']['operacionId']
-            if operation == previous:
-                raise ValueError('CENTRALES_REINTENTO_REQUIERE_NUEVA_OPERACION')
-            archive = deepcopy(detail.orchestration_data.get(ARCHIVO_KEY, {}))
-            if type(archive) is not dict or previous in archive or len(archive) >= 5:
-                raise ValueError('CENTRALES_ARCHIVO_EXISTENTE_CONCILIAR')
-            archive[previous] = {'journal': deepcopy(journal), 'journalSha256': _sha(_canonical(journal)),
-                'conciliacion': _expiracion_conciliada(case, journal, alias, now), 'nuevoIntento': operation}
-            detail.orchestration_data = {**detail.orchestration_data, ARCHIVO_KEY: archive}
-            journal = None
         if journal:
             if (journal['vinculo']['operacionId'] != operation
                     or events[0]['resultado']['presentacion'] != presentation):
@@ -627,18 +518,13 @@ def registrar_resultado(sid, identity, comprobacion):
             journal['evidenciaCifrada'] = encrypt_text(_canonical(journal['comprobante']).decode('utf-8'))
             _verificar_comprobante(case, consent, journal, owner=True)
         _guardar(case, alias, detail, journal, 'credihoy_centrales_resultado_registrado', now)
-        if following == 'OTP_CONFIRMADA':
-            from .continuacion_eventos import registrar
-            registrar(case, alias, journal)
         return {'centrales': _dto(journal)}
 
 
 def consultar(sid, identity):
     """Safe DTO with a resumable same-session intent, never provider tokens or PII."""
-    case, alias, _, consent, base = _contexto(sid, identity)
+    case, _, _, consent, base = _contexto(sid, identity)
     journal, _ = _leer_journal(case, consent)
-    if journal and _reintento_personal(case, journal, identity, alias, timezone.now()):
-        journal = None
     token = None
     if journal and journal['estado'] not in FINALES:
         binding = journal['vinculo']
@@ -653,11 +539,16 @@ def consultar(sid, identity):
 
 
 def verificar_autorizacion_centrales_personal(case, consent):
-    """Read-only HDC integration contract; this function does not open its gate."""
+    """Verify durable OTP evidence against consent, not its former access window."""
     try:
         journal = case.consumo_detail.orchestration_data.get(KEY)
         if type(journal) is dict and journal.get('estado') == 'OTP_CONFIRMADA':
-            return _verificar_comprobante(case, consent, journal)
+            verified = _verificar_comprobante(case, consent, journal, vigente=False)
+            until = _vigencia_consentimiento_documental(case, consent)
+            return AutorizacionCentralesVerificada(
+                metodo=verified.metodo, referencia_verificacion=verified.referencia_verificacion,
+                texto_sha256=verified.texto_sha256, pdf_sha256=verified.pdf_sha256,
+                confirmado_en=verified.confirmado_en, vigente_hasta=until)
         verified = verificar_autorizacion_crediticia_personal(case, consent)
         return AutorizacionCentralesVerificada(
             metodo='AUTENTIC', referencia_verificacion=verified.referencia_verificacion,
@@ -666,3 +557,20 @@ def verificar_autorizacion_centrales_personal(case, consent):
             vigente_hasta=verified.vigente_hasta)
     except (KeyError, TypeError, ValueError, AttributeError, InvalidSignature):
         raise OperacionError('AUTORIZACION_CENTRALES_PERSONAL_VERIFICABLE_REQUERIDA') from None
+
+def _vigencia_consentimiento_documental(case, consent):
+    # COLO-FO.023 v10 has its own permanent purpose; access windows are not consent expiry.
+    _base(case, consent)
+    evidence = consent.evidencia
+    if (consent.version != 'COLO-FO.023:v10'
+            or FORMATOS['COLO-FO.023']['sha256'] != '01dd898c75e81a7c8e027784a896600f49c0486db9ef7b3ee72fc2290becf20c'
+            or evidence['originalSha256'] != '01dd898c75e81a7c8e027784a896600f49c0486db9ef7b3ee72fc2290becf20c'
+            or 'autorizo de manera permanente' not in ' '.join(consent.text_snapshot.casefold().split())):
+        raise ValueError('CENTRALES_VIGENCIA_DOCUMENTAL_NO_ACREDITADA')
+    if evidence.get('revocado', False) is not False or evidence.get('revocadoEn') is not None:
+        raise ValueError('CENTRALES_CONSENTIMIENTO_REVOCADO')
+    # An explicit documentary restriction may shorten the permanent template, never renew it.
+    until = _fecha(evidence['vigenteHasta']) if 'vigenteHasta' in evidence else None
+    if until is not None and (until <= timezone.now() or until <= consent.fecha_aceptacion):
+        raise ValueError('CENTRALES_CONSENTIMIENTO_DOCUMENTAL_VENCIDO')
+    return until

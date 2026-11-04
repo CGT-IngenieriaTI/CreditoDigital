@@ -87,12 +87,15 @@ export type GuardarBorrador={operacion:'borrador';accion:'guardar'|'enviar';clav
   version:number;datos:BorradorPublico['datos'];promotor:string|null;
   aceptacion:{version:string;sha256:string;presentacion:string;acepta:true}};
 export interface SolicitudPublica { referencia:string; titulo:string; monto:string; plazoMeses:number;
+  progreso?:ProgresoEstudio;
   periodicidad:'Mensual'; fechaCreacion:string; requisitosCumplidos:number|null; pendientes:string[];
   siguientePaso:string; ofertaDisponible:false; acciones:{ radicar:false; firmar:false };simulacion?:SimulacionPublica|null;
   institucional?:InstitucionalPublica|null; estudio?:EstudioPublico|null;
   envio?:{operacionId:string;confirmadoEn:string;solicitud:BorradorPublico};
   simulacionLocal?:SimulacionLocal;
   procedencia?:{origen:'HISTORICO_PILOTO'|'FUENTE_OPERATIVA';estadoRegistrado:string;actualizadoAt:string;consultadoAt:string} }
+export interface ProgresoEstudio {version:'credihoy-progreso-estudio-v1';estado:'AUTORIZACION_CONFIRMADA'|'VALIDACION_ADICIONAL'|'RESULTADO_DISPONIBLE';
+  confirmadoEn:string;observadoEn:string;autorizacionVigente:boolean;etapaActiva:null;etapasCompletadas:['AUTORIZACION']}
 export interface InstitucionalPublica {estado:'APROBADA_PENDIENTE_FIRMA';fechaDecision:string;actualizadoAt:string;
   documentos:'NO_ACREDITADOS';firma:'PENDIENTE';
   incidencias:'NO_DISPONIBLE'|'EN_REVISION'|'ANTECEDENTES_SIN_PENDIENTE_ACTIVO'|'SIN_INCIDENCIAS_REGISTRADAS'}
@@ -326,10 +329,20 @@ export function validarSolicitudPublica(raw:unknown,now=Date.now()):SolicitudPub
     simulacionLocal=validarSimulacionLocal(q,p.referencia as string,q.requestId as string,
       {monto:p.monto as string,plazoMeses:p.plazoMeses as number,linea:rate.linea as 'VENTANILLA'|'LIBRANZA'});
   }
+  let progreso:ProgresoEstudio|undefined;
+  if(p.progreso!==undefined&&p.progreso!==null){
+    const g=obj(p.progreso);
+    if(procedencia?.origen!=='FUENTE_OPERATIVA'||Object.keys(g).sort().join(',')!=='autorizacionVigente,confirmadoEn,estado,etapaActiva,etapasCompletadas,observadoEn,version'
+      ||g.version!=='credihoy-progreso-estudio-v1'||!['AUTORIZACION_CONFIRMADA','VALIDACION_ADICIONAL','RESULTADO_DISPONIBLE'].includes(text(g.estado))
+      ||typeof g.autorizacionVigente!=='boolean'||g.etapaActiva!==null||JSON.stringify(g.etapasCompletadas)!=='["AUTORIZACION"]'
+      ||!Number.isFinite(Date.parse(text(g.confirmadoEn)))||!Number.isFinite(Date.parse(text(g.observadoEn)))
+      ||Date.parse(text(g.confirmadoEn))>Date.parse(text(g.observadoEn))||Date.parse(text(g.observadoEn))>now+5000)fail();
+    progreso=g as unknown as ProgresoEstudio;
+  }
   return {referencia:p.referencia as string,titulo:p.titulo as string,monto:p.monto as string,plazoMeses:p.plazoMeses as number,
     periodicidad:'Mensual',fechaCreacion:p.fechaCreacion as string,requisitosCumplidos:p.requisitosCumplidos as number|null,
     pendientes:[...p.pendientes as string[]],siguientePaso:p.siguientePaso as string,ofertaDisponible:false,acciones:{radicar:false,firmar:false},simulacion,institucional,
-    ...(procedencia?{procedencia}:{}),...(estudio?{estudio}:{}),...(envio?{envio}:{}),...(simulacionLocal?{simulacionLocal}:{})};
+    ...(progreso?{progreso}:{}),...(procedencia?{procedencia}:{}),...(estudio?{estudio}:{}),...(envio?{envio}:{}),...(simulacionLocal?{simulacionLocal}:{})};
 }
 
 export class AccesoAsociadoClient {

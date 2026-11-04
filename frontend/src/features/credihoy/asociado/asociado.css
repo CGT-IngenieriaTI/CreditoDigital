@@ -220,3 +220,9 @@
 .ca-study-rules summary { cursor: pointer; color: var(--ca-blue); padding: 4px 0; }
 .ca-study-rules details ul { margin: 8px 0; padding-left: 20px; }
 .ca-study-rules details p { margin: 8px 0 0; }
+.ca-study-progress { list-style: none; padding: 0; margin: 20px 0 24px; }
+.ca-study-progress li { display: grid; grid-template-columns: 24px minmax(0,1fr); gap: 14px; padding: 15px 0; border-bottom: 1px solid var(--ca-line); color: var(--ca-muted); }
+.ca-study-progress li>svg { margin-top: 2px; }
+.ca-study-progress strong { display: block; color: var(--ca-ink); font-size: 14px; font-weight: 600; line-height: 1.5; }
+.ca-study-progress span { display: block; margin-top: 3px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.ca-study-progress .ca-study-progress--done { color: #187764; }

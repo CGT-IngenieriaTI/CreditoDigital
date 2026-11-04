@@ -138,127 +138,6 @@ READONLY_NOTICE = (
 )
 logger = logging.getLogger("credito")
 
-
-def continuar_credihoy_unico(solicitud_id, *, operador, recuperar_existente=False):
-    """Worker continuation of a native dossier; never a browser financial command."""
-    import hashlib,json
-    from uuid import UUID, NAMESPACE_URL, uuid5
-    from django.core.exceptions import ObjectDoesNotExist
-    from django.db import connection, transaction
-    from apps.utils.models import AuditLog
-    from apps.xcore_consumo.models import EvaluacionConsumo
-    from apps.integraciones.risk_gateway.contratos import HDCRequest
-    from apps.integraciones.risk_gateway.configuracion import GatewayConfig
-    from apps.integraciones.risk_gateway.errores import GatewayError
-    from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
-    from apps.integraciones.risk_gateway.operaciones.servicio import OrquestadorGateway
-    from apps.integraciones.risk_gateway.operaciones.validacion import validar, TIPOS_DOCUMENTO
-    from apps.integraciones.risk_gateway.operaciones.errores import OperacionError
-    from .credihoy_v2.unico import autoservicio, centrales_personal, funcional
-    from .credihoy_v2.base import Hecho
-
-    sid=str(UUID(str(solicitud_id)))
-    if type(recuperar_existente) is not bool:raise ValueError('MODO_CONTINUACION_INVALIDO')
-    if connection.in_atomic_block or not connection.get_autocommit():
-        raise ValueError('CONTINUACION_REQUIERE_COMMIT_DURABLE')
-    if (not operador.is_authenticated or not operador.is_active or not operador.is_staff
-            or not operador.has_perm('xcore_consumo.add_evaluacionconsumo')):
-        raise ValueError('OPERADOR_TECNICO_CONTINUACION_NO_AUTORIZADO')
-    detail=SolicitudConsumo.objects.select_related('solicitud__solicitante').get(solicitud_id=sid)
-    case=autoservicio.validar_vinculo_consumo(detail.solicitud)
-    case.consumo_detail=detail
-    try:consent=case.consentimiento_consumo
-    except ObjectDoesNotExist:consent=None
-    correlation=str(uuid5(NAMESPACE_URL,'credihoy-continuacion:'+sid+':'+(consent.text_hash if consent else 'SIN_CONSENTIMIENTO')))
-
-    def record(estado,codigo,operation=None,evidence=None):
-        packet={'estado':estado,'codigo':codigo,'solicitudId':sid,'requestId':correlation,
-            'operacionId':str(operation.operacion_id) if operation else None,
-            'decisionCrediticia':'NO_AUTORIZADA','START':0,'desembolso':False}
-        if evidence is not None:packet['evaluacionConservada']=evidence
-        with transaction.atomic(durable=True):
-            SolicitudConsumo.objects.select_for_update().get(pk=detail.pk)
-            # Same evidence/transition is one journal event even with duplicate tasks.
-            query=AuditLog.objects.filter(solicitud_id=sid,event='credihoy_continuacion_automatica',request_id=correlation)
-            if not query.filter(payload=packet).exists():
-                AuditLog.objects.create(solicitud_id=sid,event='credihoy_continuacion_automatica',
-                    request_id=correlation,actor='user:'+str(operador.pk),payload=packet)
-        return packet
-
-    if consent is None:
-        return record('CONSENTIMIENTO_PENDIENTE','DOCUMENTO_PERSONAL_PENDIENTE_ACEPTACION')
-    try:
-        centrales_personal.verificar_autorizacion_centrales_personal(case,consent)
-    except (ValueError,ObjectDoesNotExist,OperacionError):
-        return record('CONSENTIMIENTO_PENDIENTE','AUTORIZACION_CENTRALES_VIGENTE_REQUERIDA')
-    if recuperar_existente:
-        evaluation=EvaluacionConsumo.objects.filter(solicitud_id=sid).first()
-        if evaluation is None:
-            return record('PENDIENTE_EVALUACION','SIN_EVALUACION_EXISTENTE_NO_CONSUMIR')
-        # Native reader verifies consent, HDC receipt and linkage before reuse.
-        saved=funcional.leer_estado_funcional(case)
-        result=saved.get('resultado')
-        rules=result.get('reglas') if type(result) is dict else None
-        if (type(rules) is not list or len(rules)!=16
-                or any(type(r) is not dict or type(r.get('codigo')) is not str
-                    or type(r.get('resultado')) is not str for r in rules)
-                or len({r['codigo'] for r in rules})!=16):
-            return record('PENDIENTE_CONCILIACION','EVALUACION_EXISTENTE_SIN_16_REGLAS_VERIFICADAS')
-        evidence={'evaluacionId':str(evaluation.pk),'generadaEn':evaluation.created_at.isoformat(),
-            'resultadoSha256':hashlib.sha256(json.dumps(result,sort_keys=True,default=str).encode()).hexdigest(),
-            'reglas':[{k:r[k] for k in ('codigo','resultado','estadoEvaluacion') if k in r} for r in rules],
-            'consultaNueva':False,'evaluacionNueva':False,'decisionNueva':False}
-        if saved.get('revisionEstudio'):
-            evidence['revisionEstudio']=saved['revisionEstudio']
-            correlation=str(uuid5(NAMESPACE_URL,'credihoy-continuacion:'+sid+':'+consent.text_hash+':'+saved['revisionEstudio']['versionReferencia']))
-        return record('EVALUACION_EXISTENTE_RECUPERADA','EVALUACION_REAL_CONSERVADA_SIN_RECONSULTA',evidence=evidence)
-    if (getattr(settings,'RISK_GATEWAY_ORCHESTRATION_ENABLED',False) is not True
-            or getattr(settings,'CREDIHOY_EVALUACION_AUTOGESTION_ENABLED',False) is not True):
-        return record('AUTORIZACIONES_COMPLETAS','CONTINUACION_OPERATIVA_NO_HABILITADA')
-    try:
-        config=GatewayConfig.from_settings().validar()
-        request=HDCRequest.desde_payload({'persona':'natural',
-            'person_id_type':TIPOS_DOCUMENTO[case.solicitante.tipo_identificacion],
-            'person_id_number':case.solicitante.numero_identificacion,
-            'person_last_name':case.solicitante.primer_apellido,
-            'metadata':{'consumidor':config.internal_client}})
-        validar(case,request)
-    except OperacionError as exc:
-        return record('AUTORIZACIONES_COMPLETAS',exc.codigo)
-    except GatewayError:
-        return record('AUTORIZACIONES_COMPLETAS','CONEXION_INSTITUCIONAL_NO_DISPONIBLE')
-    # A completed engine result is immutable. Do not consume another bureau report.
-    evaluation=EvaluacionConsumo.objects.filter(solicitud_id=sid).first()
-    if evaluation is not None:
-        funcional.leer_estado_funcional(case)
-        return record('EVALUACION_COMPLETADA','EVALUACION_EXISTENTE_CONSERVADA')
-    prior=OperacionGateway.objects.filter(solicitud_id=sid,proveedor='HDC').first()
-    if prior is not None and prior.estado not in {'PENDIENTE'}:
-        return record('PENDIENTE_CONCILIACION','HDC_EXISTENTE_NO_REENVIAR')
-    from .credihoy_v2.unico.hechos_continuacion import obtener as obtener_hechos
-    from .credihoy_v2.errores_http import ApiDataCrediHoyV2Error
-    try:
-        ingresos, hechos_reglas, descuentos_nomina = obtener_hechos(case, correlation)
-    except ApiDataCrediHoyV2Error:
-        return record('NO_EVALUABLE','HECHOS_INSTITUCIONALES_NO_DISPONIBLES_NO_CONSUMIR_HDC')
-    try:
-        result=OrquestadorGateway().ejecutar(sid,request)
-    except OperacionError as exc:
-        return record('PENDIENTE_CONCILIACION',exc.codigo)
-    if result.respuesta is None or result.reutilizada:
-        return record('PENDIENTE_CONCILIACION','HDC_RESPUESTA_PERSISTIDA_REQUIERE_RECUPERACION',result)
-    if result.estado not in {'COMPLETADA','SIN_INFORMACION'}:
-        return record('PENDIENTE_CONCILIACION','HDC_RESULTADO_NO_COMPLETADO',result)
-    try:
-        funcional.registrar_resultado_consulta_hdc(sid,operador,operacion=result,
-            ingresos=ingresos, hechos_reglas=hechos_reglas,
-            descuentos_nomina=descuentos_nomina,autogestion=True)
-    except Exception:
-        # The external result may be durable already. Never repeat it on failure.
-        record('PENDIENTE_CONCILIACION','EVALUACION_PERSISTENCIA_NO_CONFIRMADA',result)
-        raise
-    return record('EVALUACION_COMPLETADA','EVALUACION_REGISTRADA_DECISION_INSTITUCIONAL_PENDIENTE',result)
-
 PRESELECTA_USER_FRIENDLY_REJECTION = (
     "Por ahora no es posible continuar con la solicitud de credito. "
     "Si necesitas mas informacion, comunicate con la cooperativa."
@@ -1253,3 +1132,138 @@ def persist_initial_orchestration_snapshot(detail: SolicitudConsumo) -> Solicitu
 
 
 
+
+
+def continuar_credihoy_unico(solicitud_id, *, operador, recuperar_existente=False):
+    """Worker continuation of a native dossier; never a browser financial command."""
+    import hashlib,json
+    from uuid import UUID, NAMESPACE_URL, uuid5
+    from django.core.exceptions import ObjectDoesNotExist
+    from django.db import connection, transaction
+    from apps.utils.models import AuditLog
+    from apps.xcore_consumo.models import EvaluacionConsumo
+    from apps.integraciones.risk_gateway.contratos import HDCRequest
+    from apps.integraciones.risk_gateway.configuracion import GatewayConfig
+    from apps.integraciones.risk_gateway.errores import GatewayError
+    from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
+    from apps.integraciones.risk_gateway.operaciones.servicio import OrquestadorGateway
+    from apps.integraciones.risk_gateway.operaciones.validacion import validar, TIPOS_DOCUMENTO
+    from apps.integraciones.risk_gateway.operaciones.errores import OperacionError
+    from .credihoy_v2.unico import autoservicio, centrales_personal, funcional
+    from .credihoy_v2.base import Hecho
+
+    sid=str(UUID(str(solicitud_id)))
+    if type(recuperar_existente) is not bool:raise ValueError('MODO_CONTINUACION_INVALIDO')
+    if connection.in_atomic_block or not connection.get_autocommit():
+        raise ValueError('CONTINUACION_REQUIERE_COMMIT_DURABLE')
+    if (not operador.is_authenticated or not operador.is_active or not operador.is_staff
+            or not operador.has_perm('xcore_consumo.add_evaluacionconsumo')):
+        raise ValueError('OPERADOR_TECNICO_CONTINUACION_NO_AUTORIZADO')
+    detail=SolicitudConsumo.objects.select_related('solicitud__solicitante').get(solicitud_id=sid)
+    case=autoservicio.validar_vinculo_consumo(detail.solicitud)
+    case.consumo_detail=detail
+    try:consent=case.consentimiento_consumo
+    except ObjectDoesNotExist:consent=None
+    correlation=str(uuid5(NAMESPACE_URL,'credihoy-continuacion:'+sid+':'+(consent.text_hash if consent else 'SIN_CONSENTIMIENTO')))
+
+    def record(estado,codigo,operation=None,evidence=None):
+        packet={'estado':estado,'codigo':codigo,'solicitudId':sid,'requestId':correlation,
+            'operacionId':str(operation.operacion_id) if operation else None,
+            'decisionCrediticia':'NO_AUTORIZADA','START':0,'desembolso':False}
+        if evidence is not None:packet['evaluacionConservada']=evidence
+        with transaction.atomic(durable=True):
+            tracked=SolicitudConsumo.objects.select_for_update().get(pk=detail.pk)
+            # Same evidence/transition is one journal event even with duplicate tasks.
+            query=AuditLog.objects.filter(solicitud_id=sid,event='credihoy_continuacion_automatica',request_id=correlation)
+            if not query.filter(payload=packet).exists():
+                AuditLog.objects.create(solicitud_id=sid,event='credihoy_continuacion_automatica',
+                    request_id=correlation,actor='user:'+str(operador.pk),payload=packet)
+            snapshot={'version':'credihoy-progreso-estudio-v1','estado':'RESULTADO_DISPONIBLE' if estado in {
+                'EVALUACION_COMPLETADA','EVALUACION_EXISTENTE_RECUPERADA'} else 'VALIDACION_ADICIONAL',
+                'codigo':codigo,'correlationId':correlation}
+            current=tracked.orchestration_data or {}
+            if current.get('credihoy_progreso_estudio_v1')!=snapshot:
+                tracked.orchestration_data={**current,'credihoy_progreso_estudio_v1':snapshot}
+                tracked.save(update_fields=['orchestration_data','updated_at'])
+        return packet
+
+    if consent is None:
+        return record('CONSENTIMIENTO_PENDIENTE','DOCUMENTO_PERSONAL_PENDIENTE_ACEPTACION')
+    from .credihoy_v2.unico.consentimiento_uso import evaluar as evaluar_uso,validar_consumo
+    try:evaluar_uso(case,consent)
+    except (ValueError,KeyError,TypeError,AttributeError):
+        return record('PENDIENTE_VALIDACION','USO_CONSENTIMIENTO_DOCUMENTAL_PENDIENTE')
+    consumption_block=validar_consumo(case)
+    if consumption_block and not recuperar_existente:
+        return record('AUTORIZACIONES_COMPLETAS',consumption_block)
+    try:
+        centrales_personal.verificar_autorizacion_centrales_personal(case,consent)
+    except (ValueError,ObjectDoesNotExist,OperacionError):
+        return record('CONSENTIMIENTO_PENDIENTE','AUTORIZACION_CENTRALES_VIGENTE_REQUERIDA')
+    if recuperar_existente:
+        evaluation=EvaluacionConsumo.objects.filter(solicitud_id=sid).first()
+        if evaluation is None:
+            return record('PENDIENTE_EVALUACION','SIN_EVALUACION_EXISTENTE_NO_CONSUMIR')
+        # Native reader verifies consent, HDC receipt and linkage before reuse.
+        saved=funcional.leer_estado_funcional(case)
+        result=saved.get('resultado')
+        rules=result.get('reglas') if type(result) is dict else None
+        if (type(rules) is not list or len(rules)!=16
+                or any(type(r) is not dict or type(r.get('codigo')) is not str
+                    or type(r.get('resultado')) is not str for r in rules)
+                or len({r['codigo'] for r in rules})!=16):
+            return record('PENDIENTE_CONCILIACION','EVALUACION_EXISTENTE_SIN_16_REGLAS_VERIFICADAS')
+        evidence={'evaluacionId':str(evaluation.pk),'generadaEn':evaluation.created_at.isoformat(),
+            'resultadoSha256':hashlib.sha256(json.dumps(result,sort_keys=True,default=str).encode()).hexdigest(),
+            'reglas':[{k:r[k] for k in ('codigo','resultado','estadoEvaluacion') if k in r} for r in rules],
+            'consultaNueva':False,'evaluacionNueva':False,'decisionNueva':False}
+        if saved.get('revisionEstudio'):
+            evidence['revisionEstudio']=saved['revisionEstudio']
+            correlation=str(uuid5(NAMESPACE_URL,'credihoy-continuacion:'+sid+':'+consent.text_hash+':'+saved['revisionEstudio']['versionReferencia']))
+        return record('EVALUACION_EXISTENTE_RECUPERADA','EVALUACION_REAL_CONSERVADA_SIN_RECONSULTA',evidence=evidence)
+    if (getattr(settings,'RISK_GATEWAY_ORCHESTRATION_ENABLED',False) is not True
+            or getattr(settings,'CREDIHOY_EVALUACION_AUTOGESTION_ENABLED',False) is not True):
+        return record('AUTORIZACIONES_COMPLETAS','CONTINUACION_OPERATIVA_NO_HABILITADA')
+    try:
+        config=GatewayConfig.from_settings().validar()
+        request=HDCRequest.desde_payload({'persona':'natural',
+            'person_id_type':TIPOS_DOCUMENTO[case.solicitante.tipo_identificacion],
+            'person_id_number':case.solicitante.numero_identificacion,
+            'person_last_name':case.solicitante.primer_apellido,
+            'metadata':{'consumidor':config.internal_client}})
+        validar(case,request)
+    except OperacionError as exc:
+        return record('AUTORIZACIONES_COMPLETAS',exc.codigo)
+    except GatewayError:
+        return record('AUTORIZACIONES_COMPLETAS','CONEXION_INSTITUCIONAL_NO_DISPONIBLE')
+    # A completed engine result is immutable. Do not consume another bureau report.
+    evaluation=EvaluacionConsumo.objects.filter(solicitud_id=sid).first()
+    if evaluation is not None:
+        funcional.leer_estado_funcional(case)
+        return record('EVALUACION_COMPLETADA','EVALUACION_EXISTENTE_CONSERVADA')
+    prior=OperacionGateway.objects.filter(solicitud_id=sid,proveedor='HDC').first()
+    if prior is not None and prior.estado not in {'PENDIENTE'}:
+        return record('PENDIENTE_CONCILIACION','HDC_EXISTENTE_NO_REENVIAR')
+    from .credihoy_v2.unico.hechos_continuacion import obtener as obtener_hechos
+    from .credihoy_v2.errores_http import ApiDataCrediHoyV2Error
+    try:
+        ingresos, hechos_reglas, descuentos_nomina = obtener_hechos(case, correlation)
+    except ApiDataCrediHoyV2Error:
+        return record('NO_EVALUABLE','HECHOS_INSTITUCIONALES_NO_DISPONIBLES_NO_CONSUMIR_HDC')
+    try:
+        result=OrquestadorGateway().ejecutar(sid,request)
+    except OperacionError as exc:
+        return record('PENDIENTE_CONCILIACION',exc.codigo)
+    if result.respuesta is None or result.reutilizada:
+        return record('PENDIENTE_CONCILIACION','HDC_RESPUESTA_PERSISTIDA_REQUIERE_RECUPERACION',result)
+    if result.estado not in {'COMPLETADA','SIN_INFORMACION'}:
+        return record('PENDIENTE_CONCILIACION','HDC_RESULTADO_NO_COMPLETADO',result)
+    try:
+        funcional.registrar_resultado_consulta_hdc(sid,operador,operacion=result,
+            ingresos=ingresos, hechos_reglas=hechos_reglas,
+            descuentos_nomina=descuentos_nomina,autogestion=True)
+    except Exception:
+        # The external result may be durable already. Never repeat it on failure.
+        record('PENDIENTE_CONCILIACION','EVALUACION_PERSISTENCIA_NO_CONFIRMADA',result)
+        raise
+    return record('EVALUACION_COMPLETADA','EVALUACION_REGISTRADA_DECISION_INSTITUCIONAL_PENDIENTE',result)

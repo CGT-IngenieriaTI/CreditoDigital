@@ -387,6 +387,10 @@ def project_row(row):
             'requisitosCumplidos','pendientes','siguientePaso')}
         clean.update(ofertaDisponible=False, acciones={'radicar':False,'firmar':False}, simulacion=None,
                      institucional=None)
+        if row.get('progreso') is not None:
+            from .progreso_estudio import project
+            if row.get('procedencia',{}).get('origen')!='FUENTE_OPERATIVA':raise ValueError
+            clean['progreso']=project(row['progreso'])
         institution=row.get('institucional')
         if institution is not None:
             from datetime import timezone

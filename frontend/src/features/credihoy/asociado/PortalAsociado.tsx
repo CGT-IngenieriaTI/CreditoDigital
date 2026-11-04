@@ -262,7 +262,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
           {s.envio?.solicitud.datos.periodicidadPago&&typeof s.envio.solicitud.datos.recogerCredihoy==='boolean'&&<dl className="ca-authorizations">
             <div><dt>Condiciones enviadas</dt><dd>Pago mensual. {s.envio.solicitud.datos.recogerCredihoy?'Solicitaste pagar un credito vigente; su referencia debe verificarse.':'No solicitaste pagar otro credito con esta solicitud.'}</dd></div>
           </dl>}
-          {!s.envio?.solicitud.datos.periodicidadPago&&s?.procedencia?.origen==='FUENTE_OPERATIVA'&&autorizacionHabilitada&&autorizar&&
+          {(!s.envio?.solicitud.datos.periodicidadPago||typeof s.envio.solicitud.datos.recogerCredihoy!=='boolean')&&!centralesHabilitadas&&s?.procedencia?.origen==='FUENTE_OPERATIVA'&&autorizacionHabilitada&&autorizar&&
             <ComplementoPersonal key={s.referencia} sid={s.referencia} operar={autorizar}/>}
         </>}
         {(vista==='autorizaciones'||autorizacionesVisitadas)&&<div hidden={vista!=='autorizaciones'}>
@@ -275,7 +275,8 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
           {s&&s.procedencia?.origen==='FUENTE_OPERATIVA'&&autorizacionHabilitada&&!centralesHabilitadas&&autorizar&&
             <AutorizacionPersonal key={s.referencia} sid={s.referencia} operar={autorizar} centralesHabilitadas={centralesHabilitadas}/>}
           {s&&s.procedencia?.origen==='FUENTE_OPERATIVA'&&autorizacionHabilitada&&centralesHabilitadas&&autorizar&&
-            <AutorizacionesPersonales key={'centrales:'+s.referencia} sid={s.referencia} operar={autorizar} horaServidor={horaServidor} onConfirmada={actualizar}/>}
+            <AutorizacionesPersonales key={'centrales:'+s.referencia} sid={s.referencia} operar={autorizar} horaServidor={horaServidor} onConfirmada={actualizar}
+              requiereElecciones={!s.envio?.solicitud.datos.periodicidadPago||typeof s.envio.solicitud.datos.recogerCredihoy!=='boolean'}/>}
         </div>}
         {s&&vista==='evaluacion'&&<>
           <div className={'ca-result'+(institucion?' ca-result--approved':'')}>
@@ -337,7 +338,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
   </div>;
 }
 
-export function ComplementoPersonal({sid,operar}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>}){
+export function ComplementoPersonal({sid,operar,onConfirmada}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>;onConfirmada?:(confirmada:boolean)=>void}){
   const [data,setData]=useState<AutorizacionTitular['complemento']>(),[periodicidad,setPeriodicidad]=useState('');
   const [recoger,setRecoger]=useState(''),[obligacion,setObligacion]=useState(''),[confirma,setConfirma]=useState(false);
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[incierta,setIncierta]=useState(false);
@@ -347,6 +348,7 @@ export function ComplementoPersonal({sid,operar}:{sid:string;operar:NonNullable<
     if(!value.complemento)throw new Error('COMPLEMENTO_NO_DISPONIBLE');
     if(!alive.current)return;
     setData(value.complemento);setPeriodicidad('MENSUAL');
+    onConfirmada?.(value.complemento.version>0&&value.complemento.datos!==null);
     setRecoger(value.complemento.datos?(value.complemento.datos.recogerCredihoy?'SI':'NO'):'');setObligacion(value.complemento.datos?.obligacionRecoger??'');setConfirma(false);setIncierta(false);
   }
   async function consultar(){
@@ -382,10 +384,11 @@ export function ComplementoPersonal({sid,operar}:{sid:string;operar:NonNullable<
   </section>;
 }
 
-export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>;horaServidor?:()=>number;onConfirmada?:()=>void}){
+export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada,requiereElecciones=false}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>;horaServidor?:()=>number;onConfirmada?:()=>void;requiereElecciones?:boolean}){
   const [data,setData]=useState<AutorizacionTitular|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const [acepta,setAcepta]=useState(false),[visto,setVisto]=useState(false),[codigo,setCodigo]=useState('');
   const [incierta,setIncierta]=useState(false),[url,setUrl]=useState('');
+  const [eleccionesListas,setEleccionesListas]=useState(!requiereElecciones);
   const [now,setNow]=useState(horaServidor);
   const guard=useRef(false),alive=useRef(true),operation=useRef<string>(crypto.randomUUID());
   const pendiente=useRef<Extract<PeticionAutorizacion,{accion:'centrales_comprobar'}>|null>(null);
@@ -418,6 +421,7 @@ export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada
     return()=>URL.revokeObjectURL(next);
   },[data?.documento]);
   async function run(action:'consultar'|'presentar'|'enviar'|'comprobar'|'recuperar'|'secuencia'){
+    if(['secuencia','presentar','enviar'].includes(action)&&!eleccionesListas)return;
     if(guard.current||action!=='consultar'&&action!=='recuperar'&&(incierta||terminal))return;
     if(action==='recuperar'&&(!pendiente.current||!incierta||terminal))return;
     if(action==='enviar'&&(!acepta||!visto||!presentacionCentralesVigente(data,horaServidor())))return;
@@ -452,13 +456,14 @@ export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada
     finally{guard.current=false;if(alive.current){setBusy(false);setCodigo('');}}
   }
   return <section aria-label="Autorizacion especifica de consulta a centrales" aria-busy={busy}>
+    {requiereElecciones&&!eleccionesListas&&!terminal&&<ComplementoPersonal sid={sid} operar={operar} onConfirmada={setEleccionesListas}/>}
     <h3>Autorizar centrales</h3>
     {c?.estado==='OTP_CONFIRMADA'?<Aviso tono="success">Tu autorizacion de consulta quedo confirmada. El estado de tu solicitud se actualiza automaticamente. Esto no significa que tu credito este aprobado.</Aviso>:
       c?.estado==='RECHAZADA'?<Aviso tono="warning">La autorizacion no fue confirmada. No se habilito la consulta de centrales.</Aviso>:
       c?.estado==='INDETERMINADA'?<Aviso tono="warning">El resultado requiere conciliacion de Congente. No solicites otro codigo para esta autorizacion.</Aviso>:<>
         {(!data?.documento&&c?.estado==='SIN_ACEPTACION')&&<>
           <p>La aceptacion del documento quedo registrada. Confirma la autorizacion de consulta con un codigo personal, distinto del codigo de ingreso.</p>
-          <button className="btn btn-primary" type="button" disabled={busy||incierta} onClick={()=>void run('secuencia')}><ShieldCheck size={17} aria-hidden="true"/>Verificar autorizacion con codigo</button></>}
+          <button className="btn btn-primary" type="button" disabled={busy||incierta||!eleccionesListas} onClick={()=>void run('secuencia')}><ShieldCheck size={17} aria-hidden="true"/>Verificar autorizacion con codigo</button></>}
         {!c&&!busy&&!error&&<p role="status">Consulta el estado guardado antes de solicitar un codigo.</p>}
         {data?.documento&&c?.estado==='PENDIENTE_ACEPTACION'&&<>
           <p>COLO-FO.023, version {data.documento.version}. Autorizacion para consultar tu informacion crediticia.</p>
@@ -492,7 +497,7 @@ export function presentacionCentralesVigente(data:AutorizacionTitular|null,now=D
     &&c.presentacion&&c.vigenteHasta&&Date.parse(c.vigenteHasta)>now);
 }
 
-export function AutorizacionesPersonales({sid,operar,horaServidor,onConfirmada}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>;horaServidor?:()=>number;onConfirmada?:()=>void}){
+export function AutorizacionesPersonales({sid,operar,horaServidor,onConfirmada,requiereElecciones=false}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>;horaServidor?:()=>number;onConfirmada?:()=>void;requiereElecciones?:boolean}){
   const [estado,setEstado]=useState<'cargando'|'documento'|'centrales'|'error'>('cargando');
   const alive=useRef(true),guard=useRef(false);
   useEffect(()=>{alive.current=true;void consultar();return()=>{alive.current=false;};},[]);
@@ -509,7 +514,7 @@ export function AutorizacionesPersonales({sid,operar,horaServidor,onConfirmada}:
   if(estado==='error')return <section><p role="alert">No pudimos consultar tu autorizacion. No solicitamos otro codigo.</p>
     <button className="btn btn-outline-secondary" type="button" onClick={()=>void consultar()}><RefreshCw size={17} aria-hidden="true"/>Consultar estado</button></section>;
   if(estado==='documento')return <AutorizacionPersonal sid={sid} operar={operar} centralesHabilitadas onAceptacion={()=>setEstado('centrales')}/>;
-  return <CentralesPersonal sid={sid} operar={operar} horaServidor={horaServidor} onConfirmada={onConfirmada}/>;
+  return <CentralesPersonal sid={sid} operar={operar} horaServidor={horaServidor} onConfirmada={onConfirmada} requiereElecciones={requiereElecciones}/>;
 }
 
 export function AutorizacionPersonal({sid,operar,centralesHabilitadas=false,onAceptacion}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>;centralesHabilitadas?:boolean;onAceptacion?:()=>void}){

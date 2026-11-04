@@ -27,7 +27,7 @@ PRODUCTO_LINIX = {"producto": "390", "modalidad": "111", "destinacion": "CFA"}
 
 @dataclass(frozen=True)
 class PoliticaConsumoInstitucional:
-    """Commercial coverage is input evidence, never inferred from API access."""
+    """Operational scope and quota, independent of pricing or PDF signature."""
     datos: dict = field(repr=False)
 
     @classmethod
@@ -35,12 +35,12 @@ class PoliticaConsumoInstitucional:
         from django.utils import timezone
         import re
         expected={'version','id','revision','habilitada','producto','proveedor',
-            'contratoReferencia','evidenciaComercialSha256','responsable','referenciaAprobacion',
-            'esquema','costoUnitarioCOP','limitePorExpediente','cupoTotal','cupoDiario',
+            'clienteInstitucional','responsable','referenciaAutorizacion',
+            'limitePorExpediente','cupoTotal','cupoDiario','eventosDesde',
             'desde','hasta','revocada','referenciaConcurrencia'}
         if type(value) is not dict or set(value)!=expected:
             raise OperacionError('POLITICA_CONSUMO_CONTRATO_INVALIDO')
-        if (value['version']!=1 or type(value['version']) is not int
+        if (value['version']!=2 or type(value['version']) is not int
                 or type(value['revision']) is not int or value['revision']<1
                 or value['habilitada'] is not True or value['revocada'] is not False
                 or value['producto']!=PRODUCTO or value['proveedor']!='HDC'
@@ -51,26 +51,16 @@ class PoliticaConsumoInstitucional:
         if not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}',str(value['id'])):
             raise OperacionError('POLITICA_CONSUMO_IDENTIFICADOR_INVALIDO')
         if (any(type(value[k]) is not str or not value[k].strip() or len(value[k])>128
-                for k in ('contratoReferencia','responsable','referenciaAprobacion','referenciaConcurrencia'))
-                or not re.fullmatch('[a-f0-9]{64}',str(value['evidenciaComercialSha256']))):
-            raise OperacionError('COBERTURA_CONTRACTUAL_NO_ACREDITADA')
+                for k in ('clienteInstitucional','responsable','referenciaAutorizacion','referenciaConcurrencia'))):
+            raise OperacionError('ALCANCE_OPERATIVO_NO_ACREDITADO')
         try:
-            if value['costoUnitarioCOP'] is not None and type(value['costoUnitarioCOP']) is not str:
-                raise ValueError()
             start=datetime.fromisoformat(value['desde']);end=datetime.fromisoformat(value['hasta'])
+            events=datetime.fromisoformat(value['eventosDesde'])
             if start.utcoffset() is None or end.utcoffset() is None or not start<=(ahora or timezone.now())<end:
                 raise ValueError()
-            price=None if value['costoUnitarioCOP'] is None else Decimal(value['costoUnitarioCOP'])
-            CondicionesConsultaControlada(entorno='PRODUCCION_CONTROLADA',costo_hdc=price,
-                esquema_hdc=value['esquema'],referencia_costos=value['contratoReferencia'],
-                referencia_entorno_y_scopes='PRESELECTA_API_INTERNA_HDC',
-                referencia_no_duplicidad_remota='RESERVA_NATIVA_IDEMPOTENTE',
-                referencia_almacenamiento_privado='RECIBO_NATIVO_CIFRADO',
-                responsable_condiciones=value['responsable'],
-                referencia_autorizacion_consumo=value['referenciaAprobacion'],vigente_hasta=end)
-            if value['esquema']=='CARGO_VIGENTE_AUTORIZADO':raise ValueError()
+            if events.utcoffset() is None or events>end:raise ValueError()
         except (ValueError,TypeError,ArithmeticError):
-            raise OperacionError('POLITICA_CONSUMO_VIGENCIA_O_COSTO_INVALIDO') from None
+            raise OperacionError('POLITICA_CONSUMO_VIGENCIA_INVALIDA') from None
         return cls(json.loads(json.dumps(value)))
 
     def huella(self):
@@ -105,6 +95,9 @@ def autorizar_consumo_por_politica(solicitud_id, *, operador):
     from apps.utils.models import AuditLog
     from .centrales_personal import verificar_autorizacion_centrales_personal
     policy=cargar_politica_consumo();p=policy.datos
+    gateway=GatewayConfig.from_settings().validar()
+    if gateway.internal_client!=p['clienteInstitucional'] or not gateway.verify_ssl:
+        raise OperacionError('CLIENTE_INSTITUCIONAL_HDC_NO_COINCIDE')
     if connection.vendor!='postgresql' or connection.in_atomic_block:
         raise OperacionError('POLITICA_REQUIERE_POSTGRES_AUTOCOMMIT')
     import hashlib
@@ -120,7 +113,7 @@ def autorizar_consumo_por_politica(solicitud_id, *, operador):
         ledger=AuditLog.objects.filter(event='credihoy_cupo_hdc_reservado_v1',payload__politicaId=p['id'])
         existing=ledger.filter(solicitud=case).first()
         if existing:
-            grant=case.metadatos.get('autorizacionEconomicaCredihoy',{})
+            grant=case.metadatos.get('autorizacionOperativaHdc',{})
             if grant.get('politicaSha256')!=policy.huella():
                 raise OperacionError('POLITICA_CAMBIO_CON_RESERVA_NO_CONSUMIR')
             return {'autorizacionRegistrada':True,'reutilizada':True,'politicaSha256':policy.huella()}
@@ -128,20 +121,17 @@ def autorizar_consumo_por_politica(solicitud_id, *, operador):
             raise OperacionError('HDC_EXISTENTE_CONCILIAR_ANTES_DE_RESERVAR')
         if case.metadatos.get('autorizacionEconomicaCredihoy') is not None:
             raise OperacionError('AUTORIZACION_EXISTENTE_NO_SOBRESCRIBIR')
+        from .continuacion_eventos import EVENTO
+        if not AuditLog.objects.filter(solicitud=case,event=EVENTO,created_at__gte=p['eventosDesde']).exists():
+            raise OperacionError('EVENTO_FUERA_ALCANCE_OPERATIVO')
         day=timezone.now().date().isoformat()
         if ledger.count()>=p['cupoTotal'] or ledger.filter(payload__diaUTC=day).count()>=p['cupoDiario']:
             raise OperacionError('CUPO_INSTITUCIONAL_HDC_AGOTADO')
-        price=None if p['costoUnitarioCOP'] is None else Decimal(p['costoUnitarioCOP'])
-        conditions=CondicionesConsultaControlada(entorno='PRODUCCION_CONTROLADA',costo_hdc=price,
-            esquema_hdc=p['esquema'],referencia_costos=p['contratoReferencia'],
-            referencia_entorno_y_scopes='PRESELECTA_API_INTERNA_HDC',
-            referencia_no_duplicidad_remota='RESERVA_NATIVA_IDEMPOTENTE',
-            referencia_almacenamiento_privado='RECIBO_NATIVO_CIFRADO',
-            responsable_condiciones=p['responsable'],referencia_autorizacion_consumo=p['referenciaAprobacion'],
-            vigente_hasta=datetime.fromisoformat(p['hasta']))
-        evidence={**conditions.evidencia(),'politicaId':p['id'],'politicaRevision':p['revision'],
-            'politicaSha256':policy.huella(),'evidenciaComercialSha256':p['evidenciaComercialSha256']}
-        case.metadatos={**case.metadatos,'consumoRealAutorizado':True,'autorizacionEconomicaCredihoy':evidence}
+        evidence={'version':2,'proveedores':['HDC'],'maximoConsultasPorProveedor':1,
+            'clienteInstitucional':p['clienteInstitucional'],'referenciaAutorizacion':p['referenciaAutorizacion'],
+            'responsable':p['responsable'],'vigenteHasta':p['hasta'],
+            'politicaId':p['id'],'politicaRevision':p['revision'],'politicaSha256':policy.huella()}
+        case.metadatos={**case.metadatos,'consumoRealAutorizado':True,'autorizacionOperativaHdc':evidence}
         case.save(update_fields=['metadatos','updated_at'])
         AuditLog.objects.create(solicitud=case,event='credihoy_cupo_hdc_reservado_v1',actor='user:'+str(operador.pk),
             request_id=p['id'],payload={'politicaId':p['id'],'politicaSha256':policy.huella(),
@@ -150,11 +140,19 @@ def autorizar_consumo_por_politica(solicitud_id, *, operador):
 
 
 def validar_politica_del_consumo(case):
-    grant=case.metadatos.get('autorizacionEconomicaCredihoy') or {}
-    if not grant.get('politicaId'):return
+    grant=case.metadatos.get('autorizacionOperativaHdc') or {}
+    if not grant:return False
     policy=cargar_politica_consumo()
-    if not hmac.compare_digest(str(grant.get('politicaSha256','')),policy.huella()):
+    if (case.metadatos.get('consumoRealAutorizado') is not True
+            or grant.get('version')!=2 or grant.get('proveedores')!=['HDC']
+            or grant.get('maximoConsultasPorProveedor')!=1
+            or not hmac.compare_digest(str(grant.get('politicaSha256','')),policy.huella())):
         raise OperacionError('POLITICA_CONSUMO_CAMBIO_O_REVOCACION')
+    from apps.utils.models import AuditLog
+    if not AuditLog.objects.filter(solicitud=case,event='credihoy_cupo_hdc_reservado_v1',
+            payload__politicaId=policy.datos['id'],payload__politicaSha256=policy.huella()).exists():
+        raise OperacionError('RESERVA_OPERATIVA_HDC_NO_ACREDITADA')
+    return True
 
 
 def texto_consentimiento_controlado(condiciones=None):

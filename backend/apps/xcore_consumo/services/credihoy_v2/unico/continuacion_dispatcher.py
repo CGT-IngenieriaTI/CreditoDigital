@@ -93,7 +93,7 @@ def run_institutional(*, interval=15, once=False):
             from django.utils import timezone
             recent=AuditLog.objects.filter(event='credihoy_continuacion_intento_institucional_v1',
                 created_at__gte=timezone.now()-timedelta(minutes=5)).values('request_id')
-            intent=AuditLog.objects.filter(event=EVENTO,solicitud__producto=PRODUCTO,
+            intent=AuditLog.objects.filter(event=EVENTO,created_at__gte=policy.datos['eventosDesde'],solicitud__producto=PRODUCTO,
                 solicitud__metadatos__modo='AUTOGESTION_ENVIADA').annotate(
                 completed=Exists(final)).filter(completed=False).exclude(
                 request_id__in=recent).order_by('created_at','pk').first()
@@ -105,6 +105,7 @@ def run_institutional(*, interval=15, once=False):
                 # Enabled only in this isolated process and only after a valid policy.
                 with override_settings(CREDIHOY_EVALUACION_AUTOGESTION_ENABLED=True,
                         RISK_GATEWAY_ORCHESTRATION_ENABLED=True,
+                        RISK_GATEWAY_POSTGRESQL_CONCURRENCY_CERTIFIED=True,
                         CREDIHOY_CONTINUACION_SOLICITUDES_AUTORIZADAS=(sid,),
                         CREDIHOY_CONTINUACION_OPERADOR_ID=operator.pk,
                         CREDIHOY_CONTINUACION_TRANSPORTE='POSTGRES_OUTBOX_INSTITUCIONAL'):

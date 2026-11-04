@@ -71,7 +71,8 @@ def validar_consumo(case):
     from django.utils import timezone
     from .consulta_controlada import validar_politica_del_consumo
     from apps.integraciones.risk_gateway.operaciones.errores import OperacionError
-    try:validar_politica_del_consumo(case)
+    try:
+        if validar_politica_del_consumo(case):return None
     except OperacionError as exc:return exc.codigo
     approval=case.metadatos.get('autorizacionEconomicaCredihoy') or {}
     if (case.metadatos.get('consumoRealAutorizado') is not True

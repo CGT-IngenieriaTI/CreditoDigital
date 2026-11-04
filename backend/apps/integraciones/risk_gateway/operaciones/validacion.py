@@ -44,9 +44,9 @@ def validar(solicitud, request):
     else:
         try:assert_consent_granted(solicitud)
         except ValueError:raise ConsentimientoInvalido() from None
-    if consent.evidencia.get("workflow") in {"CREDIHOY_REAL_OTP_1","COLO023_AUTOGESTION_V1"}:
-        from apps.xcore_consumo.services.credihoy_v2.unico.consulta_controlada import validar_politica_del_consumo
-        validar_politica_del_consumo(solicitud)
+    from apps.xcore_consumo.services.credihoy_v2.unico.consulta_controlada import validar_politica_del_consumo
+    operational=validar_politica_del_consumo(solicitud) if personal else False
+    if not operational and consent.evidencia.get("workflow") in {"CREDIHOY_REAL_OTP_1","COLO023_AUTOGESTION_V1"}:
         aprobacion = solicitud.metadatos.get("autorizacionEconomicaCredihoy")
         if (solicitud.metadatos.get("consumoRealAutorizado") is not True
                 or type(aprobacion) is not dict or not aprobacion.get("referenciaCostos")

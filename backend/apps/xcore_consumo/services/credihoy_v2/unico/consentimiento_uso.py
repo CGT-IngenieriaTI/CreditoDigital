@@ -69,6 +69,10 @@ def evaluar(case,consent,*,owner=False):
 def validar_consumo(case):
     from datetime import datetime
     from django.utils import timezone
+    from .consulta_controlada import validar_politica_del_consumo
+    from apps.integraciones.risk_gateway.operaciones.errores import OperacionError
+    try:validar_politica_del_consumo(case)
+    except OperacionError as exc:return exc.codigo
     approval=case.metadatos.get('autorizacionEconomicaCredihoy') or {}
     if (case.metadatos.get('consumoRealAutorizado') is not True
             or not approval.get('referenciaCostos') or not approval.get('responsableCondiciones')

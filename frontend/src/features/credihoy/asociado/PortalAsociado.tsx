@@ -431,7 +431,7 @@ export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada
     return()=>clearInterval(timer);
   },[c?.estado]);
   useEffect(()=>{
-    if(!c?.presentacion||!['PENDIENTE_OTP','ENVIADO'].includes(c.estado)||incierta)return;
+    if(!c?.presentacion||c.estado!=='PENDIENTE_OTP'||incierta)return;
     let remaining=12;
     const timer=setInterval(()=>{
       if(--remaining<=0){clearInterval(timer);return;}
@@ -478,7 +478,7 @@ export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada
         if(action==='presentar')setVisto(false);
       }
     }catch{if(alive.current){if(action!=='consultar')setIncierta(true);setError('No pudimos confirmar este paso. Consulta el estado antes de continuar; no solicitaremos otro codigo automaticamente.');}}
-    finally{guard.current=false;if(alive.current){setBusy(false);setCodigo('');}}
+    finally{guard.current=false;if(alive.current){setBusy(false);if(action==='comprobar'||action==='recuperar')setCodigo('');}}
   }
   return <section aria-label="Autorizacion especifica de consulta a centrales" aria-busy={busy}>
     {requiereElecciones&&!eleccionesListas&&!terminal&&<ComplementoPersonal sid={sid} operar={operar} onConfirmada={setEleccionesListas}/>}

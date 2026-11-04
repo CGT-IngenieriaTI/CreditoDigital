@@ -23,9 +23,12 @@ def read(case,alias,study=None):
     from . import centrales_personal as central
     detail=SolicitudConsumo.objects.using(alias).filter(solicitud=case).first()
     if detail is None:return None
-    case.consumo_detail=detail
     journal=(detail.orchestration_data or {}).get(central.KEY,{})
     if journal.get('estado')!='OTP_CONFIRMADA':return None
+    # Bind ORM relations only within the authorization connection's alias.
+    if case._state.db != detail._state.db:
+        case=type(case).objects.using(alias).select_related('solicitante').get(pk=case.pk)
+    case.consumo_detail=detail
     consent=ConsentimientoConsumo.objects.using(alias).get(solicitud=case)
     now=timezone.now()
     # A technical capture deadline is not a documentary-purpose deadline.

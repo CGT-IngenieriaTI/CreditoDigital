@@ -71,15 +71,18 @@ class ConfiguracionApiDataV2:
                             or os.name!='nt' and (info.st_uid!=os.geteuid() or info.st_mode&0o077)):
                         raise ValueError()
                     cfg=json.load(stream,object_pairs_hook=_pares_unicos)
-                if set(cfg)!={'base_url','client_id','client_secret','timeout','hasta','documentoSha256','referencia'}:
+                institutional=cfg.get('version')==2 and type(cfg.get('version')) is int
+                required=({'version','base_url','client_id','client_secret','timeout','hasta','referencia','politicaReferencia'}
+                    if institutional else {'base_url','client_id','client_secret','timeout','hasta','documentoSha256','referencia'})
+                if set(cfg)!=required:
                     raise ValueError()
                 until=datetime.fromisoformat(cfg['hasta']);now=datetime.now(timezone.utc)
-                if (until.utcoffset() is None or not now<until<=now+timedelta(hours=1)
+                if (until.utcoffset() is None or not now<until or not institutional and until>now+timedelta(hours=1)
                         or not cfg['base_url'].startswith('https://') or not cfg['referencia'].strip()
-                        or not re.fullmatch('[a-f0-9]{64}',cfg['documentoSha256'])):
+                        or (not cfg['politicaReferencia'].strip() if institutional else not re.fullmatch('[a-f0-9]{64}',cfg['documentoSha256']))):
                     raise ValueError()
                 return cls(base_url=cfg['base_url'],client_id=cfg['client_id'],client_secret=cfg['client_secret'],
-                    timeout=cfg['timeout'],titular_sha256=cfg['documentoSha256'],vigente_hasta=until)
+                    timeout=cfg['timeout'],titular_sha256='' if institutional else cfg['documentoSha256'],vigente_hasta=until)
             timeout = getattr(configuracion, "API_DATA_CREDIHOY_TIMEOUT", 15)
             if type(timeout) is bool:
                 raise ValueError()

@@ -68,14 +68,70 @@ def run(path,*,recover=False,interval=3):
         time.sleep(interval)
 
 
+def run_institutional(*, interval=15, once=False):
+    """A supervised outbox consumer: one bounded event, never a dossier sweep."""
+    from django.conf import settings
+    from django.contrib.auth import get_user_model
+    from django.db import connection
+    from django.db.models import Exists,OuterRef
+    from apps.utils.models import AuditLog
+    from apps.integraciones.risk_gateway.operaciones.errores import OperacionError
+    from .consulta_controlada import cargar_politica_consumo,autorizar_consumo_por_politica,PRODUCTO
+    from .continuacion_eventos import EVENTO,FINAL
+    from ..cliente import ConfiguracionApiDataV2
+    from apps.xcore_consumo import tasks
+    from django.test.utils import override_settings
+    while True:
+        try:
+            policy=cargar_politica_consumo()
+            ConfiguracionApiDataV2.desde_settings()
+            username=getattr(settings,'CREDIHOY_CONTINUACION_OPERADOR_USERNAME','')
+            operator=get_user_model().objects.get(username=username,is_active=True,is_staff=True,is_superuser=False)
+            if operator.has_usable_password() or not operator.has_perm('xcore_consumo.add_evaluacionconsumo'):
+                raise OperacionError('OPERADOR_SERVICIO_NO_AUTORIZADO')
+            final=AuditLog.objects.filter(event=FINAL,request_id=OuterRef('request_id'),solicitud_id=OuterRef('solicitud_id'))
+            from django.utils import timezone
+            recent=AuditLog.objects.filter(event='credihoy_continuacion_intento_institucional_v1',
+                created_at__gte=timezone.now()-timedelta(minutes=5)).values('request_id')
+            intent=AuditLog.objects.filter(event=EVENTO,solicitud__producto=PRODUCTO,
+                solicitud__metadatos__modo='AUTOGESTION_ENVIADA').annotate(
+                completed=Exists(final)).filter(completed=False).exclude(
+                request_id__in=recent).order_by('created_at','pk').first()
+            if intent is not None:
+                sid=str(intent.solicitud_id)
+                AuditLog.objects.create(solicitud_id=sid,event='credihoy_continuacion_intento_institucional_v1',
+                    request_id=intent.request_id,actor='user:'+str(operator.pk),
+                    payload={'politicaSha256':policy.huella(),'proveedorEjecutado':False})
+                # Enabled only in this isolated process and only after a valid policy.
+                with override_settings(CREDIHOY_EVALUACION_AUTOGESTION_ENABLED=True,
+                        RISK_GATEWAY_ORCHESTRATION_ENABLED=True,
+                        CREDIHOY_CONTINUACION_SOLICITUDES_AUTORIZADAS=(sid,),
+                        CREDIHOY_CONTINUACION_OPERADOR_ID=operator.pk,
+                        CREDIHOY_CONTINUACION_TRANSPORTE='POSTGRES_OUTBOX_INSTITUCIONAL'):
+                    autorizar_consumo_por_politica(sid,operador=operator)
+                    result=tasks.continuar_credihoy_unico.run(evento_id=str(intent.request_id))
+                    print(json.dumps({'correlationId':str(intent.request_id),'estado':result['estado']}),flush=True)
+        except OperacionError as exc:
+            print(json.dumps({'codigo':exc.codigo,'consultaProveedor':False}),flush=True)
+        except Exception:
+            # No uncertain provider result is automatically retried by the gateway.
+            print(json.dumps({'codigo':'CONTINUIDAD_INSTITUCIONAL_PENDIENTE_CONCILIACION'}),flush=True)
+        finally:connection.close_if_unusable_or_obsolete()
+        if once:return
+        time.sleep(max(5,interval))
+
+
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--config',required=True);parser.add_argument('--recuperar',action='store_true')
+    parser=argparse.ArgumentParser();parser.add_argument('--config');parser.add_argument('--recuperar',action='store_true');parser.add_argument('--institucional',action='store_true')
     args=parser.parse_args()
     os.environ.setdefault('DJANGO_SETTINGS_MODULE','core.settings')
     import django
     django.setup()
     try:
-        print(json.dumps(run(args.config,recover=args.recuperar)),flush=True)
+        if args.institucional:
+            if args.config or args.recuperar:raise ValueError('ALCANCES_INCOMPATIBLES')
+            run_institutional()
+        else:print(json.dumps(run(args.config,recover=args.recuperar)),flush=True)
     except Exception:
         print(json.dumps({'codigo':'DESPACHADOR_DETENIDO_CONCILIAR'}),flush=True)
         raise SystemExit(1)

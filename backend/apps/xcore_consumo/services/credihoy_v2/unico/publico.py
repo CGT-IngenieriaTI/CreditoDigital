@@ -138,6 +138,8 @@ def iniciar(request, payload, request_id):
 
 def preparar(acceso_id):
     habilitado()
+    from time import monotonic
+    started=monotonic()
     with transaction.atomic():
         a=Acceso.objects.select_for_update().get(pk=acceso_id)
         if a.estado=='ENVIO_SOLICITADO':return _enviar_codigo(a)
@@ -145,14 +147,18 @@ def preparar(acceso_id):
         if not controles.identidad_permitida(a.identidad_hmac):return 'NO_EJECUTADO'
         a.estado='PROCESANDO';a.save(update_fields=['estado','updated_at'])
         packet=json.loads(decrypt_text(a.datos_cifrados))
+    stage='VINCULO_PETICION'
     try:
         if packet.get('avisoVersion')!=settings.CREDIHOY_PUBLICO_AVISO_VERSION:
             raise ValueError('AVISO_REQUIERE_NUEVA_ACEPTACION')
         if not hmac.compare_digest(a.peticion_hmac,huella('peticion',json.dumps(packet,sort_keys=True))):
             raise ValueError('PETICION_NO_VINCULADA')
+        stage='CONTROL_NAVEGADOR'
         if not providers.verificar_bot(packet['botToken'],str(a.pk)):
             raise ValueError('BOT_NO_VERIFICADO')
+        stage='COTEJO_INSTITUCIONAL'
         data=providers.cotejar(packet,str(a.pk))
+        stage='VINCULO_IDENTIDAD'
         if huella('identidad','CC:'+data['numeroDocumento'])!=a.identidad_hmac:
             raise ValueError('IDENTIDAD_NO_VINCULADA')
         habilitado()
@@ -166,9 +172,24 @@ def preparar(acceso_id):
             a.save(update_fields=['datos_cifrados','estado','updated_at'])
             auditar(a,'contacto_cotejado',fuente=data['fuente'])
         return 'IDENTIFICADO'
-    except Exception:
-        Acceso.objects.filter(pk=acceso_id).update(estado='ERROR',datos_cifrados='',motivo_interno='VERIFICACION_NO_COMPLETADA')
-        auditar(a,'no_completado')
+    except Exception as exc:
+        code=getattr(getattr(exc,'codigo',None),'value',getattr(exc,'codigo',None))
+        if isinstance(exc,ValueError) and str(exc) in {'BOT_NO_VERIFICADO','IDENTIDAD_NO_COTEJADA',
+                'AVISO_REQUIERE_NUEVA_ACEPTACION','PETICION_NO_VINCULADA','IDENTIDAD_NO_VINCULADA',
+                'ACCESO_NO_VIGENTE','ACCESO_EXPIRADO','CONTACTO_NO_DISPONIBLE',
+                'FECHA_INSTITUCIONAL_INVALIDA','CONTACTO_INSTITUCIONAL_INVALIDO'}:
+            code=str(exc)
+        if type(code) is not str or not re.fullmatch('[A-Z][A-Z0-9_]{1,62}',code):
+            code='VERIFICACION_NO_COMPLETADA'
+        Acceso.objects.filter(pk=acceso_id).update(estado='ERROR',datos_cifrados='',motivo_interno=code)
+        auditar(a,'no_completado',codigo=code,etapa=stage,tipo=type(exc).__name__)
+        trace=getattr(controles,'guardar_traza_saneada',None)
+        if callable(trace):
+            import traceback
+            trace({'codigo':code,'etapa':stage,'correlationId':str(a.pk),'httpStatus':400,
+                'servicio':'CREDIHOY_PUBLIC_ACCESS','duracionMs':round((monotonic()-started)*1000,2),'tipo':type(exc).__name__,
+                'puntos':[{'archivo':f.filename.replace('\\','/').rsplit('/',1)[-1],
+                    'linea':f.lineno,'funcion':f.name} for f in traceback.extract_tb(exc.__traceback__)[-6:]]})
         return 'NO_COMPLETADO'
 
 
@@ -219,6 +240,7 @@ def estado_intento(request, key):
     reply={'versionContrato':VERSION,'intento':key,'estado':'PREPARANDO','contactoEnmascarado':None,'canal':None,'expiraAt':None}
     try:a=_intento_propio(request,key)
     except AccesoDenegado:return reply
+    if a.estado=='ERROR':raise ValueError('VERIFICACION_NO_COMPLETADA')
     if a.estado in {'IDENTIFICADO','ENVIO_SOLICITADO','ENVIANDO','ENVIADO'}:
         data=json.loads(decrypt_text(a.datos_cifrados))
         contact=data['contacto']

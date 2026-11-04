@@ -1,0 +1,242 @@
+{
+  "archivos": {
+    "credihoy-9a-portal/apps/xcore_consumo/services/credihoy_v2/unico/publico_controles.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [
+        "AccesoDenegado",
+        "ip_cliente",
+        "validar_habilitacion"
+      ],
+      "existe": true,
+      "faltanDefiniciones": [
+        "limite"
+      ],
+      "sha256": "3ac0b3ef9dac137c5a751c252609c762987400fc0d90941980d1a012eabd42f0"
+    },
+    "credihoy-9a-portal/apps/xcore_consumo/services/credihoy_v2/unico/publico_http.py": {
+      "astIgualGit": true,
+      "byteIgualGit": true,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "6dcfe0fda0361166896f1dc84ffae678be82ee01c60b85353457ef8a138e2c00"
+    },
+    "credihoy-9a-portal/apps/xcore_consumo/services/credihoy_v2/unico/publico_institucional.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "753075da59a48cd0305e9deb3c6ce2bbdac7acf5da78dd6ac0437c071d685313"
+    },
+    "credihoy-9a-rele/apps/xcore_consumo/services/credihoy_v2/unico/publico_controles.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [
+        "AccesoDenegado",
+        "ip_cliente",
+        "validar_habilitacion"
+      ],
+      "existe": true,
+      "faltanDefiniciones": [
+        "limite"
+      ],
+      "sha256": "3ac0b3ef9dac137c5a751c252609c762987400fc0d90941980d1a012eabd42f0"
+    },
+    "credihoy-9a-rele/apps/xcore_consumo/services/credihoy_v2/unico/publico_institucional.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "753075da59a48cd0305e9deb3c6ce2bbdac7acf5da78dd6ac0437c071d685313"
+    },
+    "credihoy-9a-rele/apps/xcore_consumo/services/credihoy_v2/unico/publico_institucional_http.py": {
+      "astIgualGit": true,
+      "byteIgualGit": true,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "3480846d6b35f3a5ccd85f594116f0e195093c3fd227fb666f7d3cc6d97b2b41"
+    },
+    "credihoy-9a-rele/apps/xcore_consumo/services/credihoy_v2/unico/publico_seguimiento.py": {
+      "astIgualGit": true,
+      "byteIgualGit": true,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "66e6ce71e861d527be561ed7dc2f75d3d69506d66cb8d6dd1cda464002a7491c"
+    },
+    "credihoy-titular-owner/apps/documentos/formularios_credihoy.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [
+        "_exigir_condiciones_definitivas",
+        "diligenciar_para_expediente",
+        "enviar_formato_custodiado",
+        "preparar_autentic_para_expediente",
+        "recuperar_formato"
+      ],
+      "existe": true,
+      "faltanDefiniciones": [
+        "_anexar_oferta_versionada",
+        "custodiar_simulacion_ensayo",
+        "preparar_enlace_documental_oferta"
+      ],
+      "sha256": "946eb481a8fc9f62f28bcab0b7845c1445db663b49bf94d84ff22346428db2aa"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/autoservicio.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [
+        "registrar_enviada"
+      ],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "9ad5ac1db700c71ccfb8df4da30b032dac1bc686ba3ff6c9aa02d4a7eb5fadfe"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/consentimiento_real.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "e0af0e57f3268deceea4d0169dd97b2cacede4528c088ef358820619c5d3019c"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/publico_controles.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [
+        "AccesoDenegado",
+        "ip_cliente",
+        "validar_habilitacion"
+      ],
+      "existe": true,
+      "faltanDefiniciones": [
+        "_borde_basic_externo"
+      ],
+      "sha256": "100dc61cb647143450707c9da854f03ab2584968307ccdb3ed7b4943e01aa170"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/publico_institucional.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "753075da59a48cd0305e9deb3c6ce2bbdac7acf5da78dd6ac0437c071d685313"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/publico_seguimiento.py": {
+      "astIgualGit": true,
+      "byteIgualGit": true,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "66e6ce71e861d527be561ed7dc2f75d3d69506d66cb8d6dd1cda464002a7491c"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/publico_seguimiento_http.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "27903a8d70b68334cf3639f1b40c32a1070aa0aa411e106e9bfc4ba4ced379b9"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/simulacion_lectura.py": {
+      "astIgualGit": true,
+      "byteIgualGit": true,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "1c77a29f5237ddf0ce275d96559292c3938318b8f507a2b04f92b7badbdf61bb"
+    },
+    "creditodigital-backend-1/apps/documentos/formularios_credihoy.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [
+        "_custodiar_pdf",
+        "custodiar_formato",
+        "enviar_formato_custodiado",
+        "preparar_autentic_para_expediente",
+        "recuperar_documento_autentic",
+        "recuperar_formato"
+      ],
+      "existe": true,
+      "faltanDefiniciones": [
+        "inspeccionar_evidencia_custodiada"
+      ],
+      "sha256": "3f6e4422f6d532047eed3b829d966a25f75896e3b7123846b479c1b1ada12d40"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/services/credihoy_v2/unico/cotizacion.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [
+        "aplicar_oferta_aceptada_a_contexto",
+        "cotizacion",
+        "leer_oferta_linix",
+        "preparar_oferta_linix"
+      ],
+      "existe": true,
+      "faltanDefiniciones": [
+        "_exigir_decision_ofertable"
+      ],
+      "sha256": "94ad53e3b637c7e0ab0b9382220ed2ab5a6eb15d09f8ba0823da3251ee26f2bd"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/services/credihoy_v2/unico/dto.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "03dfdcff1d31ce75105a007539cc1aeee6efa02d0b450c163cbfe40e882d073e"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/services/credihoy_v2/unico/funcional.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [
+        "leer_estado_funcional"
+      ],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "ca19e48974062966a5b00dbfd0d32b7ce147a5c320c1842b08c0bacf4772a382"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/services/credihoy_v2/unico/motor.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "8376b64a6eb5741155fcd5784f907934e69c7906030d72716f15759e4fbc477d"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/services/credihoy_v2/unico/reglas.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [],
+      "sha256": "2de222a6631f9681719d2454e4f4fa933fafa381ff2662840fecffd4d8c47c7b"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/services/orchestration.py": {
+      "astIgualGit": false,
+      "byteIgualGit": false,
+      "definicionesDistintas": [],
+      "existe": true,
+      "faltanDefiniciones": [
+        "continuar_credihoy_unico"
+      ],
+      "sha256": "a75d7ffd22a083b47a676ef8cb07630a7c68b6b71faaf3245dcf007ad5fa223e"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/tasks.py": {
+      "existe": false
+    }
+  },
+  "bundleSha256": "c1512cd0f3709f8c8e3f7f1869e6c360ea6a73cce958226403d701fc87572749",
+  "deploymentChanged": false,
+  "resumen": {
+    "archivosAusentes": 1,
+    "archivosPresentes": 22,
+    "identicosAST": 5,
+    "identicosBytes": 5
+  },
+  "sourceCommit": "35761418c5cac102909a1a066a59a28a746c2781"
+}

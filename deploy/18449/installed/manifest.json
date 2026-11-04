@@ -1,0 +1,147 @@
+{
+  "C4": 0,
+  "HDC": 0,
+  "OTP": 0,
+  "START": 0,
+  "archivos": {
+    "credihoy-9a-portal/apps/xcore_consumo/services/credihoy_v2/unico/publico_controles.py": {
+      "existe": true,
+      "sha256": "3ac0b3ef9dac137c5a751c252609c762987400fc0d90941980d1a012eabd42f0"
+    },
+    "credihoy-9a-portal/apps/xcore_consumo/services/credihoy_v2/unico/publico_http.py": {
+      "existe": true,
+      "sha256": "6dcfe0fda0361166896f1dc84ffae678be82ee01c60b85353457ef8a138e2c00"
+    },
+    "credihoy-9a-portal/apps/xcore_consumo/services/credihoy_v2/unico/publico_institucional.py": {
+      "existe": true,
+      "sha256": "753075da59a48cd0305e9deb3c6ce2bbdac7acf5da78dd6ac0437c071d685313"
+    },
+    "credihoy-9a-rele/apps/xcore_consumo/services/credihoy_v2/unico/publico_controles.py": {
+      "existe": true,
+      "sha256": "3ac0b3ef9dac137c5a751c252609c762987400fc0d90941980d1a012eabd42f0"
+    },
+    "credihoy-9a-rele/apps/xcore_consumo/services/credihoy_v2/unico/publico_institucional.py": {
+      "existe": true,
+      "sha256": "753075da59a48cd0305e9deb3c6ce2bbdac7acf5da78dd6ac0437c071d685313"
+    },
+    "credihoy-9a-rele/apps/xcore_consumo/services/credihoy_v2/unico/publico_institucional_http.py": {
+      "existe": true,
+      "sha256": "3480846d6b35f3a5ccd85f594116f0e195093c3fd227fb666f7d3cc6d97b2b41"
+    },
+    "credihoy-9a-rele/apps/xcore_consumo/services/credihoy_v2/unico/publico_seguimiento.py": {
+      "existe": true,
+      "sha256": "66e6ce71e861d527be561ed7dc2f75d3d69506d66cb8d6dd1cda464002a7491c"
+    },
+    "credihoy-titular-owner/apps/documentos/formularios_credihoy.py": {
+      "existe": true,
+      "sha256": "946eb481a8fc9f62f28bcab0b7845c1445db663b49bf94d84ff22346428db2aa"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/autoservicio.py": {
+      "existe": true,
+      "sha256": "9ad5ac1db700c71ccfb8df4da30b032dac1bc686ba3ff6c9aa02d4a7eb5fadfe"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/consentimiento_real.py": {
+      "existe": true,
+      "sha256": "e0af0e57f3268deceea4d0169dd97b2cacede4528c088ef358820619c5d3019c"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/publico_controles.py": {
+      "existe": true,
+      "sha256": "100dc61cb647143450707c9da854f03ab2584968307ccdb3ed7b4943e01aa170"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/publico_institucional.py": {
+      "existe": true,
+      "sha256": "753075da59a48cd0305e9deb3c6ce2bbdac7acf5da78dd6ac0437c071d685313"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/publico_seguimiento.py": {
+      "existe": true,
+      "sha256": "66e6ce71e861d527be561ed7dc2f75d3d69506d66cb8d6dd1cda464002a7491c"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/publico_seguimiento_http.py": {
+      "existe": true,
+      "sha256": "27903a8d70b68334cf3639f1b40c32a1070aa0aa411e106e9bfc4ba4ced379b9"
+    },
+    "credihoy-titular-owner/apps/xcore_consumo/services/credihoy_v2/unico/simulacion_lectura.py": {
+      "existe": true,
+      "sha256": "1c77a29f5237ddf0ce275d96559292c3938318b8f507a2b04f92b7badbdf61bb"
+    },
+    "creditodigital-backend-1/apps/documentos/formularios_credihoy.py": {
+      "existe": true,
+      "sha256": "3f6e4422f6d532047eed3b829d966a25f75896e3b7123846b479c1b1ada12d40"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/services/credihoy_v2/unico/cotizacion.py": {
+      "existe": true,
+      "sha256": "94ad53e3b637c7e0ab0b9382220ed2ab5a6eb15d09f8ba0823da3251ee26f2bd"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/services/credihoy_v2/unico/dto.py": {
+      "existe": true,
+      "sha256": "03dfdcff1d31ce75105a007539cc1aeee6efa02d0b450c163cbfe40e882d073e"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/services/credihoy_v2/unico/funcional.py": {
+      "existe": true,
+      "sha256": "ca19e48974062966a5b00dbfd0d32b7ce147a5c320c1842b08c0bacf4772a382"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/services/credihoy_v2/unico/motor.py": {
+      "existe": true,
+      "sha256": "8376b64a6eb5741155fcd5784f907934e69c7906030d72716f15759e4fbc477d"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/services/credihoy_v2/unico/reglas.py": {
+      "existe": true,
+      "sha256": "2de222a6631f9681719d2454e4f4fa933fafa381ff2662840fecffd4d8c47c7b"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/services/orchestration.py": {
+      "existe": true,
+      "sha256": "a75d7ffd22a083b47a676ef8cb07630a7c68b6b71faaf3245dcf007ad5fa223e"
+    },
+    "creditodigital-backend-1/apps/xcore_consumo/tasks.py": {
+      "existe": false
+    }
+  },
+  "configuraciones": {
+    "credihoy-9a-portal:/run/9a/config.json": "3e443fc76dd59038d6ade5a44dc1968d40829c2811954a13cb163be4cf75406d",
+    "credihoy-9a-rele:/run/9a/config.json": "cf3516cc8d1fa0dd396e8d6c9f7d8c57cc06ce6509ee922b3dbdc97178556799",
+    "credihoy-titular-owner:/run/owner/config.json": "c7c386fab6be66919329be2e5bbee4a64395ffbaaf5a1b1bc88406cafe067c09",
+    "credihoy-titular-owner:/run/owner/relay-config.json": "cf3516cc8d1fa0dd396e8d6c9f7d8c57cc06ce6509ee922b3dbdc97178556799"
+  },
+  "escriturasNegocio": 0,
+  "estado": "FUENTES_INSTALADAS_SOLO_LECTURA",
+  "frontend": {
+    "assets/IconoHD-C9OSGxQc.png": "797a8b8d91260ebffcef88b0a16e19b54a25750fb08fdbf48eb03a6a4a3f228f",
+    "assets/index-Bhq2jCWR.js": "af4f6a881f84d319b6a30b5153bd7846ccf4d5981bca19b6ab340b7f2d3293a5",
+    "assets/index-DK6Nljl3.css": "cc4e5a3b3bfe183b3ec0751cd3e0d1e21f874a035b0e2b9b4410534c931bedd2",
+    "index.html": "a66a416af60d46abcc6d1a15efa05d6fe50c7c92f0477bfffa74c26b60e3d2ae"
+  },
+  "reinicios": 0,
+  "runtimeSinCambios": true,
+  "servicios": {
+    "credihoy-9a-portal": {
+      "containerId": "1f586ea0d3c975a2bc8346f5baebc0d9fedfeb57b0bb06ab257e3dc976ae96dd",
+      "entornoSha256": "a77208db679f88b2d893e61a7f38d526cf668190fa2169e538eb4edc35fb831a",
+      "imagen": "sha256:cf238b64ef10c6daea2bbfe0d720508ac945cca71817aa8904158af990d604dd",
+      "iniciadoEn": "2026-11-04T02:09:19.038123861Z"
+    },
+    "credihoy-9a-rele": {
+      "containerId": "2c4a9553b8078f5c62eb3a259d74a1e38bb70de80821a22fff6b342d407f88ca",
+      "entornoSha256": "1fbf77b02d5a46e2a8fea5a3d15f77f92a475361c000431bb9f947e7c41945b5",
+      "imagen": "sha256:cf238b64ef10c6daea2bbfe0d720508ac945cca71817aa8904158af990d604dd",
+      "iniciadoEn": "2026-11-04T02:09:15.985112929Z"
+    },
+    "credihoy-9a-web": {
+      "containerId": "90d7f85c46a46a2f7c03a62bbfef8d82e41491093546789911d67f675eef8ce0",
+      "entornoSha256": "37ccd53b722b11290542c84e08a04f733c5f3b68610509fbef0c0372a21f81b4",
+      "imagen": "sha256:1a420f09f9243d5ad1b1f5a48d4652f0954d0d7b40f3434efde367e451bf87fd",
+      "iniciadoEn": "2026-10-30T13:05:14.25530554Z"
+    },
+    "credihoy-titular-owner": {
+      "containerId": "df7a8c0a46044378c697723bf2248b23f2cf7928f7ececc0e6470849e86e2cf7",
+      "entornoSha256": "694046da2acddf9eb680fc0f4257fbf12b6e0c2d0d9ab0f846ad94a906de2d2e",
+      "imagen": "sha256:54e23a43ced1b9e98b57e2fa090f01364dd6a265cd9441f8c1257fd8ef3659c4",
+      "iniciadoEn": "2026-11-04T02:48:30.451894072Z"
+    },
+    "creditodigital-backend-1": {
+      "containerId": "16b57db45ffd34496c05d4b46d69cab9d7a13f9a98966061800794248cdd39df",
+      "entornoSha256": "50e965b940a81ab519804c757066ee536a204e6207b5fb11c204c594c2a62ea8",
+      "imagen": "sha256:7291ab0735d1a69f6b08734f1c389615e461b23667f5e90946668b65af8167d5",
+      "iniciadoEn": "2026-11-03T16:18:04.138833833Z"
+    }
+  }
+}

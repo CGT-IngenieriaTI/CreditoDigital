@@ -25,6 +25,8 @@ export function resolverSiguienteAccion(s:SolicitudPublica,autorizacion?:Autoriz
     mensaje:'Tu autorizacion de consulta esta confirmada. Congente debe confirmar el resultado del estudio; no solicites otro codigo.',destino:null};
   if(central==='INDETERMINADA'||central==='RECHAZADA')return {estado:'REQUIERE_REVISION',
     mensaje:'Congente debe revisar el resultado de tu autorizacion. No repitas el envio del codigo.',destino:null};
+  if(central&&['ENVIADO','PENDIENTE_OTP'].includes(central)&&!autorizacion.centrales?.presentacion)
+    return {estado:'REQUIERE_REVISION',mensaje:'El envio de tu codigo quedo registrado. Congente debe conciliar su estado antes de permitir otro intento. No solicites otro codigo.',destino:null};
   return {estado:'ACCION_PERSONAL',mensaje:['AUTORIZACION_AUSENTE','PENDIENTE_ACEPTACION_PERSONAL'].includes(autorizacion.estado)?
     'Revisa el documento y registra personalmente tu aceptacion si estas de acuerdo.':
     'Completa la autorizacion de consulta pendiente. El codigo de ingreso no sustituye esta autorizacion.',destino:'autorizaciones'};

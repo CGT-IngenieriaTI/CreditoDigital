@@ -100,21 +100,24 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
   const s=solicitudes?.find(v=>v.referencia===seleccion)??solicitudes?.[0];
   const [acto,setActo]=useState<{sid:string;data:AutorizacionTitular|null}|null>(null);
   const [consultandoActo,setConsultandoActo]=useState(false);
+  const leerActo=useRef(autorizar);leerActo.current=autorizar;
+  const puedeLeerActo=Boolean(autorizar&&autorizacionHabilitada);
   useEffect(()=>{
     let vigente=true;
     setActo(null);
-    if(!s||s.estudio||s.institucional||!autorizar||!autorizacionHabilitada){setConsultandoActo(false);return;}
+    const consultar=leerActo.current;
+    if(!s||s.estudio||s.institucional||!consultar||!puedeLeerActo){setConsultandoActo(false);return;}
     setConsultandoActo(true);
-    void autorizar({operacion:'autorizacion',accion:'consultar',solicitudId:s.referencia}).then(async data=>{
+    void consultar({operacion:'autorizacion',accion:'consultar',solicitudId:s.referencia}).then(async data=>{
       if(!vigente)return;
       if(!['AUTORIZACION_AUSENTE','PENDIENTE_ACEPTACION_PERSONAL'].includes(data.estado)&&centralesHabilitadas){
-        data=await autorizar({operacion:'autorizacion',accion:'centrales_consultar',solicitudId:s.referencia});
+        data=await consultar({operacion:'autorizacion',accion:'centrales_consultar',solicitudId:s.referencia});
       }
       if(vigente)setActo({sid:s.referencia,data});
     }).catch(()=>{if(vigente)setActo({sid:s.referencia,data:null});})
       .finally(()=>{if(vigente)setConsultandoActo(false);});
     return()=>{vigente=false;};
-  },[s?.referencia,s?.estudio?.referenciaVersion,autorizar,autorizacionHabilitada,centralesHabilitadas]);
+  },[s?.referencia,s?.estudio?.referenciaVersion,puedeLeerActo,centralesHabilitadas]);
   const siguiente=s?resolverSiguienteAccion(s,acto?.sid===s.referencia?acto.data:null,consultandoActo):null;
   const quote=s?.simulacion,institucion=s?.institucional;
   const editando=edicionBorrador&&!s?.envio;
@@ -400,34 +403,42 @@ export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada
     return()=>clearInterval(timer);
   },[c?.estado]);
   useEffect(()=>{
-    if(!c||!['PENDIENTE_OTP','ENVIADO'].includes(c.estado)||incierta)return;
+    if(!c?.presentacion||!['PENDIENTE_OTP','ENVIADO'].includes(c.estado)||incierta)return;
     let remaining=12;
     const timer=setInterval(()=>{
       if(--remaining<=0){clearInterval(timer);return;}
       if(document.visibilityState==='visible'&&!guard.current)void run('consultar');
     },5000);
     return()=>clearInterval(timer);
-  },[c?.estado,incierta]);
+  },[c?.estado,c?.presentacion,incierta]);
   useEffect(()=>{
     if(!data?.documento){setUrl('');return;}
     const bytes=Uint8Array.from(atob(data.documento.pdfBase64),v=>v.charCodeAt(0));
     const next=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));setUrl(next);
     return()=>URL.revokeObjectURL(next);
   },[data?.documento]);
-  async function run(action:'consultar'|'presentar'|'enviar'|'comprobar'|'recuperar'){
+  async function run(action:'consultar'|'presentar'|'enviar'|'comprobar'|'recuperar'|'secuencia'){
     if(guard.current||action!=='consultar'&&action!=='recuperar'&&(incierta||terminal))return;
     if(action==='recuperar'&&(!pendiente.current||!incierta||terminal))return;
     if(action==='enviar'&&(!acepta||!visto||!presentacionCentralesVigente(data,horaServidor())))return;
     if(action==='comprobar'&&(!c?.presentacion||!/^[0-9]{6}$/.test(codigo)))return;
     const base={operacion:'autorizacion' as const,solicitudId:sid};
-    const body:PeticionAutorizacion=action==='recuperar'?pendiente.current!:
-      action==='consultar'?{...base,accion:'centrales_consultar'}:
+    let body:PeticionAutorizacion=action==='recuperar'?pendiente.current!:
+      action==='consultar'||action==='secuencia'?{...base,accion:'centrales_consultar'}:
       action==='presentar'?{...base,accion:'centrales_presentar',operacionId:operation.current}:
       action==='enviar'?{...base,accion:'centrales_enviar',operacionId:c!.operacionId!,presentacion:c!.presentacion!,acepta:true}:
       {...base,accion:'centrales_comprobar',operacionId:c!.operacionId!,presentacion:c!.presentacion!,comprobacionId:crypto.randomUUID(),codigo};
     if(body.accion==='centrales_comprobar')pendiente.current=body;
     guard.current=true;setBusy(true);setError('');
     try{
+      if(action==='secuencia'){
+        // One deliberate code request after the original document acceptance;
+        // keep the server's separate purpose/session binding, not a second PDF act.
+        const presented=await operar({...base,accion:'centrales_presentar',operacionId:operation.current});
+        if(!presentacionCentralesVigente(presented,horaServidor()))throw new Error('PRESENTACION_NO_VIGENTE');
+        body={...base,accion:'centrales_enviar',operacionId:operation.current,
+          presentacion:presented.centrales!.presentacion!,acepta:true};
+      }
       const result=await operar(body);if(!result.centrales)throw new Error('AUTORIZACION_CENTRALES_NO_DISPONIBLE');
       if(alive.current){
         setData(result);setAcepta(false);
@@ -445,8 +456,10 @@ export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada
     {c?.estado==='OTP_CONFIRMADA'?<Aviso tono="success">Tu autorizacion de consulta quedo confirmada. El estado de tu solicitud se actualiza automaticamente. Esto no significa que tu credito este aprobado.</Aviso>:
       c?.estado==='RECHAZADA'?<Aviso tono="warning">La autorizacion no fue confirmada. No se habilito la consulta de centrales.</Aviso>:
       c?.estado==='INDETERMINADA'?<Aviso tono="warning">El resultado requiere conciliacion de Congente. No solicites otro codigo para esta autorizacion.</Aviso>:<>
-        {(!data?.documento&&(!c||c.estado==='SIN_ACEPTACION'||c.estado==='PENDIENTE_ACEPTACION'))&&
-          <button className="btn btn-outline-primary" type="button" disabled={busy||incierta} onClick={()=>void run('presentar')}><FileCheck2 size={17} aria-hidden="true"/>Revisar autorizacion de consulta</button>}
+        {(!data?.documento&&c?.estado==='SIN_ACEPTACION')&&<>
+          <p>La aceptacion del documento quedo registrada. Confirma la autorizacion de consulta con un codigo personal, distinto del codigo de ingreso.</p>
+          <button className="btn btn-primary" type="button" disabled={busy||incierta} onClick={()=>void run('secuencia')}><ShieldCheck size={17} aria-hidden="true"/>Verificar autorizacion con codigo</button></>}
+        {!c&&!busy&&!error&&<p role="status">Consulta el estado guardado antes de solicitar un codigo.</p>}
         {data?.documento&&c?.estado==='PENDIENTE_ACEPTACION'&&<>
           <p>COLO-FO.023, version {data.documento.version}. Autorizacion para consultar tu informacion crediticia.</p>
           {url&&<a href={url} target="_blank" rel="noopener noreferrer" onClick={()=>setVisto(true)}>Abrir autorizacion oficial</a>}
@@ -457,6 +470,7 @@ export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada
           <button className="btn btn-primary" type="button" disabled={busy||incierta||!acepta||!visto||!presentacionCentralesVigente(data,now)} onClick={()=>void run('enviar')}><ShieldCheck size={17} aria-hidden="true"/>Aceptar y solicitar codigo de autorizacion</button>
         </>}
         {c&&['PENDIENTE_OTP','ENVIADO'].includes(c.estado)&&<form onSubmit={event=>{event.preventDefault();void run('comprobar');}}>
+          {!c.presentacion&&<Aviso tono="warning">El envio del codigo esta registrado, pero esta sesion ya no permite comprobarlo. Congente debe conciliar su estado. No solicites otro codigo.</Aviso>}
           <fieldset className="ca-form" disabled={busy||incierta||!c.presentacion}>
             <label>Codigo de autorizacion de consulta<input className="form-control" required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={codigo} onChange={e=>setCodigo(e.target.value)}/></label>
           </fieldset>

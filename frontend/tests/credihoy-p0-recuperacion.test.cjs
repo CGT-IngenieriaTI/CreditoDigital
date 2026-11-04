@@ -28,6 +28,12 @@ test('persisted central confirmation never requests another authorization',()=>{
  const next=resolverSiguienteAccion(row,{estado:'CENTRALES_OTP_CONFIRMADA',centrales:{estado:'OTP_CONFIRMADA'}});
  assert.equal(next.estado,'REQUIERE_REVISION');assert.equal(next.destino,null);
 });
+
+test('sent OTP without current presentation requires reconciliation, not another send',()=>{
+ const next=resolverSiguienteAccion(row,{estado:'CENTRALES_ENVIADO',centrales:{estado:'ENVIADO',presentacion:null}});
+ assert.equal(next.estado,'REQUIERE_REVISION');assert.equal(next.destino,null);
+ assert.match(next.mensaje,/No solicites otro codigo/);
+});
 test('personal act pending gives one truthful action; reads/errors cannot manufacture completion',()=>{
  assert.equal(resolverSiguienteAccion(row,{estado:'PENDIENTE_ACEPTACION_PERSONAL'}).estado,'ACCION_PERSONAL');
  assert.equal(resolverSiguienteAccion(row,null,true).estado,'PROCESANDO');

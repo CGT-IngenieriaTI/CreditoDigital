@@ -7,6 +7,8 @@ from datetime import timedelta
 import json
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+import sys
+from types import ModuleType
 from uuid import uuid4
 
 from django.core import signing
@@ -21,6 +23,40 @@ from apps.xcore_consumo.services.consentimiento_integridad import build_consent_
 from apps.xcore_consumo.services.otp_crypto import encrypt_text
 from apps.xcore_consumo.services.credihoy_v2.unico import autoservicio
 from apps.xcore_consumo.services.credihoy_v2.unico import centrales_personal as service
+
+
+@override_settings(TWILIO_ACCOUNT_SID='AC'+'0'*32,TWILIO_AUTH_TOKEN='',
+    TWILIO_VERIFY_API_KEY_SID='SK'+'1'*32,TWILIO_VERIFY_API_KEY_SECRET='s'*40,
+    TWILIO_VERIFY_SID='VA'+'2'*32)
+class TwilioRuntimeContractTests(SimpleTestCase):
+    def setUp(self):
+        from apps.xcore_consumo.services.twilio_verify import TwilioVerifyClient
+        self.factory=Mock();rest=ModuleType('twilio.rest');rest.Client=self.factory
+        replacement=patch.dict(sys.modules,{'twilio.rest':rest})
+        replacement.start();self.addCleanup(replacement.stop)
+        self.client_type=TwilioVerifyClient
+
+    def test_service_override_and_verification_sid_preserve_the_exact_binding(self):
+        selected='VA'+'3'*32;verification='VE'+'4'*32
+        client=self.client_type(service_sid=selected)
+        client.check_verification('SYNTHETIC_CONTACT','SYNTHETIC_CODE',verification_sid=verification)
+        self.factory.return_value.verify.v2.services.assert_called_once_with(selected)
+        self.factory.return_value.verify.v2.services.return_value.verification_checks.create.assert_called_once_with(
+            verification_sid=verification,code='SYNTHETIC_CODE')
+        self.factory.assert_called_once_with('SK'+'1'*32,'s'*40,account_sid='AC'+'0'*32)
+
+    def test_legacy_check_uses_contact_only_when_no_verification_is_supplied(self):
+        client=self.client_type()
+        client.check_verification('SYNTHETIC_CONTACT','SYNTHETIC_CODE')
+        self.factory.return_value.verify.v2.services.assert_called_once_with('VA'+'2'*32)
+        self.factory.return_value.verify.v2.services.return_value.verification_checks.create.assert_called_once_with(
+            to='SYNTHETIC_CONTACT',code='SYNTHETIC_CODE')
+
+    @override_settings(TWILIO_VERIFY_API_KEY_SECRET='')
+    def test_partial_dedicated_credential_never_falls_back_to_another_client(self):
+        from apps.xcore_consumo.services.twilio_verify import TwilioVerifyError
+        with self.assertRaises(TwilioVerifyError):self.client_type()
+        self.factory.assert_not_called()
 
 
 class AuthorizationDiagnosticTests(SimpleTestCase):

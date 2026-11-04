@@ -153,10 +153,25 @@ def aceptar_autogestion(solicitud_id,identity,*,presentacion,acepta,clave):
         case,_=obtener_autogestion(case.pk,identity,lock=True)
         previous=ConsentimientoConsumo.objects.using(alias).filter(solicitud=case).first()
         if previous:
-            if (previous.evidencia.get('workflow')!='COLO023_AUTOGESTION_V1'
+            if (not previous.aceptado or previous.solicitud_id!=case.pk
+                    or previous.version!='COLO-FO.023:v'+meta['version']
+                    or previous.text_snapshot!=text
+                    or previous.text_hash!=build_consent_hash(previous.version,text)
+                    or previous.evidencia.get('workflow')!='COLO023_AUTOGESTION_V1'
+                    or previous.evidencia.get('proposito')!=binding['proposito']
                     or previous.evidencia.get('pdfSha256')!=meta['pdfSha256']
-                    or previous.evidencia.get('claveAceptacion')!=key):
+                    or previous.evidencia.get('originalSha256')!=meta['originalSha256']
+                    or not previous.evidencia.get('claveAceptacion')
+                    or not previous.evidencia.get('sesionReferencia')):
                 raise ValueError('AUTORIZACION_EXISTENTE_NO_SOBRESCRIBIR')
+            # A fresh presentation can recover an earlier personal act. Its key,
+            # original session and acceptance evidence remain immutable.
+            original_key=previous.evidencia.get('documentoOperacionId')
+            original=case.consumo_detail.orchestration_data.get('credihoy_pdf_oficiales_v1',{}).get(original_key,{})
+            if (original.get('metadata')!=meta
+                    or original.get('actorId')!='titular:'+previous.evidencia['sesionReferencia']
+                    or not original.get('contenidoCifrado')):
+                raise ValueError('AUTORIZACION_EXISTENTE_DOCUMENTO_NO_ACREDITADO')
             return {'solicitudId':str(case.pk),'estado':previous.evidencia['estado'],
                 'firmado':previous.firmado,'consultasHabilitadas':False}
         detail=SolicitudConsumo.objects.using(alias).select_for_update().get(solicitud=case)

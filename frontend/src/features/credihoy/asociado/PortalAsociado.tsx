@@ -9,6 +9,7 @@ import type {CotizacionTitular,InstitucionalPublica,SolicitudPublica,Autorizacio
 import {Aviso,Cargando,EstadoVacio,Etiqueta,NotaPrivacidad} from './ui';
 import './asociado.css';
 import {SimuladorLocal} from './SimuladorLocal';
+import {resolverSiguienteAccion} from './siguienteAccion';
 
 type Vista='estado'|'simulador'|'solicitud'|'autorizaciones'|'evaluacion'|'firma'|'historial';
 const ESTADOS_ESTUDIO={CUMPLE:'Cumple',NO_CUMPLE:'Requiere subsanacion',NO_EVALUABLE:'Datos pendientes',
@@ -97,6 +98,24 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
   const inicioPersonal=useRef(false);
   const heading=useRef<HTMLHeadingElement>(null),navigation=useRef<HTMLElement>(null);
   const s=solicitudes?.find(v=>v.referencia===seleccion)??solicitudes?.[0];
+  const [acto,setActo]=useState<{sid:string;data:AutorizacionTitular|null}|null>(null);
+  const [consultandoActo,setConsultandoActo]=useState(false);
+  useEffect(()=>{
+    let vigente=true;
+    setActo(null);
+    if(!s||s.estudio||s.institucional||!autorizar||!autorizacionHabilitada){setConsultandoActo(false);return;}
+    setConsultandoActo(true);
+    void autorizar({operacion:'autorizacion',accion:'consultar',solicitudId:s.referencia}).then(async data=>{
+      if(!vigente)return;
+      if(!['AUTORIZACION_AUSENTE','PENDIENTE_ACEPTACION_PERSONAL'].includes(data.estado)&&centralesHabilitadas){
+        data=await autorizar({operacion:'autorizacion',accion:'centrales_consultar',solicitudId:s.referencia});
+      }
+      if(vigente)setActo({sid:s.referencia,data});
+    }).catch(()=>{if(vigente)setActo({sid:s.referencia,data:null});})
+      .finally(()=>{if(vigente)setConsultandoActo(false);});
+    return()=>{vigente=false;};
+  },[s?.referencia,s?.estudio?.referenciaVersion,autorizar,autorizacionHabilitada,centralesHabilitadas]);
+  const siguiente=s?resolverSiguienteAccion(s,acto?.sid===s.referencia?acto.data:null,consultandoActo):null;
   const quote=s?.simulacion,institucion=s?.institucional;
   const editando=edicionBorrador&&!s?.envio;
   useEffect(()=>{if(s?.envio)setEdicionBorrador(false);},[s?.envio]);
@@ -137,7 +156,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
       </aside>}
       <section className="ca-content" aria-busy={busy}>
         <div className="ca-view-heading"><div><p className="ch-eyebrow">CrediHoy Unico</p>
-          <h2 ref={heading} tabIndex={-1}>{s&&!editando?actual.nombre:'Tu solicitud CrediHoy'}</h2>{s&&!editando&&vista!=='estado'&&<p>{actual.descripcion}</p>}</div>
+          <h2 ref={heading} tabIndex={-1}>{s&&!editando?(vista==='estado'?'¡Continuemos con tu CrediHoy!':actual.nombre):'Tu solicitud CrediHoy'}</h2>{s&&!editando&&vista!=='estado'&&<p>{actual.descripcion}</p>}</div>
           {(solicitudes?.length??0)>1&&<label className="ca-field ca-request-selector">Solicitud a consultar
             <select className="form-select" value={s?.referencia} disabled={busy} onChange={e=>setSeleccion(e.target.value)}>
               {solicitudes!.map(v=><option key={v.referencia} value={v.referencia}>{moneda(v.monto)} - {fechaPublica(v.fechaCreacion)}</option>)}</select></label>}
@@ -160,8 +179,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
         {s&&vista==='estado'&&<div className="ca-dashboard">
           {s.envio&&<section className="ca-document-band" aria-label="Confirmacion de envio"><h3>Recibimos tu solicitud de CrediHoy.</h3>
             <p>Recibida el {fechaPublica(s.envio.confirmadoEn)}. Esta confirmacion no es una aprobacion de credito.</p>
-            <p>Referencia de seguimiento: <strong>{s.referencia}</strong></p>
-            <p>Continua con las autorizaciones que correspondan para iniciar tu estudio.</p>
+            <p className="ca-muted">Referencia de seguimiento: <strong>{s.referencia.slice(-8).toUpperCase()}</strong></p>
           </section>}
           <div className="ca-credit-overview">
             <article className="ca-credit-card" aria-label="Resumen de tu credito">
@@ -172,10 +190,12 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
             </article>
             <section className="ca-next-step" aria-labelledby="ca-next-title">
               <span className="ca-icon-tile ca-icon-tile--green"><ArrowRight size={22} aria-hidden="true"/></span>
-              <p className="ch-eyebrow">Lo que sigue</p><h3 id="ca-next-title">Tu siguiente paso</h3><p>{s.envio?'Consulta las autorizaciones y el estado de tu estudio.':s.siguientePaso}</p>
-              {s.procedencia?.origen==='FUENTE_OPERATIVA'&&autorizacionHabilitada&&centralesHabilitadas&&autorizar&&
-                <button className="btn btn-primary" type="button" disabled={busy} onClick={()=>setVista('autorizaciones')}>
-                  <ArrowRight size={17} aria-hidden="true"/>Continuar estudio</button>}
+              <p className="ch-eyebrow">Lo que sigue</p><h3 id="ca-next-title">Tu siguiente paso</h3><p role="status">{siguiente?.mensaje}</p>
+              {siguiente?.estado==='ACCION_PERSONAL'&&siguiente.destino&&autorizar&&
+                <button className="btn btn-primary" type="button" disabled={busy} onClick={()=>setVista(siguiente.destino!)}>
+                  <ArrowRight size={17} aria-hidden="true"/>Continuar mi solicitud</button>}
+              {siguiente?.destino==='evaluacion'&&<button className="btn btn-outline-primary" type="button" disabled={busy} onClick={()=>setVista('evaluacion')}>
+                <BadgeCheck size={17} aria-hidden="true"/>Ver mi estudio</button>}
             </section>
           </div>
           <section className="ca-conditions" aria-labelledby="ca-conditions-title">

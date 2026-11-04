@@ -703,7 +703,36 @@ class PersonalAuthorizationTests(TestCase):
         self.assertFalse(EvaluacionConsumo.objects.exists())
         self.assertEqual(AuditLog.objects.filter(event='credihoy_colo023_aceptado_personalmente').count(),1)
         self.assertEqual(SolicitudConsumo.objects.get().estado,'CONSENTIMIENTO_PENDIENTE')
-        with self.assertRaises(ValueError):service.operar_autogestion(self.identity,{**request,'clave':str(uuid4())})
+        self.assertEqual(result,service.operar_autogestion(self.identity,{**request,'clave':str(uuid4())}))
+
+    def test_new_session_recovers_existing_acceptance_without_overwriting_original_act(self):
+        document=self.present()['documento']
+        service.aceptar_autogestion(self.reference,self.identity,presentacion=document['presentacion'],acepta=True,clave=str(uuid4()))
+        before=ConsentimientoConsumo.objects.values().get(solicitud_id=self.reference)
+        detail=SolicitudConsumo.objects.values().get(solicitud_id=self.reference)
+        count=AuditLog.objects.count()
+        identity={**self.identity,'_sesionReferencia':str(uuid4())}
+        case,_=service.obtener_autogestion(self.reference,identity)
+        current=service.presentar_documento_existente(case,identity,service.documento_personal_existente(case,identity))
+        result=service.aceptar_autogestion(self.reference,identity,presentacion=current['presentacion'],acepta=True,clave=str(uuid4()))
+        self.assertEqual(result['estado'],'PENDIENTE_FIRMA_AUTENTIC')
+        self.assertEqual(ConsentimientoConsumo.objects.values().get(solicitud_id=self.reference),before)
+        self.assertEqual(SolicitudConsumo.objects.values().get(solicitud_id=self.reference),detail)
+        self.assertEqual(AuditLog.objects.count(),count)
+
+    def test_recovery_rejects_changed_purpose_text_or_original_custody(self):
+        from copy import deepcopy
+        document=self.present()['documento']
+        service.aceptar_autogestion(self.reference,self.identity,presentacion=document['presentacion'],acepta=True,clave=str(uuid4()))
+        original=ConsentimientoConsumo.objects.get(solicitud_id=self.reference)
+        evidence=deepcopy(original.evidencia)
+        for field,value in (('proposito','OTHER_PURPOSE'),('originalSha256','0'*64),('sesionReferencia',str(uuid4()))):
+            original.evidencia={**evidence,field:value};original.save(update_fields=['evidencia'])
+            with self.assertRaises(ValueError):service.aceptar_autogestion(self.reference,self.identity,
+                presentacion=document['presentacion'],acepta=True,clave=str(uuid4()))
+        original.evidencia=evidence;original.text_snapshot+='CHANGED';original.save(update_fields=['evidencia','text_snapshot'])
+        with self.assertRaises(ValueError):service.aceptar_autogestion(self.reference,self.identity,
+            presentacion=document['presentacion'],acepta=True,clave=str(uuid4()))
 
     def test_new_verified_session_recovers_same_pdf_without_generation_or_acceptance(self):
         first=self.present()['documento'];before=AuditLog.objects.count()

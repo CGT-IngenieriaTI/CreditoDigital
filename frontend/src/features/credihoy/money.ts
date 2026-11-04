@@ -16,6 +16,10 @@ export function formatoEdicionCop(valor: string): string {
 }
 export function moneda(valor: string | null | undefined): string {
   if (valor == null || !/^-?[0-9]+(?:\.[0-9]+)?$/.test(valor)) return "Pendiente de validación";
-  const [entero, fraccion] = valor.split(".");
-  return `$ ${BigInt(entero).toLocaleString("es-CO")}${fraccion ? "," + fraccion : ""}`;
+  const negativo=valor.startsWith('-');
+  const [entero, fraccion=''] = valor.replace(/^-/, '').split('.');
+  let centavos=BigInt(entero)*100n+BigInt((fraccion+'00').slice(0,2));
+  if(fraccion.length>2&&fraccion[2]>='5')centavos+=1n;
+  const unidades=(centavos/100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+  return `$ ${negativo&&centavos!==0n?'-':''}${unidades},${(centavos%100n).toString().padStart(2,'0')}`;
 }

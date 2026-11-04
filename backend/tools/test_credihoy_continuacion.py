@@ -78,15 +78,41 @@ class ContinuacionTests(TransactionTestCase):
     @override_settings(RISK_GATEWAY_ORCHESTRATION_ENABLED=False,CREDIHOY_EVALUACION_AUTOGESTION_ENABLED=False)
     def test_verified_native_evaluation_is_recovered_without_global_flags_or_mutation(self):
         evaluation=EvaluacionConsumo.objects.create(solicitud_id=self.sid,resultados={'immutable':'fixture'})
-        rules=[{'codigo':'UNICO_FILA_'+str(n),'estado':'CUMPLE'} for n in range(16)]
-        with patch('apps.xcore_consumo.services.credihoy_v2.unico.funcional.leer_estado_funcional',return_value={'resultado':{'reglas':rules}}),patch('apps.integraciones.risk_gateway.operaciones.servicio.OrquestadorGateway.ejecutar') as gateway:
+        native=self.native_result()
+        rules=native['reglas']
+        self.assertNotIn('estado',rules[0])
+        with patch('apps.xcore_consumo.services.credihoy_v2.unico.funcional.leer_estado_funcional',return_value={'resultado':native}),patch('apps.integraciones.risk_gateway.operaciones.servicio.OrquestadorGateway.ejecutar') as gateway:
             first=continuar_credihoy_unico(self.sid,operador=self.operator,recuperar_existente=True)
             self.assertEqual(first,continuar_credihoy_unico(self.sid,operador=self.operator,recuperar_existente=True))
         self.assertEqual(first['estado'],'EVALUACION_EXISTENTE_RECUPERADA')
         self.assertEqual(len(first['evaluacionConservada']['reglas']),16)
+        self.assertEqual(first['evaluacionConservada']['reglas'],[{k:r[k] for k in ('codigo','resultado','estadoEvaluacion')} for r in rules])
         self.assertFalse(first['evaluacionConservada']['evaluacionNueva'])
         evaluation.refresh_from_db();self.assertEqual(evaluation.resultados,{'immutable':'fixture'})
         self.assertEqual(AuditLog.objects.filter(event='credihoy_continuacion_automatica').count(),1)
+        gateway.assert_not_called()
+
+    def native_result(self):
+        from decimal import Decimal
+        from apps.xcore_consumo.services.credihoy_v2.base import Hecho
+        from apps.xcore_consumo.services.credihoy_v2.unico.dto import EntradaCredihoyUnicoV2,RecogidaCredihoyUnicoV2
+        from apps.xcore_consumo.services.credihoy_v2.unico.motor import evaluar_capacidad_unico_v2
+        from apps.xcore_consumo.services.credihoy_v2.unico.reglas import evaluar_reglas_unico_v2,HechosReglasUnicoV2
+        from apps.xcore_consumo.services.credihoy_v2.unico.presentacion import serializar_evaluacion
+        entry=EntradaCredihoyUnicoV2(monto_solicitado=Decimal('100'),plazo_meses=2,
+            periodicidad_pago='MENSUAL',modalidad_codigo='111',recogida=RecogidaCredihoyUnicoV2(aplica=False))
+        capacity=evaluar_capacidad_unico_v2(entry,ingresos_mensuales=Hecho(fuente='SYNTHETIC'),
+            cuotas_deudas_hdc_brutas=Hecho(fuente='SYNTHETIC'))
+        rules=evaluar_reglas_unico_v2(entry,hechos=HechosReglasUnicoV2(),capacidad=capacity)
+        return serializar_evaluacion(capacity,rules,'SYNTHETIC_NO_PROVIDER')
+
+    def test_unknown_rule_contract_does_not_create_a_fictitious_result(self):
+        EvaluacionConsumo.objects.create(solicitud_id=self.sid,resultados={})
+        malformed={'reglas':[{'codigo':'UNICO_FILA_'+str(n),'estado':'CUMPLE'} for n in range(16)]}
+        with patch('apps.xcore_consumo.services.credihoy_v2.unico.funcional.leer_estado_funcional',return_value={'resultado':malformed}),patch('apps.integraciones.risk_gateway.operaciones.servicio.OrquestadorGateway.ejecutar') as gateway:
+            result=continuar_credihoy_unico(self.sid,operador=self.operator,recuperar_existente=True)
+        self.assertEqual(result['estado'],'PENDIENTE_CONCILIACION')
+        self.assertNotIn('evaluacionConservada',result)
         gateway.assert_not_called()
 
     @override_settings(RISK_GATEWAY_ORCHESTRATION_ENABLED=False)

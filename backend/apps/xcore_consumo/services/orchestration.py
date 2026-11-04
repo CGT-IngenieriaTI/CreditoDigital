@@ -200,11 +200,13 @@ def continuar_credihoy_unico(solicitud_id, *, operador, recuperar_existente=Fals
         result=saved.get('resultado')
         rules=result.get('reglas') if type(result) is dict else None
         if (type(rules) is not list or len(rules)!=16
-                or len({r.get('codigo') for r in rules if type(r) is dict})!=16):
+                or any(type(r) is not dict or type(r.get('codigo')) is not str
+                    or type(r.get('resultado')) is not str for r in rules)
+                or len({r['codigo'] for r in rules})!=16):
             return record('PENDIENTE_CONCILIACION','EVALUACION_EXISTENTE_SIN_16_REGLAS_VERIFICADAS')
         evidence={'evaluacionId':str(evaluation.pk),'generadaEn':evaluation.created_at.isoformat(),
             'resultadoSha256':hashlib.sha256(json.dumps(result,sort_keys=True,default=str).encode()).hexdigest(),
-            'reglas':[{'codigo':r['codigo'],'estado':r['estado']} for r in rules],
+            'reglas':[{k:r[k] for k in ('codigo','resultado','estadoEvaluacion') if k in r} for r in rules],
             'consultaNueva':False,'evaluacionNueva':False,'decisionNueva':False}
         return record('EVALUACION_EXISTENTE_RECUPERADA','EVALUACION_REAL_CONSERVADA_SIN_RECONSULTA',evidence=evidence)
     if (getattr(settings,'RISK_GATEWAY_ORCHESTRATION_ENABLED',False) is not True

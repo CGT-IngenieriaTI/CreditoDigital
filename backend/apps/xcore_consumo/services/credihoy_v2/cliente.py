@@ -36,6 +36,7 @@ class ConfiguracionApiDataV2:
     timeout: float = 15
     titular_sha256: str = field(default='',repr=False)
     vigente_hasta: datetime | None = field(default=None,repr=False)
+    politica_referencia: str = field(default='',repr=False)
 
     def __post_init__(self):
         try:
@@ -53,6 +54,12 @@ class ConfiguracionApiDataV2:
                         or not self.token and cliente_valido)
                 or type(self.timeout) not in (int, float)
                 or not math.isfinite(self.timeout) or self.timeout <= 0):
+            raise ApiDataCrediHoyV2Error(Codigo.CONFIGURACION_INCOMPLETA)
+        if (type(self.politica_referencia) is not str or self.politica_referencia and (
+                not self.politica_referencia.strip() or self.titular_sha256
+                or url.scheme!='https' or not self.client_id.startswith('credihoy-hechos-')
+                or not cliente_valido or self.token or type(self.vigente_hasta) is not datetime
+                or self.vigente_hasta.utcoffset() is None)):
             raise ApiDataCrediHoyV2Error(Codigo.CONFIGURACION_INCOMPLETA)
 
     @classmethod
@@ -82,7 +89,8 @@ class ConfiguracionApiDataV2:
                         or (not cfg['politicaReferencia'].strip() if institutional else not re.fullmatch('[a-f0-9]{64}',cfg['documentoSha256']))):
                     raise ValueError()
                 return cls(base_url=cfg['base_url'],client_id=cfg['client_id'],client_secret=cfg['client_secret'],
-                    timeout=cfg['timeout'],titular_sha256='' if institutional else cfg['documentoSha256'],vigente_hasta=until)
+                    timeout=cfg['timeout'],titular_sha256='' if institutional else cfg['documentoSha256'],vigente_hasta=until,
+                    politica_referencia=cfg['politicaReferencia'] if institutional else '')
             timeout = getattr(configuracion, "API_DATA_CREDIHOY_TIMEOUT", 15)
             if type(timeout) is bool:
                 raise ValueError()
@@ -189,7 +197,8 @@ class ApiDataCrediHoyV2Client:
         if self.configuracion.vigente_hasta is not None:
             if (datetime.now(timezone.utc)>=self.configuracion.vigente_hasta
                     or not isinstance(numero_documento,str)
-                    or not hmac.compare_digest(hashlib.sha256(numero_documento.encode()).hexdigest(),self.configuracion.titular_sha256)):
+                    or (not hmac.compare_digest(hashlib.sha256(numero_documento.encode()).hexdigest(),self.configuracion.titular_sha256)
+                        if self.configuracion.titular_sha256 else not self.configuracion.politica_referencia)):
                 raise ApiDataCrediHoyV2Error(Codigo.NO_AUTORIZADO)
         try:
             entrada = RequestHechosInternosV2(numero_documento=numero_documento,

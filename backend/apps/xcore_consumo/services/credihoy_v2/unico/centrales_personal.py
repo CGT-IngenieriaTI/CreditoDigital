@@ -527,6 +527,9 @@ def registrar_resultado(sid, identity, comprobacion):
             journal['evidenciaCifrada'] = encrypt_text(_canonical(journal['comprobante']).decode('utf-8'))
             _verificar_comprobante(case, consent, journal, owner=True)
         _guardar(case, alias, detail, journal, 'credihoy_centrales_resultado_registrado', now)
+        if following == 'OTP_CONFIRMADA':
+            from .continuacion_eventos import registrar
+            registrar(case, alias, journal)
         return {'centrales': _dto(journal)}
 
 

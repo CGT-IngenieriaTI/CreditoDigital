@@ -39,6 +39,14 @@ class ContinuacionTests(TransactionTestCase):
         self.authorization=patch('apps.xcore_consumo.services.credihoy_v2.unico.centrales_personal.verificar_autorizacion_centrales_personal')
         self.validation=patch('apps.integraciones.risk_gateway.operaciones.validacion.validar')
         for p in (self.config,self.authorization,self.validation):p.start();self.addCleanup(p.stop)
+        from apps.xcore_consumo.services.credihoy_v2.base import Hecho
+        from apps.xcore_consumo.services.credihoy_v2.unico.reglas import HechosReglasUnicoV2
+        from apps.xcore_consumo.services.credihoy_v2.unico.hechos_continuacion import obtener
+        self.obtener_hechos_real=obtener
+        facts=patch('apps.xcore_consumo.services.credihoy_v2.unico.hechos_continuacion.obtener',
+            return_value=(Hecho(fuente='SYNTHETIC_UNAVAILABLE'),HechosReglasUnicoV2(),
+                Hecho(fuente='SYNTHETIC_PAYROLL_UNAVAILABLE')))
+        facts.start();self.addCleanup(facts.stop)
 
     def run_case(self):return continuar_credihoy_unico(self.sid,operador=self.operator)
 
@@ -51,6 +59,117 @@ class ContinuacionTests(TransactionTestCase):
         self.consent.delete()
         with patch('apps.integraciones.risk_gateway.operaciones.servicio.OrquestadorGateway.ejecutar') as gateway:
             self.assertEqual(self.run_case()['estado'],'CONSENTIMIENTO_PENDIENTE');gateway.assert_not_called()
+
+    def event_fixture(self):
+        from apps.solicitudes.models import Solicitud
+        from apps.xcore_consumo.services.credihoy_v2.unico import centrales_personal,continuacion_eventos
+        case=Solicitud.objects.get(pk=self.sid)
+        journal={'estado':'OTP_CONFIRMADA','vinculo':{'operacionId':str(uuid4())},
+                 'registros':[{'sha256':'b'*64}]}
+        detail=SolicitudConsumo.objects.get(solicitud_id=self.sid)
+        detail.orchestration_data={**detail.orchestration_data,centrales_personal.KEY:journal}
+        detail.save(update_fields=['orchestration_data'])
+        with patch.object(continuacion_eventos,'publicar') as publish:
+            with transaction.atomic():
+                eid=continuacion_eventos.registrar(case,'default',journal)
+                publish.assert_not_called()
+            publish.assert_called_once_with(eid)
+        return eid
+
+    def test_event_publishes_only_after_commit_and_is_durable(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import continuacion_eventos as events
+        eid=self.event_fixture()
+        self.assertEqual(AuditLog.objects.filter(event=events.EVENTO,request_id=eid).count(),1)
+
+    def test_event_rollback_does_not_publish_or_leave_intent(self):
+        from apps.solicitudes.models import Solicitud
+        from apps.xcore_consumo.services.credihoy_v2.unico import continuacion_eventos as events
+        journal={'estado':'OTP_CONFIRMADA','vinculo':{'operacionId':str(uuid4())},'registros':[{'sha256':'b'*64}]}
+        with patch.object(events,'publicar') as publish:
+            with self.assertRaises(ValueError):
+                with transaction.atomic():
+                    events.registrar(Solicitud.objects.get(pk=self.sid),'default',journal)
+                    raise ValueError('SYNTHETIC_ROLLBACK')
+            publish.assert_not_called()
+        self.assertFalse(AuditLog.objects.filter(event=events.EVENTO).exists())
+
+    def test_event_out_of_scope_cannot_execute(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import continuacion_eventos as events
+        eid=self.event_fixture()
+        with patch('apps.xcore_consumo.services.orchestration.continuar_credihoy_unico') as run:
+            self.assertEqual(events.ejecutar(eid)['estado'],'EXPEDIENTE_NO_AUTORIZADO')
+            run.assert_not_called()
+
+    def test_event_duplicate_deliveries_run_one_logical_continuation(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import continuacion_eventos as events
+        eid=self.event_fixture()
+        with override_settings(CREDIHOY_CONTINUACION_SOLICITUDES_AUTORIZADAS=[self.sid],
+                CREDIHOY_CONTINUACION_OPERADOR_ID=self.operator.pk):
+            with patch('apps.xcore_consumo.services.orchestration.continuar_credihoy_unico',
+                    return_value={'estado':'EVALUACION_COMPLETADA'}) as run:
+                first=events.ejecutar(eid)
+                self.assertEqual(events.ejecutar(eid),first)
+                run.assert_called_once()
+
+    def test_event_worker_failure_can_recover_same_durable_intent(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import continuacion_eventos as events
+        eid=self.event_fixture()
+        with override_settings(CREDIHOY_CONTINUACION_SOLICITUDES_AUTORIZADAS=[self.sid],
+                CREDIHOY_CONTINUACION_OPERADOR_ID=self.operator.pk):
+            with patch('apps.xcore_consumo.services.orchestration.continuar_credihoy_unico',side_effect=ValueError):
+                with self.assertRaises(ValueError):events.ejecutar(eid)
+            with patch('apps.xcore_consumo.services.orchestration.continuar_credihoy_unico',
+                    return_value={'estado':'EVALUACION_COMPLETADA'}):
+                self.assertEqual(events.ejecutar(eid)['estado'],'EVALUACION_COMPLETADA')
+
+    @override_settings(CELERY_BROKER_URL=None)
+    def test_owner_without_broker_keeps_intent_without_guessing_transport(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import continuacion_eventos as events
+        eid=self.event_fixture()
+        self.assertFalse(events.publicar(eid))
+        self.assertTrue(AuditLog.objects.filter(event=events.EVENTO,request_id=eid).exists())
+
+    def test_missing_economic_service_blocks_before_paid_query(self):
+        from apps.xcore_consumo.services.credihoy_v2.errores_http import ApiDataCrediHoyV2Error,CodigoErrorApiDataV2
+        with patch('apps.xcore_consumo.services.credihoy_v2.unico.hechos_continuacion.obtener',
+                side_effect=ApiDataCrediHoyV2Error(CodigoErrorApiDataV2.CONFIGURACION_INCOMPLETA)),patch(
+                'apps.integraciones.risk_gateway.operaciones.servicio.OrquestadorGateway.ejecutar') as gateway:
+            self.assertEqual(self.run_case()['codigo'],'HECHOS_INSTITUCIONALES_NO_DISPONIBLES_NO_CONSUMIR_HDC')
+            gateway.assert_not_called()
+
+    def test_institutional_adapter_preserves_source_and_encrypts_full_receipt(self):
+        from decimal import Decimal
+        from apps.solicitudes.models import Solicitud
+        from apps.xcore_consumo.services.credihoy_v2.hechos import HechosInternosCrediHoyV2
+        from apps.xcore_consumo.services.credihoy_v2.financieros_http import adaptar_financieros
+        from tools.test_credihoy_financieros import financial_fixture
+        from apps.xcore_consumo.services.otp_crypto import decrypt_text
+        import hashlib
+        raw,now=financial_fixture()
+        facts=HechosInternosCrediHoyV2(financieros=adaptar_financieros(raw,consulta=now))
+        with patch('apps.xcore_consumo.services.credihoy_v2.unico.hechos_continuacion.ConfiguracionApiDataV2.desde_settings'),patch(
+                'apps.xcore_consumo.services.credihoy_v2.unico.hechos_continuacion.ApiDataCrediHoyV2Client') as client:
+            client.return_value.consultar.return_value=facts
+            income,rules,payroll=self.obtener_hechos_real(Solicitud.objects.select_related('solicitante').get(pk=self.sid),str(uuid4()))
+        self.assertEqual(income.valor,Decimal('1020'))
+        self.assertEqual(payroll.valor,Decimal('10'))
+        self.assertEqual(payroll.fuente,'AP014MCLIENTE.V_DTONOM')
+        receipt=AuditLog.objects.get(event='credihoy_hechos_continuacion_v1').payload
+        decoded=decrypt_text(receipt['hechosCifrados'])
+        self.assertEqual(hashlib.sha256(decoded.encode()).hexdigest(),receipt['sha256'])
+        self.assertNotIn('financieros',receipt)
+        self.assertFalse(rules.saldo_aportes_utilizable.disponible)
+
+    def test_unavailable_income_is_never_replaced_by_form_or_synthetic_amount(self):
+        from apps.solicitudes.models import Solicitud
+        from apps.xcore_consumo.services.credihoy_v2.hechos import HechosInternosCrediHoyV2
+        with patch('apps.xcore_consumo.services.credihoy_v2.unico.hechos_continuacion.ConfiguracionApiDataV2.desde_settings'),patch(
+                'apps.xcore_consumo.services.credihoy_v2.unico.hechos_continuacion.ApiDataCrediHoyV2Client') as client:
+            client.return_value.consultar.return_value=HechosInternosCrediHoyV2()
+            income,rules,payroll=self.obtener_hechos_real(Solicitud.objects.select_related('solicitante').get(pk=self.sid),str(uuid4()))
+        self.assertFalse(income.disponible)
+        self.assertFalse(payroll.disponible)
+        self.assertIsNone(income.valor)
 
     def test_invalid_authorization_never_calls_gateway(self):
         with patch('apps.xcore_consumo.services.credihoy_v2.unico.centrales_personal.verificar_autorizacion_centrales_personal',side_effect=ValueError),patch('apps.integraciones.risk_gateway.operaciones.servicio.OrquestadorGateway.ejecutar') as gateway:
@@ -179,3 +298,75 @@ class ContinuacionTests(TransactionTestCase):
             result=continuar_credihoy_unico_pendientes.run(operador_id=self.operator.pk)
             self.assertEqual(result['revisadas'],1)
             continue_case.assert_called_once();self.assertEqual(continue_case.call_args.args,(self.sid,))
+
+    def version_fixture(self):
+        import json,hashlib,base64
+        from uuid import uuid5,NAMESPACE_URL
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from apps.solicitudes.models import Solicitud
+        from apps.xcore_consumo.services.otp_crypto import encrypt_text
+        from apps.xcore_consumo.services.credihoy_v2.unico import funcional
+        canonical=lambda value:json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True,default=str).encode()
+        digest=lambda value:hashlib.sha256(canonical(value)).hexdigest()
+        self.private=Ed25519PrivateKey.generate()
+        self.case=Solicitud.objects.select_related('solicitante').get(pk=self.sid)
+        self.native=self.native_result()
+        self.evaluation=EvaluacionConsumo.objects.create(solicitud=self.case,input_snapshot={},resultados={funcional.KEY:self.native})
+        self.hdc=self.prior('COMPLETADA')
+        self.saved_versions=[]
+        for number in (7,8):
+            reference=str(uuid4());result=json.loads(json.dumps(self.native));result['requestId']=reference
+            for i,row in enumerate(result['reglas']):
+                row['estadoEvaluacion']='CUMPLE' if i<12 else 'NO_APLICA' if i<15 else 'PENDIENTE_POLITICA'
+                row['resultado']='CUMPLE' if i<12 else 'NO_EVALUABLE'
+            payload={'version':number,'versionReferencia':reference,'solicitudId':self.sid,
+                'evaluacionBaseId':self.evaluation.pk,'resultado':result,'fuentes':{'huellaSolicitud':{
+                    'documentoSha256':hashlib.sha256(self.case.solicitante.numero_identificacion.encode()).hexdigest(),
+                    'evaluacionSha256':hashlib.sha256(json.dumps({'input':self.evaluation.input_snapshot,'resultados':self.evaluation.resultados},sort_keys=True,default=str).encode()).hexdigest()}}}
+            raw=json.dumps(payload)
+            entry=AuditLog.objects.create(solicitud=self.case,event='CREDIHOY_ESTUDIO_VERSION_REGISTRADA',request_id=reference,
+                payload={'resultadoCifrado':encrypt_text(raw),'resultadoSha256':hashlib.sha256(raw.encode()).hexdigest(),'recibo':{'operacionHdc':str(self.hdc.pk)}})
+            body={'version':'credihoy-estudio-tecnico-firmado-v1','proposito':'LECTURA_ESTUDIO_NO_DECISION',
+                'solicitudId':self.sid,'titularSha256':payload['fuentes']['huellaSolicitud']['documentoSha256'],
+                'evaluacionBaseSha256':digest(EvaluacionConsumo.objects.values().get(pk=self.evaluation.pk)),
+                'consentimientoSha256':digest(ConsentimientoConsumo.objects.values().get(pk=self.consent.pk)),
+                'consumoSha256':digest(SolicitudConsumo.objects.values().get(solicitud=self.case)),
+                'estudio':{'versionContrato':'credihoy-estudio-publico-v1','solicitudId':self.sid,'evaluacionBaseId':self.evaluation.pk,
+                    'version':number,'referenciaVersion':reference,'autorizadoDecisionCrediticia':False,
+                    'reglas':[{k:r[k] for k in ('codigo','nombre','resultado','estadoEvaluacion','motivos','datosFaltantes')} for r in result['reglas']]}}
+            signature=self.private.sign(b'credihoy-estudio-publico-tecnico-v1\x00'+canonical(body))
+            AuditLog.objects.create(solicitud=self.case,event='CREDIHOY_ESTUDIO_PUBLICO_VERIFICADO',
+                request_id=str(uuid5(NAMESPACE_URL,'credihoy-estudio-publico:'+self.sid+':'+reference)),
+                payload={'algoritmo':'Ed25519','payload':body,'firmaBase64':base64.b64encode(signature).decode()})
+            self.saved_versions.append(entry)
+
+    def read_version(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import funcional
+        with patch('apps.xcore_consumo.services.credihoy_v2.unico.centrales_personal._clave_publica',return_value=self.private.public_key()),patch.object(funcional,'_exigir_recibo_hdc'):
+            return funcional.aplicar_revision_estudio_registrada(self.case,self.evaluation,{'resultado':self.native})
+
+    def test_latest_signed_v8_is_selected_without_changing_base(self):
+        self.version_fixture()
+        original=self.evaluation.resultados.copy()
+        result=self.read_version()
+        self.assertEqual(result['revisionEstudio']['version'],8)
+        self.assertEqual(result['revisionEstudio']['versionReferencia'],self.saved_versions[-1].request_id)
+        from collections import Counter
+        self.assertEqual(Counter(r['estadoEvaluacion'] for r in result['resultado']['reglas']),{'CUMPLE':12,'NO_APLICA':3,'PENDIENTE_POLITICA':1})
+        self.evaluation.refresh_from_db();self.assertEqual(self.evaluation.resultados,original)
+
+    def test_invalid_version_hash_never_falls_back_to_base(self):
+        self.version_fixture()
+        entry=self.saved_versions[-1];entry.payload['resultadoSha256']='0'*64;entry.save(update_fields=['payload'])
+        with self.assertRaisesMessage(ValueError,'REVISION_ESTUDIO_VIGENTE_NO_VERIFICABLE'):self.read_version()
+
+    def test_changed_conditions_invalidate_signed_summary(self):
+        self.version_fixture()
+        detail=SolicitudConsumo.objects.get(solicitud=self.case);detail.form_data={**detail.form_data,'monto':'999.00'}
+        detail.save(update_fields=['form_data'])
+        with self.assertRaisesMessage(ValueError,'REVISION_ESTUDIO_VIGENTE_NO_VERIFICABLE'):self.read_version()
+
+    def test_changed_base_invalidates_registered_version(self):
+        self.version_fixture()
+        self.evaluation.input_snapshot={'changed':'SYNTHETIC'};self.evaluation.save(update_fields=['input_snapshot'])
+        with self.assertRaisesMessage(ValueError,'REVISION_ESTUDIO_VIGENTE_NO_VERIFICABLE'):self.read_version()

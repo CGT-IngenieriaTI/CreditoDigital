@@ -245,6 +245,73 @@ def _reglas_precarga(s):
     return HechosReglasUnicoV2(edad_anios=edad)
 
 
+def aplicar_revision_estudio_registrada(s,evaluation,state):
+    """Read the latest immutable revision and its already verified signed summary."""
+    import base64
+    from uuid import UUID
+    from cryptography.exceptions import InvalidSignature
+    from apps.xcore_consumo.services.otp_crypto import decrypt_text
+    from apps.xcore_consumo.models import ConsentimientoConsumo
+    from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
+    from . import centrales_personal as central
+    if evaluation is None:return state
+    entries=list(AuditLog.objects.filter(solicitud=s,event='CREDIHOY_ESTUDIO_VERSION_REGISTRADA').order_by('created_at','pk')[:101])
+    if not entries:return state
+    if len(entries)>100:raise ConflictoFuncional('VERSIONES_ESTUDIO_REQUIEREN_CONCILIACION')
+    def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True,default=str).encode()
+    def digest(value):return hashlib.sha256(canonical(value)).hexdigest()
+    try:
+        selected={}
+        base_hash=hashlib.sha256(json.dumps({'input':evaluation.input_snapshot,'resultados':evaluation.resultados},sort_keys=True,default=str).encode()).hexdigest()
+        titular=hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest()
+        for entry in entries:
+            raw=decrypt_text(entry.payload['resultadoCifrado'])
+            if hashlib.sha256(raw.encode()).hexdigest()!=entry.payload['resultadoSha256']:raise ValueError()
+            version=json.loads(raw);reference=str(UUID(version['versionReferencia']))
+            request=version['fuentes']['huellaSolicitud']
+            if (str(entry.request_id)!=reference or reference!=version['versionReferencia']
+                    or version['solicitudId']!=str(s.pk) or version['evaluacionBaseId']!=evaluation.pk
+                    or type(version['version']) is not int or version['version']<2
+                    or request['documentoSha256']!=titular or request['evaluacionSha256']!=base_hash
+                    or version['resultado']['requestId']!=reference):raise ValueError()
+            if version['version'] in selected:raise ValueError()
+            selected[version['version']]=(entry,version)
+        entry,version=selected[max(selected)]
+        reference=version['versionReferencia']
+        op=OperacionGateway.objects.get(pk=entry.payload['recibo']['operacionHdc'],solicitud=s,
+            proveedor='HDC',estado__in=['COMPLETADA','SIN_INFORMACION'])
+        _exigir_recibo_hdc(op)
+        key=str(uuid5(NAMESPACE_URL,'credihoy-estudio-publico:'+str(s.pk)+':'+reference))
+        summary=AuditLog.objects.get(solicitud=s,event='CREDIHOY_ESTUDIO_PUBLICO_VERIFICADO',request_id=key)
+        envelope=summary.payload;body=envelope['payload'];study=body['estudio']
+        if envelope['algoritmo']!='Ed25519':raise ValueError()
+        central._clave_publica().verify(base64.b64decode(envelope['firmaBase64'],validate=True),
+            b'credihoy-estudio-publico-tecnico-v1\x00'+canonical(body))
+        consent=ConsentimientoConsumo.objects.values().get(solicitud=s)
+        detail=SolicitudConsumo.objects.values().get(solicitud=s)
+        current=EvaluacionConsumo.objects.values().get(pk=evaluation.pk,solicitud=s)
+        if (body['version']!='credihoy-estudio-tecnico-firmado-v1' or body['proposito']!='LECTURA_ESTUDIO_NO_DECISION'
+                or body['solicitudId']!=str(s.pk) or body['titularSha256']!=titular
+                or body['evaluacionBaseSha256']!=digest(current) or body['consentimientoSha256']!=digest(consent)
+                or body['consumoSha256']!=digest(detail) or study['version']!=version['version']
+                or study['versionContrato']!='credihoy-estudio-publico-v1'
+                or study['referenciaVersion']!=reference or study['evaluacionBaseId']!=evaluation.pk
+                or study['solicitudId']!=str(s.pk) or study['autorizadoDecisionCrediticia'] is not False):raise ValueError()
+        rules=version['resultado']['reglas']
+        if len(rules)!=16 or len({r['codigo'] for r in rules})!=16:raise ValueError()
+        projected=[{k:r[k] for k in ('codigo','nombre','resultado','estadoEvaluacion','motivos','datosFaltantes')} for r in rules]
+        if study['reglas']!=projected:raise ValueError()
+        return {**state,'resultado':version['resultado'],'revisionEstudio':{
+            'version':version['version'],'versionReferencia':reference,'versionSha256':entry.payload['resultadoSha256'],
+            'resultadoSha256':_digest(version['resultado']),'estudioSha256':digest(study),
+            'evaluacionBaseId':evaluation.pk,'operacionHdc':str(op.pk),
+            'revisionHdcActiva':evaluation.input_snapshot.get('revisionHdcActiva'),
+            'condicionesYConsentimientoVerificados':True,'firmaResumenVerificada':True}}
+    except (KeyError,TypeError,ValueError,AttributeError,InvalidSignature,
+            AuditLog.DoesNotExist,AuditLog.MultipleObjectsReturned,OperacionGateway.DoesNotExist):
+        raise ConflictoFuncional('REVISION_ESTUDIO_VIGENTE_NO_VERIFICABLE') from None
+
+
 def leer_estado_funcional(s):
     """Lectura compartida; la autorizacion del objeto corresponde al caller."""
     c = _firma(s)
@@ -296,7 +363,7 @@ def leer_estado_funcional(s):
         result = nuevo
     elif detail.orchestration_data.get(KEY_CONDICIONES):
         raise ConflictoFuncional('REVISION_CONDICIONES_SIN_EVALUACION_VIGENTE')
-    return {"versionContrato": VERSION, "solicitudId": str(s.pk), "idempotencyKey": clave_funcional(s),
+    state={"versionContrato": VERSION, "solicitudId": str(s.pk), "idempotencyKey": clave_funcional(s),
         "solicitud": {"monto": str(s.monto_solicitado), "plazoMeses": s.plazo_solicitado,
             "periodicidadPago": detail.form_data.get("periodicidadPago"),
             "recogerCredihoy": detail.form_data.get("recogerCredihoy")},
@@ -307,11 +374,12 @@ def leer_estado_funcional(s):
         "estadoTramite": "PENDIENTE_REVISION" if result else "DATOS_PENDIENTES",
         "decisionCrediticia": "NO_AUTORIZADA", "autorizadoDecisionCrediticia": False,
         "radicacionLinix": "NO_EJECUTADA"}
+    return aplicar_revision_estudio_registrada(s,evaluation,state)
 
 
 def registrar_resultado_consulta_hdc(solicitud_id, operador, *, operacion,
                                    ingresos, hechos_reglas, cuotas_aplicables_explicitas=None,
-                                   revision_evidencia=None, autogestion=False):
+                                   revision_evidencia=None, autogestion=False, descuentos_nomina=None):
     """Anexa la evaluacion real; no sustituye el resultado anterior ni decide credito."""
     from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
     from .evaluacion_controlada import evaluar_respuestas_controladas
@@ -351,7 +419,8 @@ def registrar_resultado_consulta_hdc(solicitud_id, operador, *, operacion,
         result = evaluar_respuestas_controladas(entrada, hdc=operacion,
             operaciones_esperadas={op.pk: ("HDC", op.request_id)}, ingresos=ingresos,
             hechos_reglas=hechos_reglas, fecha=timezone.now(), request_id=str(op.request_id),
-            cuotas_aplicables_explicitas=cuotas_aplicables_explicitas)
+            cuotas_aplicables_explicitas=cuotas_aplicables_explicitas,
+            descuentos_nomina=descuentos_nomina)
         result.update(versionFuncional=VERSION, solicitudId=str(s.pk),
             fuenteHechos="EXPEDIENTE_OPERATIVO_SIN_DECISION",
             resultadoCapacidad={"estado": "NO_EVALUABLE", "motivos":

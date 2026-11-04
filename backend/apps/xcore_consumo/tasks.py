@@ -16,8 +16,17 @@ from .services.credihoy_shadow.servicio import ServicioEvaluacionCrediHoyShadow,
 
 
 @shared_task(name='credihoy.continuar_unico',ignore_result=True,
-             acks_late=False,autoretry_for=(),max_retries=0)
-def continuar_credihoy_unico(*,solicitud_id,operador_id,recuperar_existente=False):
+             acks_late=True,reject_on_worker_lost=True,
+             autoretry_for=(RuntimeError,),retry_backoff=True,max_retries=3)
+def continuar_credihoy_unico(*,solicitud_id=None,operador_id=None,recuperar_existente=False,evento_id=None):
+    if evento_id is not None:
+        if solicitud_id is not None or operador_id is not None or recuperar_existente:
+            raise ValueError('CONTINUACION_EVENTO_ARGUMENTOS_INCOMPATIBLES')
+        from .services.credihoy_v2.unico.continuacion_eventos import ejecutar
+        try:
+            return ejecutar(evento_id)
+        except Exception:
+            raise RuntimeError('CONTINUACION_EVENTO_PENDIENTE_CONCILIAR') from None
     from django.contrib.auth import get_user_model
     from .services.orchestration import continuar_credihoy_unico as continuar
     operador=get_user_model().objects.get(pk=operador_id,is_active=True,is_staff=True)

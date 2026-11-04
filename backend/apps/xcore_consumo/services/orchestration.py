@@ -208,6 +208,9 @@ def continuar_credihoy_unico(solicitud_id, *, operador, recuperar_existente=Fals
             'resultadoSha256':hashlib.sha256(json.dumps(result,sort_keys=True,default=str).encode()).hexdigest(),
             'reglas':[{k:r[k] for k in ('codigo','resultado','estadoEvaluacion') if k in r} for r in rules],
             'consultaNueva':False,'evaluacionNueva':False,'decisionNueva':False}
+        if saved.get('revisionEstudio'):
+            evidence['revisionEstudio']=saved['revisionEstudio']
+            correlation=str(uuid5(NAMESPACE_URL,'credihoy-continuacion:'+sid+':'+consent.text_hash+':'+saved['revisionEstudio']['versionReferencia']))
         return record('EVALUACION_EXISTENTE_RECUPERADA','EVALUACION_REAL_CONSERVADA_SIN_RECONSULTA',evidence=evidence)
     if (getattr(settings,'RISK_GATEWAY_ORCHESTRATION_ENABLED',False) is not True
             or getattr(settings,'CREDIHOY_EVALUACION_AUTOGESTION_ENABLED',False) is not True):
@@ -232,6 +235,12 @@ def continuar_credihoy_unico(solicitud_id, *, operador, recuperar_existente=Fals
     prior=OperacionGateway.objects.filter(solicitud_id=sid,proveedor='HDC').first()
     if prior is not None and prior.estado not in {'PENDIENTE'}:
         return record('PENDIENTE_CONCILIACION','HDC_EXISTENTE_NO_REENVIAR')
+    from .credihoy_v2.unico.hechos_continuacion import obtener as obtener_hechos
+    from .credihoy_v2.errores_http import ApiDataCrediHoyV2Error
+    try:
+        ingresos, hechos_reglas, descuentos_nomina = obtener_hechos(case, correlation)
+    except ApiDataCrediHoyV2Error:
+        return record('NO_EVALUABLE','HECHOS_INSTITUCIONALES_NO_DISPONIBLES_NO_CONSUMIR_HDC')
     try:
         result=OrquestadorGateway().ejecutar(sid,request)
     except OperacionError as exc:
@@ -242,8 +251,8 @@ def continuar_credihoy_unico(solicitud_id, *, operador, recuperar_existente=Fals
         return record('PENDIENTE_CONCILIACION','HDC_RESULTADO_NO_COMPLETADO',result)
     try:
         funcional.registrar_resultado_consulta_hdc(sid,operador,operacion=result,
-            ingresos=Hecho(fuente='INGRESO_COMPUTABLE_PENDIENTE_ACREDITACION'),
-            hechos_reglas=funcional._reglas_precarga(case),autogestion=True)
+            ingresos=ingresos, hechos_reglas=hechos_reglas,
+            descuentos_nomina=descuentos_nomina,autogestion=True)
     except Exception:
         # The external result may be durable already. Never repeat it on failure.
         record('PENDIENTE_CONCILIACION','EVALUACION_PERSISTENCIA_NO_CONFIRMADA',result)

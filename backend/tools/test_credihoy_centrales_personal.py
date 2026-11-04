@@ -133,6 +133,8 @@ class CentralesPersonalTests(SimpleTestCase):
         self.audit = Mock()
         self.enter(patch.object(service.AuditLog.objects, 'using', return_value=self.audit))
         self.atomic = self.enter(patch.object(service.transaction, 'atomic', side_effect=lambda **kw: nullcontext()))
+        self.continuation_event = self.enter(patch(
+            'apps.xcore_consumo.services.credihoy_v2.unico.continuacion_eventos.registrar'))
         self.recover = self.enter(patch.object(service, 'recuperar_formato', return_value=(self.pdf, deepcopy(metadata))))
         self.public_key = service.obtener_clave_publica_owner_b64()
         self.initial = deepcopy((self.case.metadatos, self.detail.form_data, vars(self.consent)))
@@ -141,6 +143,15 @@ class CentralesPersonalTests(SimpleTestCase):
         value = context.__enter__()
         self.addCleanup(context.__exit__, None, None, None)
         return value
+
+    def test_confirmed_authorization_registers_one_durable_intent_not_on_read_or_duplicate(self):
+        self.confirm()
+        self.continuation_event.assert_called_once()
+        self.assertEqual(self.continuation_event.call_args.args[1],'cotizacion')
+        self.assertEqual(self.continuation_event.call_args.args[2]['estado'],'OTP_CONFIRMADA')
+        self.record(self.confirmation)
+        service.consultar(self.sid,self.identity)
+        self.continuation_event.assert_called_once()
 
     def complement(self):
         operation = str(uuid4())

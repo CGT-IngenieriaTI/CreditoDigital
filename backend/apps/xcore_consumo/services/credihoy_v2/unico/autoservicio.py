@@ -75,25 +75,12 @@ def vincular_consumo_enviada(s, alias):
     return detail
 
 
-def habilitar(sesion=None, *, expira_at=None):
+def habilitar(sesion=None):
     if getattr(settings, 'CREDIHOY_AUTOSERVICIO_ENABLED', False) is not True:
         raise wire.NoDisponible
     if getattr(settings, 'CREDIHOY_PUBLICO_RESTRINGIDO', False) is True:
         try:
             scope = settings.CREDIHOY_AUTOSERVICIO_ALCANCE
-            if type(scope) is dict and scope.get('modo')=='SESION_PERSONAL_VERIFICADA':
-                from .publico_controles import admision_ensayo_vigente
-                if set(scope)!={'modo','hasta'} or not admision_ensayo_vigente():raise ValueError
-                if type(sesion) is not str or str(UUID(sesion))!=sesion:raise ValueError
-                expiry=datetime.fromisoformat(expira_at) if type(expira_at) is str else expira_at
-                until=datetime.fromisoformat(scope['hasta'])
-                window=datetime.fromisoformat(settings.CREDIHOY_PUBLICO_AUTORIZACION_HASTA)
-                now=timezone.now()
-                if (not isinstance(expiry,datetime) or not timezone.is_aware(expiry)
-                        or not timezone.is_aware(until) or not timezone.is_aware(window)
-                        or not now<expiry<=now+__import__('datetime').timedelta(minutes=15)
-                        or not now<until<=window):raise ValueError
-                return
             if (type(scope) is not dict or set(scope) != {'sesiones','hasta'}
                     or type(scope['sesiones']) is not list or len(scope['sesiones']) != 1
                     or type(sesion) is not str or str(UUID(sesion)) != sesion
@@ -107,8 +94,8 @@ def habilitar(sesion=None, *, expira_at=None):
             raise wire.NoDisponible from None
 
 
-def sesion_habilitada(sesion, *, expira_at=None):
-    try:habilitar(sesion,expira_at=expira_at)
+def sesion_habilitada(sesion):
+    try:habilitar(sesion)
     except wire.NoDisponible:return False
     return True
 
@@ -129,8 +116,7 @@ def habilitar_lectura(identity):
                 or not getattr(settings,'CREDIHOY_PUBLICO_AUTORIZACION_REFERENCIA','')
                 or not re.fullmatch('[0-9]{6,15}',identity['numeroDocumento'])):raise ValueError
         cohort=settings.CREDIHOY_TITULAR_DOCUMENTOS_HMAC
-        from .publico_controles import admision_ensayo_vigente
-        if not admision_ensayo_vigente() and (not 1<=len(cohort)<=2 or not any(hmac.compare_digest(document_hmac(identity['numeroDocumento']),v) for v in cohort)):raise ValueError
+        if not 1<=len(cohort)<=2 or not any(hmac.compare_digest(document_hmac(identity['numeroDocumento']),v) for v in cohort):raise ValueError
     except (KeyError,AttributeError,TypeError,ValueError):raise wire.NoDisponible from None
     privacy.configuracion()
 
@@ -153,13 +139,9 @@ def leer_enviadas(identity, payload):
         if 'solicitudId' in payload:query=query.filter(pk=UUID(payload['solicitudId']))
         rows=[]
         for s in query.order_by('-created_at','pk')[:20]:
-            estudio=_estudio_publico_personal(s,identity)
-            from .progreso_estudio import read as leer_progreso
-            progreso=leer_progreso(s,getattr(settings,'CREDIHOY_AUTORIZACION_DB_ALIAS',alias),estudio)
             rows.append(wire.project_row({'referencia':str(s.pk),'titulo':'Tu solicitud esta en revision',
                 'monto':str(s.monto_solicitado),'plazoMeses':s.plazo_solicitado,'periodicidad':'Mensual',
-                'fechaCreacion':s.created_at.isoformat(),'requisitosCumplidos':sum(r['resultado']=='CUMPLE' for r in estudio['reglas']) if estudio else None,
-                'estudio':estudio,'progreso':progreso,'envio':envio_publico(s,alias),'simulacionLocal':estimacion_de_envio(s,identity),
+                'fechaCreacion':s.created_at.isoformat(),'requisitosCumplidos':None,
                 'pendientes':['Necesitamos completar algunas validaciones antes de tomar una decision.'],
                 'siguientePaso':'Espera la revision de Congente.','ofertaDisponible':False,
                 'acciones':{'radicar':False,'firmar':False},'institucional':None,'simulacion':None,
@@ -235,10 +217,6 @@ def operar(identity, payload):
     from .progreso_temporal import operar as temporal
     return temporal(identity,payload)
 
-FORMULARIO_EVALUACION = 'credihoy_formulario_evaluacion_v1'
-
-COMPLEMENTO_PERSONAL = 'credihoy_complemento_personal_v1'
-
 
 def validar_elecciones_complemento(values):
     if (type(values) is not dict or set(values)!={'periodicidadPago','recogerCredihoy','obligacionRecoger'}
@@ -282,73 +260,6 @@ def leer_complemento_personal(s):
         raise ValueError('COMPLEMENTO_PERSONAL_NO_INTEGRO') from None
 
 
-def operar_complemento_personal(solicitud_id,identity,payload):
-    from django.db import transaction
-    from apps.xcore_consumo.models import SolicitudConsumo
-    from apps.xcore_consumo.services.otp_crypto import encrypt_text
-    from .consentimiento_real import obtener_autogestion
-    from hashlib import sha256
-    from copy import deepcopy
-    reading=payload['accion']=='consultar_complemento'
-    expected={'operacion','accion','solicitudId'}
-    if not reading:expected|={'operacionId','version','datos','confirma'}
-    if set(payload)!=expected:raise ValueError('CONTRATO_COMPLEMENTO_INVALIDO')
-    case,alias=obtener_autogestion(solicitud_id,identity)
-    with transaction.atomic(using=alias):
-        if reading and connections[alias].vendor=='postgresql':
-            with connections[alias].cursor() as cursor:cursor.execute('SET TRANSACTION READ ONLY')
-        case,_=obtener_autogestion(solicitud_id,identity,lock=not reading)
-        detail=SolicitudConsumo.objects.using(alias)
-        if not reading:detail=detail.select_for_update()
-        detail=detail.get(solicitud=case);case.consumo_detail=detail
-        validar_vinculo_consumo(case)
-        original=case.metadatos['envio']['datos']
-        if reading and {'periodicidadPago','recogerCredihoy'}<=set(original):
-            form=formulario_desde_envio(case)
-            return {'version':1,'datos':{'periodicidadPago':form['periodicidadPago'],
-                'recogerCredihoy':form['recogerCredihoy'],'obligacionRecoger':original.get('obligacionRecoger')},
-                'confirmadoEn':case.metadatos['envio']['aceptacionTemporal']['aceptadoEn'],
-                'fuente':'ELECCION_PERSONAL_ENVIO'}
-        previous=leer_complemento_personal(case)
-        if not reading:
-            if (payload['confirma'] is not True or type(payload['version']) is not int or payload['version']<0
-                    or type(payload['operacionId']) is not str
-                    or str(UUID(payload['operacionId']))!=payload['operacionId']):
-                raise ValueError('CONFIRMACION_COMPLEMENTO_REQUERIDA')
-            values=validar_elecciones_complemento(payload['datos'])
-            digest=sha256(wire.encode(payload)).hexdigest()
-            data=deepcopy(detail.orchestration_data)
-            journal=data.setdefault(COMPLEMENTO_PERSONAL,{'actual':None,'revisiones':{}})
-            operation=payload['operacionId']
-            if operation in journal['revisiones']:
-                if (previous is None or journal['actual']!=operation
-                        or not hmac.compare_digest(previous['peticionSha256'],digest)):
-                    raise ValueError('OPERACION_COMPLEMENTO_INCOMPATIBLE')
-            else:
-                if payload['version']!=(previous['version'] if previous else 0):raise ValueError('VERSION_COMPLEMENTO_CAMBIO')
-                if 'recogerCredihoy' in case.metadatos['envio']['datos']:
-                    raise ValueError('ELECCIONES_DEL_ENVIO_ORIGINAL_NO_SOBRESCRIBIR')
-                if len(journal['revisiones'])>=20:raise ValueError('LIMITE_REVISIONES_COMPLEMENTO')
-                if detail.estado!='CONSENTIMIENTO_PENDIENTE' or any(k in data for k in
-                        ('credihoy_unico_hdc_actual','credihoy_unico_funcional','credihoy_autorizacion_centrales_v1')):
-                    raise ValueError('COMPLEMENTO_CERRADO_POR_ESTUDIO')
-                previous={'version':payload['version']+1,'solicitudId':str(case.pk),
-                    'operacionEnvioOriginal':case.metadatos['envio']['operacionId'],
-                    'operacionId':operation,'sesionReferencia':identity['_sesionReferencia'],
-                    'titularSha256':sha256(case.solicitante.numero_identificacion.encode()).hexdigest(),
-                    'confirmadoEn':timezone.now().isoformat(),'datos':values,'peticionSha256':digest}
-                raw=wire.encode(previous).decode()
-                journal['revisiones'][operation]={'contenidoCifrado':encrypt_text(raw),'sha256':sha256(raw.encode()).hexdigest()}
-                journal['actual']=operation
-                detail.orchestration_data=data;detail.save(using=alias,update_fields=['orchestration_data','updated_at'])
-                AuditLog.objects.using(alias).create(solicitud=case,event='credihoy_complemento_personal_guardado',
-                    actor='titular:9A',request_id=operation,payload={'version':previous['version'],
-                        'solicitudId':str(case.pk),'revisionSha256':journal['revisiones'][operation]['sha256']})
-        return {'version':previous['version'] if previous else 0,'datos':previous['datos'] if previous else None,
-            'confirmadoEn':previous['confirmadoEn'] if previous else None,
-            'fuente':'ELECCION_PERSONAL_COMPLEMENTO' if previous else None}
-
-
 def formulario_desde_envio(s):
     """Personal choices are not institutional certification of an obligation."""
     envio=s.metadatos['envio'];values=envio['datos']
@@ -356,8 +267,15 @@ def formulario_desde_envio(s):
     if (Decimal(str(values['monto']))!=Decimal(str(s.monto_solicitado)) or values['plazo']!=s.plazo_solicitado):
         raise ValueError('CONDICIONES_DISTINTAS_DEL_ENVIO_PERSONAL')
     if not {'periodicidadPago','recogerCredihoy'} & set(values):return form
-    if values.get('periodicidadPago')=='MENSUAL' and 'recogerCredihoy' not in values:
-        # Monthly schedule is product data; absence of a collection choice is not False.
+    if not {'periodicidadPago','recogerCredihoy'} <= set(values):
+        # Older submissions carried only part of the later personal choices.
+        complement=leer_complemento_personal(s)
+        if complement is None:raise ValueError('ELECCION_FINANCIERA_PERSONAL_INCOMPLETA')
+        choices=complement['datos']
+        if any(key in values and (type(values[key]) is not type(choices.get(key))
+                or values[key]!=choices.get(key))
+                for key in ('periodicidadPago','recogerCredihoy','obligacionRecoger')):
+            raise ValueError('COMPLEMENTO_CONTRADICE_ENVIO_ORIGINAL')
         return form
     if (values.get('periodicidadPago')!='MENSUAL' or type(values.get('recogerCredihoy')) is not bool):
         raise ValueError('ELECCION_FINANCIERA_PERSONAL_INCOMPLETA')
@@ -401,70 +319,6 @@ def validar_procedencia_formulario(s, raw):
         raise ValueError('REFERENCIA_RECOGIDA_INSTITUCIONAL_PENDIENTE')
     return expected
 
-def _estudio_publico_personal(s, identity):
-    import base64,hashlib,json
-    from django.db import transaction
-    from apps.xcore_consumo.models import EvaluacionConsumo,ConsentimientoConsumo,SolicitudConsumo
-    from cryptography.exceptions import InvalidSignature
-    def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True,default=str).encode()
-    def digest(value):return hashlib.sha256(canonical(value)).hexdigest()
-    alias=getattr(settings,'CREDIHOY_AUTORIZACION_DB_ALIAS','')
-    if not alias:return None
-    with transaction.atomic(using=alias):
-        with connections[alias].cursor() as cursor:cursor.execute('SET TRANSACTION READ ONLY')
-        with connections[alias].cursor() as cursor:
-            cursor.execute('SELECT resumen_tecnico FROM public.credihoy_estudio_publico '
-                'WHERE solicitud_id=%s ORDER BY registrado_en DESC,registro_id DESC LIMIT 1',[str(s.pk)])
-            row=cursor.fetchone()
-        if row is None:return None
-        from . import centrales_personal as central
-        try:
-            envelope=row[0]
-            if type(envelope) is str:envelope=json.loads(envelope)
-            if type(envelope) is not dict or set(envelope)!={'algoritmo','payload','firmaBase64'} or envelope['algoritmo']!='Ed25519':raise ValueError
-            body=envelope['payload']
-            if type(body) is not dict or set(body)!={'version','proposito','solicitudId','titularSha256',
-                    'evaluacionBaseSha256','consentimientoSha256','consumoSha256','estudio'}:raise ValueError
-            central._clave_publica(owner=True).verify(base64.b64decode(envelope['firmaBase64'],validate=True),
-                'credihoy-estudio-publico-tecnico-v1\x00'.encode()+canonical(body))
-            if (body['version']!='credihoy-estudio-tecnico-firmado-v1'
-                    or body['proposito']!='LECTURA_ESTUDIO_NO_DECISION' or body['solicitudId']!=str(s.pk)
-                    or body['titularSha256']!=hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()):raise ValueError
-            study=wire.project_study(body['estudio'],str(s.pk))
-            evaluation=EvaluacionConsumo.objects.using(alias).values().get(pk=study['evaluacionBaseId'],solicitud_id=s.pk)
-            consent=ConsentimientoConsumo.objects.using(alias).values().get(solicitud_id=s.pk)
-            detail=SolicitudConsumo.objects.using(alias).values().get(solicitud_id=s.pk)
-            if (digest(evaluation)!=body['evaluacionBaseSha256'] or digest(consent)!=body['consentimientoSha256']
-                    or digest(detail)!=body['consumoSha256']):raise ValueError
-            return study
-        except (ValueError,TypeError,KeyError,AttributeError,InvalidSignature,
-                EvaluacionConsumo.DoesNotExist,ConsentimientoConsumo.DoesNotExist,SolicitudConsumo.DoesNotExist):
-            raise wire.NoDisponible from None
+FORMULARIO_EVALUACION = 'credihoy_formulario_evaluacion_v1'
 
-
-def envio_publico(s,alias):
-    """A submitted label requires its native durable event, never just INICIADA."""
-    operation=s.metadatos['envio']['operacionId']
-    events=list(AuditLog.objects.using(alias).filter(solicitud_id=s.pk,
-        event='credihoy_solicitud_enviada',request_id=operation).order_by('created_at')[:2])
-    if len(events)!=1:raise wire.NoDisponible
-    event=events[0]
-    if event.payload.get('solicitudRegistrada') is not True:raise wire.NoDisponible
-    return {'operacionId':operation,'confirmadoEn':event.created_at.isoformat(),
-        'solicitud':wire.project_draft(proyectar(s))}
-
-
-def estimacion_de_envio(s,identity):
-    """Current read-only estimate of the immutable submitted amount and term."""
-    from .simulacion_lectura import simulador_habilitado,operar_simulacion
-    from django.core.exceptions import PermissionDenied
-    import logging
-    if not simulador_habilitado():return None
-    try:
-        return operar_simulacion(identity,{'solicitudId':str(s.pk),'operacion':'simular',
-            'escenario':{'monto':format(s.monto_solicitado,'.2f'),'plazoMeses':s.plazo_solicitado,'linea':'VENTANILLA'}},
-            identity['_requestId'])
-    except (ValueError,KeyError,Http404,wire.NoDisponible,PermissionDenied) as exc:
-        logging.getLogger('credito.publico').warning('estimacion_envio_no_disponible request=%s tipo=%s',
-            identity.get('_requestId',''),type(exc).__name__)
-        return None
+COMPLEMENTO_PERSONAL = 'credihoy_complemento_personal_v1'

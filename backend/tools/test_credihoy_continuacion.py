@@ -137,6 +137,119 @@ class ContinuacionTests(TransactionTestCase):
             self.assertEqual(self.run_case()['codigo'],'HECHOS_INSTITUCIONALES_NO_DISPONIBLES_NO_CONSUMIR_HDC')
             gateway.assert_not_called()
 
+    @override_settings(CELERY_BROKER_URL=None)
+    def test_recovery_appends_only_missing_intent_from_original_confirmation(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import continuacion_eventos as events
+        eid=self.event_fixture()
+        AuditLog.objects.filter(event=events.EVENTO,request_id=eid).delete()
+        before=SolicitudConsumo.objects.get(solicitud_id=self.sid).orchestration_data
+        with override_settings(CREDIHOY_CONTINUACION_SOLICITUDES_AUTORIZADAS=[self.sid]):
+            self.assertEqual(events.recuperar_individual(self.sid),eid)
+            self.assertEqual(events.recuperar_individual(self.sid),eid)
+        self.assertEqual(AuditLog.objects.filter(event=events.EVENTO,request_id=eid).count(),1)
+        self.assertEqual(SolicitudConsumo.objects.get(solicitud_id=self.sid).orchestration_data,before)
+
+    def test_recovery_cannot_manufacture_authorization_or_process_other_case(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import continuacion_eventos as events
+        with override_settings(CREDIHOY_CONTINUACION_SOLICITUDES_AUTORIZADAS=[]):
+            with self.assertRaisesMessage(ValueError,'EXPEDIENTE_NO_AUTORIZADO'):
+                events.recuperar_individual(self.sid)
+        with override_settings(CREDIHOY_CONTINUACION_SOLICITUDES_AUTORIZADAS=[self.sid]):
+            with self.assertRaisesMessage(ValueError,'CONFIRMACION_ORIGINAL_NO_RECUPERABLE'):
+                events.recuperar_individual(self.sid)
+        self.assertFalse(AuditLog.objects.filter(event=events.EVENTO).exists())
+
+    def test_dispatcher_runs_registered_task_for_exact_scope_and_preserves_global_financial_flags(self):
+        import json,tempfile
+        from pathlib import Path
+        from datetime import timedelta
+        from django.db import connection
+        from apps.xcore_consumo.services.credihoy_v2.unico import continuacion_dispatcher as dispatcher
+        eid=self.event_fixture()
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT current_database(),inet_server_addr()::text,inet_server_port(),current_schema()')
+            db=list(cursor.fetchone())
+        scope={'version':1,'solicitudId':self.sid,'operadorId':self.operator.pk,
+            'hasta':(timezone.now()+timedelta(minutes=5)).isoformat(),'database':db,'referencia':'SYNTHETIC'}
+        with tempfile.TemporaryDirectory() as folder,override_settings(
+                CREDIHOY_CONTINUACION_SOLICITUDES_AUTORIZADAS=[],CREDIHOY_CONTINUACION_OPERADOR_ID=None,
+                CREDIHOY_CONTINUACION_TRANSPORTE='',RISK_GATEWAY_ORCHESTRATION_ENABLED=False):
+            path=Path(folder)/'scope.json';path.write_text(json.dumps(scope))
+            with patch('apps.xcore_consumo.services.orchestration.continuar_credihoy_unico',
+                    return_value={'estado':'EVALUACION_EXISTENTE_RECUPERADA','evaluacionConservada':{'version':8}}) as run:
+                result=dispatcher.run(path)
+                self.assertEqual(result['estado'],'EVENTO_INDIVIDUAL_CONSUMIDO')
+                self.assertEqual(result['correlationId'],eid)
+                run.assert_called_once()
+                self.assertEqual(dispatcher.run(path),result)
+                run.assert_called_once()
+            from django.conf import settings
+            self.assertFalse(settings.RISK_GATEWAY_ORCHESTRATION_ENABLED)
+
+    def test_dispatcher_rejects_expired_or_wrong_database_scope(self):
+        import json,tempfile
+        from pathlib import Path
+        from datetime import timedelta
+        from apps.xcore_consumo.services.credihoy_v2.unico import continuacion_dispatcher as dispatcher
+        scope={'version':1,'solicitudId':self.sid,'operadorId':self.operator.pk,
+            'hasta':(timezone.now()-timedelta(seconds=1)).isoformat(),'database':['other'],'referencia':'SYNTHETIC'}
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'scope.json';path.write_text(json.dumps(scope))
+            with self.assertRaisesMessage(ValueError,'ALCANCE_VENCIDO'):dispatcher.run(path)
+            scope['hasta']=(timezone.now()+timedelta(minutes=5)).isoformat();path.write_text(json.dumps(scope))
+            with self.assertRaisesMessage(ValueError,'OUTBOX_BASE_DATOS_DIFIERE'):dispatcher.run(path)
+
+    def test_private_economic_profile_is_expiring_holder_bound_and_never_logged(self):
+        import json,hashlib,tempfile
+        from pathlib import Path
+        from datetime import timedelta
+        from apps.xcore_consumo.services.credihoy_v2.cliente import ConfiguracionApiDataV2,ApiDataCrediHoyV2Client
+        from apps.xcore_consumo.services.credihoy_v2.errores_http import ApiDataCrediHoyV2Error
+        profile={'base_url':'https://synthetic.invalid','client_id':'credihoy-hechos-synthetic',
+            'client_secret':'SYNTHETIC_NOT_A_REAL_SECRET','timeout':15,
+            'hasta':(timezone.now()+timedelta(minutes=5)).isoformat(),
+            'documentoSha256':hashlib.sha256(b'0000000099').hexdigest(),'referencia':'SYNTHETIC'}
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'client.json';path.write_text(json.dumps(profile));path.chmod(0o600)
+            cfg=ConfiguracionApiDataV2.desde_settings(SimpleNamespace(API_DATA_CREDIHOY_CREDENTIAL_FILE=str(path)))
+            self.assertNotIn(profile['client_secret'],repr(cfg))
+            client=ApiDataCrediHoyV2Client(cfg,session=SimpleNamespace(post=lambda *a,**k:self.fail('NO_NETWORK')))
+            with self.assertRaises(ApiDataCrediHoyV2Error):
+                client.consultar(numero_documento='0000000088',fecha_evaluacion=timezone.now())
+            profile['hasta']=(timezone.now()-timedelta(seconds=1)).isoformat();path.write_text(json.dumps(profile))
+            with self.assertRaises(ApiDataCrediHoyV2Error):
+                ConfiguracionApiDataV2.desde_settings(SimpleNamespace(API_DATA_CREDIHOY_CREDENTIAL_FILE=str(path)))
+
+    def test_worker_process_death_releases_postgres_claim_without_hdc(self):
+        import hashlib,json,subprocess,sys,time
+        from django.db import connection
+        from apps.xcore_consumo.services.credihoy_v2.unico import continuacion_eventos as events
+        eid=self.event_fixture()
+        lock=int(hashlib.sha256(eid.encode()).hexdigest()[:16],16)-2**63
+        params={k:v for k,v in connection.get_connection_params().items()
+            if k in {'dbname','host','port','user','password','sslmode'}}
+        self.assertIn(params.get('host'),{'127.0.0.1','localhost'})
+        program='import sys,json,psycopg,time\np=json.load(sys.stdin)\nc=psycopg.connect(**p["database"],autocommit=True)\nc.execute("SELECT pg_advisory_lock(%s)",[p["lock"]])\nprint("CLAIMED",flush=True)\ntime.sleep(120)\n'
+        process=subprocess.Popen([sys.executable,'-B','-c',program],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        try:
+            process.stdin.write(json.dumps({'database':params,'lock':lock}).encode());process.stdin.close()
+            self.assertEqual(process.stdout.readline().strip(),b'CLAIMED')
+            process.kill();process.wait(timeout=10)
+            claimed=False
+            for _ in range(30):
+                with connection.cursor() as cursor:
+                    cursor.execute('SELECT pg_try_advisory_lock(%s)',[lock]);claimed=cursor.fetchone()[0]
+                    if claimed:cursor.execute('SELECT pg_advisory_unlock(%s)',[lock])
+                if claimed:break
+                time.sleep(.1)
+            self.assertTrue(claimed)
+            with override_settings(CREDIHOY_CONTINUACION_SOLICITUDES_AUTORIZADAS=[self.sid],CREDIHOY_CONTINUACION_OPERADOR_ID=self.operator.pk):
+                with patch('apps.xcore_consumo.services.orchestration.continuar_credihoy_unico',return_value={'estado':'EVALUACION_COMPLETADA'}):
+                    self.assertEqual(events.ejecutar(eid)['estado'],'EVALUACION_COMPLETADA')
+        finally:
+            if process.poll() is None:process.kill();process.wait(timeout=10)
+            process.stdout.close();process.stderr.close()
+
     def test_institutional_adapter_preserves_source_and_encrypts_full_receipt(self):
         from decimal import Decimal
         from apps.solicitudes.models import Solicitud

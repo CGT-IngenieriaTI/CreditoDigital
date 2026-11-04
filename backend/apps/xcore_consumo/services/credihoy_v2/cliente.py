@@ -1,11 +1,17 @@
 """Cliente HTTP V2 aislado, sin fallback, logs financieros ni reintentos."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 import math
 import re
 import time
+import os
+import json
+import stat
+import hashlib
+import hmac
+from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -28,6 +34,8 @@ class ConfiguracionApiDataV2:
     client_id: str = field(default="", repr=False)
     client_secret: str = field(default="", repr=False)
     timeout: float = 15
+    titular_sha256: str = field(default='',repr=False)
+    vigente_hasta: datetime | None = field(default=None,repr=False)
 
     def __post_init__(self):
         try:
@@ -53,6 +61,25 @@ class ConfiguracionApiDataV2:
             from django.conf import settings
             configuracion = settings
         try:
+            path=Path(getattr(configuracion,'API_DATA_CREDIHOY_CREDENTIAL_FILE',
+                '/run/credihoy-hechos-cliente.json'))
+            if path.exists() or path.is_symlink():
+                if not path.is_absolute() or path.is_symlink():raise ValueError()
+                with path.open('rb') as stream:
+                    info=os.fstat(stream.fileno())
+                    if (not stat.S_ISREG(info.st_mode) or info.st_size>8192
+                            or os.name!='nt' and (info.st_uid!=os.geteuid() or info.st_mode&0o077)):
+                        raise ValueError()
+                    cfg=json.load(stream,object_pairs_hook=_pares_unicos)
+                if set(cfg)!={'base_url','client_id','client_secret','timeout','hasta','documentoSha256','referencia'}:
+                    raise ValueError()
+                until=datetime.fromisoformat(cfg['hasta']);now=datetime.now(timezone.utc)
+                if (until.utcoffset() is None or not now<until<=now+timedelta(hours=1)
+                        or not cfg['base_url'].startswith('https://') or not cfg['referencia'].strip()
+                        or not re.fullmatch('[a-f0-9]{64}',cfg['documentoSha256'])):
+                    raise ValueError()
+                return cls(base_url=cfg['base_url'],client_id=cfg['client_id'],client_secret=cfg['client_secret'],
+                    timeout=cfg['timeout'],titular_sha256=cfg['documentoSha256'],vigente_hasta=until)
             timeout = getattr(configuracion, "API_DATA_CREDIHOY_TIMEOUT", 15)
             if type(timeout) is bool:
                 raise ValueError()
@@ -60,7 +87,7 @@ class ConfiguracionApiDataV2:
                        token=getattr(configuracion, "API_DATA_CREDIHOY_TOKEN", ""), timeout=float(timeout),
                        client_id=getattr(configuracion, "API_DATA_CREDIHOY_CLIENT_ID", ""),
                        client_secret=getattr(configuracion, "API_DATA_CREDIHOY_CLIENT_SECRET", ""))
-        except (ValueError, TypeError, AttributeError):
+        except (OSError,ValueError, TypeError, AttributeError,KeyError):
             raise ApiDataCrediHoyV2Error(Codigo.CONFIGURACION_INCOMPLETA) from None
 
 
@@ -156,6 +183,11 @@ class ApiDataCrediHoyV2Client:
 
     def consultar(self, *, numero_documento: str, fecha_evaluacion: datetime, request_id=None,
                   solicitud_evaluada: SolicitudEvaluadaV2 | None = None):
+        if self.configuracion.vigente_hasta is not None:
+            if (datetime.now(timezone.utc)>=self.configuracion.vigente_hasta
+                    or not isinstance(numero_documento,str)
+                    or not hmac.compare_digest(hashlib.sha256(numero_documento.encode()).hexdigest(),self.configuracion.titular_sha256)):
+                raise ApiDataCrediHoyV2Error(Codigo.NO_AUTORIZADO)
         try:
             entrada = RequestHechosInternosV2(numero_documento=numero_documento,
                 fecha_evaluacion=fecha_evaluacion, solicitud_evaluada=solicitud_evaluada)

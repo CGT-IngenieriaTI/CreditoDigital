@@ -15,6 +15,35 @@ FINAL = 'credihoy_continuacion_evento_completado_v1'
 logger = logging.getLogger(__name__)
 
 
+def recuperar_individual(solicitud_id):
+    """Append a missing delivery intent, never a consent or an OTP confirmation."""
+    from apps.xcore_consumo.models import SolicitudConsumo
+    from .centrales_personal import KEY, verificar_autorizacion_centrales_personal
+    sid = str(UUID(str(solicitud_id)))
+    allowed = getattr(settings, 'CREDIHOY_CONTINUACION_SOLICITUDES_AUTORIZADAS', ())
+    if not isinstance(allowed, (tuple, list, set)) or sid not in allowed:
+        raise ValueError('EXPEDIENTE_NO_AUTORIZADO')
+    with transaction.atomic(using='default', durable=True):
+        detail = SolicitudConsumo.objects.select_for_update(of=('self',)).select_related(
+            'solicitud__solicitante','solicitud__consentimiento_consumo').get(solicitud_id=sid)
+        case = detail.solicitud
+        case.consumo_detail = detail
+        verificar_autorizacion_centrales_personal(case,case.consentimiento_consumo)
+        journal = (detail.orchestration_data or {}).get(KEY,{})
+        if journal.get('estado') != 'OTP_CONFIRMADA':
+            raise ValueError('CONFIRMACION_ORIGINAL_NO_RECUPERABLE')
+        digest = hashlib.sha256(json.dumps(journal['vinculo'],sort_keys=True,
+            separators=(',', ':'),ensure_ascii=True).encode()).hexdigest()
+        eid = str(uuid5(NAMESPACE_URL,'credihoy-continuacion-evento:'+sid+':'+digest))
+        previous = AuditLog.objects.using('default').filter(solicitud_id=sid,event=EVENTO,request_id=eid).first()
+        if previous:
+            if (previous.payload.get('vinculoSha256') != digest
+                    or previous.payload.get('registroSha256') != journal['registros'][-1]['sha256']):
+                raise ValueError('EVENTO_EXISTENTE_DIFIERE_NO_SOBRESCRIBIR')
+            return eid
+        return registrar(case,'default',journal)
+
+
 def publicar(evento_id):
     """Failure leaves the committed intent available for individual recovery."""
     if not getattr(settings, 'CELERY_BROKER_URL', None):
@@ -53,7 +82,10 @@ def ejecutar(evento_id):
     from apps.xcore_consumo.models import EvaluacionConsumo, SolicitudConsumo
 
     eid = str(UUID(str(evento_id)))
-    intent = AuditLog.objects.get(event=EVENTO, request_id=eid)
+    # The institutional owner alias and backend default are verified against
+    # the same PostgreSQL by the installer. Never infer a writable DB router.
+    alias = 'default'
+    intent = AuditLog.objects.using(alias).get(event=EVENTO, request_id=eid)
     sid = str(intent.solicitud_id)
     allowed = getattr(settings, 'CREDIHOY_CONTINUACION_SOLICITUDES_AUTORIZADAS', ())
     if not isinstance(allowed, (tuple, list, set)) or sid not in allowed:
@@ -71,10 +103,10 @@ def ejecutar(evento_id):
     if not locked:
         return {'estado': 'EN_EJECUCION', 'requestId': eid}
     try:
-        done = AuditLog.objects.filter(solicitud_id=sid, event=FINAL, request_id=eid).first()
+        done = AuditLog.objects.using(alias).filter(solicitud_id=sid, event=FINAL, request_id=eid).first()
         if done:
             return done.payload
-        detail = SolicitudConsumo.objects.get(solicitud_id=sid)
+        detail = SolicitudConsumo.objects.using(alias).get(solicitud_id=sid)
         from .centrales_personal import KEY
         journal = (detail.orchestration_data or {}).get(KEY, {})
         digest = hashlib.sha256(json.dumps(journal.get('vinculo'), sort_keys=True,
@@ -84,6 +116,12 @@ def ejecutar(evento_id):
                 or journal['registros'][-1]['sha256'] != intent.payload['registroSha256']):
             raise ValueError('CONTINUACION_EVENTO_AUTORIZACION_CAMBIO')
         operator = get_user_model().objects.get(pk=operator_id)
+        delivered = 'credihoy_continuacion_evento_entregado_v1'
+        if not AuditLog.objects.using(alias).filter(solicitud_id=sid,event=delivered,request_id=eid).exists():
+            AuditLog.objects.using(alias).create(solicitud_id=sid,event=delivered,request_id=eid,
+                actor='servicio:continuacion',payload={'tarea':'credihoy.continuar_unico',
+                    'transporte':getattr(settings,'CREDIHOY_CONTINUACION_TRANSPORTE','CELERY'),
+                    'correlationId':eid})
         existing = EvaluacionConsumo.objects.filter(solicitud_id=sid).exists()
         result = continuar_credihoy_unico(sid, operador=operator, recuperar_existente=existing)
         packet = {'requestId': eid, 'resultado': result, 'estado': result['estado']}

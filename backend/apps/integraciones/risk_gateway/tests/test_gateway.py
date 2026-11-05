@@ -101,6 +101,8 @@ class StoredXmlTests(OfflineCase):
         get.assert_called_once();post.assert_not_called()
         self.assertFalse(get.call_args.kwargs['allow_redirects'])
         self.assertTrue(get.call_args.kwargs['verify'])
+        self.assertTrue(get.call_args.args[0].endswith('/'+CID+'/pdf/'))
+        self.assertEqual(get.call_args.kwargs['headers']['Accept'],'application/xml')
 
     def test_foreign_holder_request_or_corrupt_hash_are_rejected(self):
         for headers in ({'X-HDC-Holder-SHA256':'b'*64},{'X-HDC-Request-ID':CID},

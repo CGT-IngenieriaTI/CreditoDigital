@@ -201,7 +201,7 @@ class GatewayTransport:
         try:
             with requests.Session() as session:
                 session.trust_env = False
-                response = session.get(config.base_url.rstrip('/') + '/api/internal/v1/hdc/consultas/' + cid + '/xml/', headers=_headers(config, rid, 'application/json' if con_respuesta else 'application/xml'), stream=True, timeout=(config.connect_timeout, config.read_timeout), verify=config.verify, allow_redirects=False)
+                response = session.get(config.base_url.rstrip('/') + '/api/internal/v1/hdc/consultas/' + cid + '/pdf/', headers=_headers(config, rid, 'application/json' if con_respuesta else 'application/xml'), stream=True, timeout=(config.connect_timeout, config.read_timeout), verify=config.verify, allow_redirects=False)
                 try:
                     if response.status_code != 200:
                         error = {404: GatewayEvidenceNotFound, 409: GatewayEvidenceConflict}.get(response.status_code, _STATUS_ERROR.get(response.status_code, GatewayInvalidResponse))

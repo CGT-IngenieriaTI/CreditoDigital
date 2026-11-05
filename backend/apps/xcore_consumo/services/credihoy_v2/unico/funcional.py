@@ -2,6 +2,8 @@
 
 
 
+
+
 from decimal import Decimal
 from dataclasses import replace
 import hashlib
@@ -36,19 +38,36 @@ class ConflictoFuncional(ValueError):
     pass
 
 
-def obtener_para_evaluacion(solicitud_id, operador, *, autogestion=False, lock=False):
-    if not autogestion:return obtener(solicitud_id,operador,lock=lock)
+def obtener_para_evaluacion(solicitud_id, operador, *, autogestion=False, lock=False, revision_conservada=False):
+    if revision_conservada and (not autogestion):
+        raise ConflictoFuncional('REVISION_CONSERVADA_REQUIERE_AUTOGESTION')
+    if not autogestion:
+        return obtener(solicitud_id, operador, lock=lock)
     from django.conf import settings
     from apps.solicitudes.models import Solicitud
     from .autoservicio import validar_vinculo_consumo
-    if (getattr(settings,'CREDIHOY_EVALUACION_AUTOGESTION_ENABLED',False) is not True
-            or not operador.is_authenticated or not operador.is_active or not operador.is_staff
-            or not operador.has_perm('xcore_consumo.add_evaluacionconsumo')):
+    if not operador.is_authenticated or not operador.is_active or (not operador.is_staff) or (not operador.has_perm('xcore_consumo.add_evaluacionconsumo')):
         raise ConflictoFuncional('EVALUACION_AUTOGESTION_NO_HABILITADA')
-    query=Solicitud.objects.select_related('solicitante')
-    if lock:query=query.select_for_update(of=('self',))
-    return validar_vinculo_consumo(query.get(pk=solicitud_id,asesor__isnull=True,
-        metadatos__modo='AUTOGESTION_ENVIADA'))
+    if not revision_conservada and getattr(settings, 'CREDIHOY_EVALUACION_AUTOGESTION_ENABLED', False) is not True:
+        raise ConflictoFuncional('EVALUACION_AUTOGESTION_NO_HABILITADA')
+    query = Solicitud.objects.select_related('solicitante')
+    if lock:
+        query = query.select_for_update(of=('self',))
+    case = validar_vinculo_consumo(query.get(pk=solicitud_id, asesor__isnull=True, metadatos__modo='AUTOGESTION_ENVIADA'))
+    if revision_conservada:
+        from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
+        evaluation = EvaluacionConsumo.objects.get(solicitud=case)
+        if evaluation.input_snapshot.get('revisionHdcActiva'):
+            raise ConflictoFuncional('REVISION_HISTORICA_NO_MODIFICABLE_POR_CONTINUIDAD')
+        intent = AuditLog.objects.get(solicitud=case, event='credihoy_continuacion_solicitada_v1')
+        AuditLog.objects.get(solicitud=case, event='credihoy_continuacion_evento_completado_v1', request_id=intent.request_id)
+        if not AuditLog.objects.filter(solicitud=case, event='credihoy_cupo_hdc_reservado_v1').exists():
+            raise ConflictoFuncional('REVISION_SIN_ALCANCE_INSTITUCIONAL')
+        operation = OperacionGateway.objects.filter(pk=evaluation.input_snapshot[KEY_HDC]['operacionId'], solicitud=case, consentimiento=_firma(case), proveedor='HDC', estado='COMPLETADA').first()
+        if operation is None:
+            raise ConflictoFuncional('REVISION_SIN_HDC_CONSERVADA')
+        _exigir_recibo_hdc(operation)
+    return case
 
 
 def _exigir_recibo_hdc(op):
@@ -648,7 +667,7 @@ def preparar_revision_estudio(solicitud_id, operador):
         raise ValueError('REVISION_REQUIERE_AUTOCOMMIT')
     if not operador.is_authenticated or not operador.is_active or (not operador.is_staff) or (not operador.has_perm('xcore_consumo.add_evaluacionconsumo')):
         raise ValueError('REVISION_OPERADOR_NO_AUTORIZADO')
-    case = obtener_para_evaluacion(solicitud_id, operador, autogestion=True)
+    case = obtener_para_evaluacion(solicitud_id, operador, autogestion=True, revision_conservada=True)
     consent = _firma(case)
     evaluation = EvaluacionConsumo.objects.get(solicitud=case)
     leer_estado_funcional(case)
@@ -678,7 +697,7 @@ def preparar_revision_estudio(solicitud_id, operador):
     evaluated = evaluar_respuestas_controladas(entry, hdc=operation, operaciones_esperadas={operation.operacion_id: ('HDC', operation.request_id)}, ingresos=context.ingresos, hechos_reglas=context.reglas, fecha=context.fecha_evaluacion or timezone.now(), request_id=reference, descuentos_nomina=context.descuentos_nomina, cuota_estimada=context.cuota_estimada if context.cuota_estimada.disponible else None, informe_xml=xml, fecha_consulta_hdc=queried, custodia_respuesta_sha256=proof)
     evaluated.update(solicitudId=str(case.pk), estadoTramite='SUBSANACION_REQUERIDA' if any((r['codigo'] == 'UNICO_FILA_9' and r['estadoEvaluacion'] == 'NO_CUMPLE' for r in evaluated['reglas'])) else 'EN_REVISION', HDCNuevas=0)
     with transaction.atomic(durable=True):
-        locked = obtener_para_evaluacion(case.pk, operador, autogestion=True, lock=True)
+        locked = obtener_para_evaluacion(case.pk, operador, autogestion=True, lock=True, revision_conservada=True)
         current = EvaluacionConsumo.objects.get(pk=evaluation.pk, solicitud=locked)
         current_hash = hashlib.sha256(json.dumps({'input': current.input_snapshot, 'resultados': current.resultados}, sort_keys=True, default=str).encode()).hexdigest()
         current_detail = SolicitudConsumo.objects.get(solicitud=locked)

@@ -1,6 +1,8 @@
 """Dos proyecciones de lectura del expediente; no reevalua ni consulta proveedores."""
 
 
+
+
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json

@@ -1,4 +1,6 @@
 """Seleccion automatica desde hechos api_data. Solo lee catalogo; no cotiza."""
+
+
 from django.conf import settings
 from ..pagaduria import PagaduriaLinix
 from apps.xcore_consumo.tasas_models import AsignacionTarifaCredihoy, TasaComercialCredihoy
@@ -6,33 +8,27 @@ from .tasas import hoy, vigente, comparar_tarifa, condiciones_aprobadas
 
 
 def resolver_condicion(pagaduria, tasa_linix=None, *, corte=None, contexto_certificado=False):
-    result={'estado':'TARIFA_NO_DETERMINADA','linea':None,'lineaOrigen':None,
-        'tasaComercialNamv':None,'tasaLinixNamv':tasa_linix,'diferenciaPuntos':None,
-        'contratoConcordante':False,'referenciaComercial':None,'motivos':['PAGADURIA_NO_ACREDITADA']}
-    if (not isinstance(pagaduria,PagaduriaLinix) or pagaduria.estado!='DISPONIBLE'
-            or pagaduria.activa is not True or pagaduria.tipo not in ('N','V')):
+    result = {'estado': 'TARIFA_NO_DETERMINADA', 'linea': None, 'lineaOrigen': None, 'tasaComercialNamv': None, 'tasaLinixNamv': tasa_linix, 'diferenciaPuntos': None, 'contratoConcordante': False, 'referenciaComercial': None, 'motivos': ['PAGADURIA_NO_ACREDITADA']}
+    if not isinstance(pagaduria, PagaduriaLinix) or pagaduria.estado != 'DISPONIBLE' or pagaduria.activa is not True or (pagaduria.tipo not in ('N', 'V')):
         return result
-    result.update(lineaOrigen={'N':'NOMINA','V':'VENTANILLA'}[pagaduria.tipo],
-        pagaduria={'codigo':pagaduria.codigo,'tipo':pagaduria.tipo,'activa':pagaduria.activa,
-            'fuente':pagaduria.fuente,'fechaConsulta':pagaduria.fechaConsulta,'requestId':pagaduria.requestId},
-        motivos=['ASOCIACION_COMERCIAL_NO_RATIFICADA'])
-    if not getattr(settings,'CREDIHOY_TASAS_ENABLED',False):return result
-    corte=corte or hoy()
-    assignments=AsignacionTarifaCredihoy.objects.filter(perfil__producto='390',perfil__modalidad='111',
-        alcance='TIPO',tipo_nomina=pagaduria.tipo,medio_pago='').prefetch_related('eventos')
-    matches=[v for v in assignments if vigente(v,corte)]
-    if len(matches)!=1:return result
-    assignment=matches[0]
-    documental=condiciones_aprobadas(assignment)
-    result.update(asignacionId=assignment.pk,versionAsignacion=assignment.numero_version,
-        referenciaAsignacion=documental['referencia'] if documental else assignment.referencia,
-        soporteAsignacionSha256=documental['soporteSha256'] if documental else assignment.soporte_sha256,
-        linea=assignment.linea)
-    rates=TasaComercialCredihoy.objects.filter(perfil=assignment.perfil,linea=assignment.linea).prefetch_related('eventos')
-    selected=[v for v in rates if vigente(v,corte)]
-    if len(selected)!=1:
-        return {**result,'motivos':['TARIFA_VIGENTE_UNIVOCA_AUSENTE']}
-    return comparar_tarifa(result,selected[0],tasa_linix,contexto_certificado)
+    result.update(lineaOrigen={'N': 'NOMINA', 'V': 'VENTANILLA'}[pagaduria.tipo], pagaduria={'codigo': pagaduria.codigo, 'tipo': pagaduria.tipo, 'activa': pagaduria.activa, 'fuente': pagaduria.fuente, 'fechaConsulta': pagaduria.fechaConsulta, 'requestId': pagaduria.requestId}, motivos=['ASOCIACION_COMERCIAL_NO_RATIFICADA'])
+    if not getattr(settings, 'CREDIHOY_TASAS_ENABLED', False):
+        return result
+    corte = corte or hoy()
+    assignments = AsignacionTarifaCredihoy.objects.filter(perfil__producto='390', perfil__modalidad='111', alcance='TIPO', tipo_nomina=pagaduria.tipo, medio_pago='').prefetch_related('eventos')
+    matches = [v for v in assignments if vigente(v, corte)]
+    if len(matches) != 1:
+        return result
+    assignment = matches[0]
+    if assignment.linea != {'N': 'LIBRANZA', 'V': 'VENTANILLA'}[pagaduria.tipo]:
+        return {**result, 'motivos': ['ASIGNACION_NO_CORRESPONDE_A_TIPO_NOMINA']}
+    documental = condiciones_aprobadas(assignment)
+    result.update(asignacionId=assignment.pk, versionAsignacion=assignment.numero_version, referenciaAsignacion=documental['referencia'] if documental else assignment.referencia, soporteAsignacionSha256=documental['soporteSha256'] if documental else assignment.soporte_sha256, linea=assignment.linea)
+    rates = TasaComercialCredihoy.objects.filter(perfil=assignment.perfil, linea=assignment.linea).prefetch_related('eventos')
+    selected = [v for v in rates if vigente(v, corte)]
+    if len(selected) != 1:
+        return {**result, 'motivos': ['TARIFA_VIGENTE_UNIVOCA_AUSENTE']}
+    return comparar_tarifa(result, selected[0], tasa_linix, contexto_certificado)
 
 
 def pagaduria_seleccion(selected):

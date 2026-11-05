@@ -105,7 +105,7 @@ export function BorradorAsociado({operar,alEnviar,nombre,perfil,simular,recogida
         if(seq===secuenciaSim.current)setErrorCuota(`Elige un monto entre ${moneda(limits.montoMinimo)} y ${moneda(limits.montoMaximo)}, y un plazo de ${limits.cuotasMinimas} a ${limits.cuotasMaximas} meses, sujeto al monto.`);
         return;
       }
-      const value=await simular(reference,{monto,plazoMeses:Number(plazo),linea:'VENTANILLA'});
+      const value=await simular(reference,{monto,plazoMeses:Number(plazo)});
       if(seq===secuenciaSim.current)setSimulacion(value);
     }catch{if(seq===secuenciaSim.current)setErrorCuota('No pudimos calcular la cuota. Revisa los limites disponibles o vuelve a consultar; tus datos siguen guardados.');}
     finally{if(seq===secuenciaSim.current)setCalculando(false);}

@@ -1,4 +1,6 @@
 """Puerta de negocio previa a LINIX; no calcula riesgo ni emite decisiones."""
+
+
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -383,80 +385,62 @@ def evaluar_decision_digital(c, *, ahora):
     from datetime import timezone
     from .condiciones_producto import politica_digital
     from .estamentos import ORDINARIO, FAMILIAR, COLABORADOR, VERSION as EST_VERSION
-    p=politica_digital()
-    result={'versionPolitica':p['version'],'referencia':p['referencia'],'responsable':p['responsable'],
-        'fechaDecisionPolitica':p['fechaDecision'],'solicitudId':c.solicitud_id,
-        'estado':'SUBSANACION_DIGITAL','reglasOriginales':deepcopy(c.reglas),'reglasFuncionales':[],
-        'alertas':[],'autorizaContinuacionInstitucional':False,'decisionLinixRegistrada':False,
-        'requiereAprobadorManualOrdinario':False,'ejecutaStart':False,'autorizaDesembolso':False}
-    if (c.perfil!=PERFIL or ahora.utcoffset() is None
-            or ahora<datetime(2026,10,26,tzinfo=timezone.utc)):
-        return {**result,'estado':'POLITICA_NO_APLICABLE'}
-    classification=c.clasificacion_estamentos
+    p = politica_digital()
+    result = {'versionPolitica': p['version'], 'referencia': p['referencia'], 'responsable': p['responsable'], 'fechaDecisionPolitica': p['fechaDecision'], 'solicitudId': c.solicitud_id, 'estado': 'SUBSANACION_DIGITAL', 'reglasOriginales': deepcopy(c.reglas), 'reglasFuncionales': [], 'alertas': [], 'autorizaContinuacionInstitucional': False, 'decisionLinixRegistrada': False, 'requiereAprobadorManualOrdinario': False, 'ejecutaStart': False, 'autorizaDesembolso': False}
+    if c.perfil != PERFIL or ahora.utcoffset() is None or ahora < datetime(2026, 10, 26, tzinfo=timezone.utc):
+        return {**result, 'estado': 'POLITICA_NO_APLICABLE'}
+    classification = c.clasificacion_estamentos
     try:
-        when=datetime.fromisoformat(classification['fechaConsulta'])
-        valid=(classification['version']==EST_VERSION and classification['solicitudId']==c.solicitud_id
-            and c.titular_referencia and classification['titularReferencia']==c.titular_referencia
-            and when.utcoffset() is not None and 0<=(ahora-when).total_seconds()<=300
-            and classification['consultaReferencia'])
-    except (KeyError,TypeError,ValueError):valid=False
-    if not valid:return {**result,'estado':'BLOQUEO_ESTAMENTOS_SIN_EVIDENCIA'}
-    special = classification.get('estado') in {FAMILIAR,COLABORADOR}
-    if not special and (classification.get('estado')!=ORDINARIO or classification.get('autorizaAutomatizacion') is not True):
-        return {**result,'estado':'BLOQUEO_ESTAMENTOS_SIN_EVIDENCIA'}
-    rows=deepcopy(c.reglas)
+        when = datetime.fromisoformat(classification['fechaConsulta'])
+        valid = classification['version'] == EST_VERSION and classification['solicitudId'] == c.solicitud_id and c.titular_referencia and (classification['titularReferencia'] == c.titular_referencia) and (when.utcoffset() is not None) and (0 <= (ahora - when).total_seconds() <= 300) and classification['consultaReferencia']
+    except (KeyError, TypeError, ValueError):
+        valid = False
+    if not valid:
+        return {**result, 'estado': 'BLOQUEO_ESTAMENTOS_SIN_EVIDENCIA'}
+    special = classification.get('estado') in {FAMILIAR, COLABORADOR}
+    if not special and (classification.get('estado') != ORDINARIO or classification.get('autorizaAutomatizacion') is not True):
+        return {**result, 'estado': 'BLOQUEO_ESTAMENTOS_SIN_EVIDENCIA'}
+    rows = deepcopy(c.reglas)
     for row in rows:
-        state=row.get('estadoEvaluacion',row.get('resultado','NO_EVALUABLE'))
-        if row.get('codigo')=='UNICO_FILA_6' and state=='NO_CUMPLE' and row.get('evidencia'):
-            row.update(estadoEvaluacion='CUMPLE',excepcionAplicada=p['excepcionEmbargos'],versionExcepcion=p['version'])
-            result['alertas'].append({'codigo':'CUENTAS_EMBARGADAS','hechoOriginal':deepcopy(next(
-                r for r in c.reglas if r['codigo']=='UNICO_FILA_6')),'excepcion':p['version'],
-                'noOmiteControlLegalCuentaDesembolso':True})
-        elif row.get('codigo')=='UNICO_FILA_6' and state=='NO_CUMPLE':
-            row.update(estadoEvaluacion='NO_EVALUABLE',motivos=['HECHO_EMBARGO_SIN_EVIDENCIA'])
-        if row.get('codigo')=='UNICO_FILA_9' and state=='NO_CUMPLE':
-            row.update(estadoEvaluacion='NO_EVALUABLE',motivos=['SUBSANACION_INFORMACION_DESACTUALIZADA'])
-        if row.get('codigo')=='UNICO_FILA_2' and c.capacidad_estado=='EVALUABLE' and c.capacidad_referencia:
-            if c.capacidad_cumple_criterio is True:row['estadoEvaluacion']='CUMPLE'
-            elif c.capacidad_cumple_criterio is False:row['estadoEvaluacion']='NO_CUMPLE'
-        if row.get('codigo')=='UNICO_FILA_32' and c.resultado_recogida:
-            collection=c.resultado_recogida
-            if collection.get('solicitudId')==c.solicitud_id and collection.get('evidencia'):
-                if collection.get('estado')=='NO_APLICA':
-                    row.update(estadoEvaluacion='NO_APLICA',justificacionExclusion='AUSENCIA_111_ACREDITADA',
-                        referenciaExclusion=collection['evidencia'])
-                elif collection.get('estado')=='CONDICION_RECOGIDA_ACREDITADA_NO_COMPENSADA':
-                    row.update(estadoEvaluacion='CUMPLE',evidencia=deepcopy(collection['evidencia']))
-                elif collection.get('estado')=='REQUIERE_RECOGIDA_OBLIGATORIA':
-                    row.update(estadoEvaluacion='NO_EVALUABLE',motivos=['SUBSANACION_RECOGIDA_OBLIGATORIA'])
-    policy=PoliticaElegibilidad(p['version'],p['referencia'],True,datetime(2026,10,26,tzinfo=timezone.utc),
-        datetime.max.replace(tzinfo=timezone.utc),PERFIL,
-        tuple(ReglaPolitica(code,True,True,True,True,permite_no_aplica=True,
-            referencia_exclusion=p['referencia']) for code in CODIGOS))
-    # Keep consent/conditions/offer controls in the existing transport gate.
-    checked=evaluar_elegibilidad(replace(c,reglas=rows),policy,ahora=ahora)
-    # An authenticated ordinary policy decision replaces the old decision-grant
-    # prerequisite, not consent, offer integrity, conditions or idempotency.
-    transport_causes=[v for v in checked['causales'] if v['codigo']!='DECISION_GRANT_AUSENTE_INVALIDO_O_INCOMPATIBLE']
-    result['preflightRadicacionOrdinaria']={**checked,'causales':transport_causes,
-        'elegible':not transport_causes,'estado':'ELEGIBLE_PARA_RADICACION' if not transport_causes else 'RADICACION_BLOQUEADA',
-        'decisionPoliticaVersion':p['version'],'requiereGrantAprobadorHumano':False,'transporteHabilitado':False}
-    preparation=_preparacion_decision(checked)
-    result.update(reglasFuncionales=rows,preparacion=preparation,
-        causalElegibilidad=deepcopy(preparation['causales']))
-    if preparation['estado']=='NO_ELEGIBLE':result['estado']='RECHAZADO'
-    elif preparation['estado']=='ELEGIBLE_PARA_REVISION':result['estado']='APROBADO'
-    else:result['estado']='SUBSANACION_DIGITAL'
+        state = row.get('estadoEvaluacion', row.get('resultado', 'NO_EVALUABLE'))
+        if row.get('codigo') == 'UNICO_FILA_6' and state == 'NO_CUMPLE' and row.get('evidencia'):
+            row.update(efecto='INFORMATIVO', excepcionAplicada=p['excepcionEmbargos'], versionExcepcion=p['version'])
+            result['alertas'].append({'codigo': 'CUENTAS_EMBARGADAS', 'hechoOriginal': deepcopy(next((r for r in c.reglas if r['codigo'] == 'UNICO_FILA_6'))), 'excepcion': p['version'], 'noOmiteControlLegalCuentaDesembolso': True})
+        elif row.get('codigo') == 'UNICO_FILA_6' and state == 'NO_CUMPLE':
+            row.update(estadoEvaluacion='NO_EVALUABLE', motivos=['HECHO_EMBARGO_SIN_EVIDENCIA'])
+        if row.get('codigo') == 'UNICO_FILA_9' and state == 'NO_CUMPLE':
+            row.update(estadoEvaluacion='NO_EVALUABLE', motivos=['SUBSANACION_INFORMACION_DESACTUALIZADA'])
+        if row.get('codigo') == 'UNICO_FILA_2' and c.capacidad_estado == 'EVALUABLE' and c.capacidad_referencia:
+            if c.capacidad_cumple_criterio is True:
+                row['estadoEvaluacion'] = 'CUMPLE'
+            elif c.capacidad_cumple_criterio is False:
+                row['estadoEvaluacion'] = 'NO_CUMPLE'
+        if row.get('codigo') == 'UNICO_FILA_32' and c.resultado_recogida:
+            collection = c.resultado_recogida
+            if collection.get('solicitudId') == c.solicitud_id and collection.get('evidencia'):
+                if collection.get('estado') == 'NO_APLICA':
+                    row.update(estadoEvaluacion='NO_APLICA', justificacionExclusion='AUSENCIA_111_ACREDITADA', referenciaExclusion=collection['evidencia'])
+                elif collection.get('estado') == 'CONDICION_RECOGIDA_ACREDITADA_NO_COMPENSADA':
+                    row.update(estadoEvaluacion='CUMPLE', evidencia=deepcopy(collection['evidencia']))
+                elif collection.get('estado') == 'REQUIERE_RECOGIDA_OBLIGATORIA':
+                    row.update(estadoEvaluacion='NO_EVALUABLE', motivos=['SUBSANACION_RECOGIDA_OBLIGATORIA'])
+    policy = PoliticaElegibilidad(p['version'], p['referencia'], True, datetime(2026, 10, 26, tzinfo=timezone.utc), datetime.max.replace(tzinfo=timezone.utc), PERFIL, tuple((ReglaPolitica(code, code != 'UNICO_FILA_6', True, True, code != 'UNICO_FILA_6', permite_no_aplica=True, referencia_exclusion=p['referencia']) for code in CODIGOS)))
+    checked = evaluar_elegibilidad(replace(c, reglas=rows), policy, ahora=ahora)
+    transport_causes = [v for v in checked['causales'] if v['codigo'] != 'DECISION_GRANT_AUSENTE_INVALIDO_O_INCOMPATIBLE']
+    result['preflightRadicacionOrdinaria'] = {**checked, 'causales': transport_causes, 'elegible': not transport_causes, 'estado': 'ELEGIBLE_PARA_RADICACION' if not transport_causes else 'RADICACION_BLOQUEADA', 'decisionPoliticaVersion': p['version'], 'requiereGrantAprobadorHumano': False, 'transporteHabilitado': False}
+    preparation = _preparacion_decision(checked)
+    result.update(reglasFuncionales=rows, preparacion=preparation, causalElegibilidad=deepcopy(preparation['causales']))
+    if preparation['estado'] == 'NO_ELEGIBLE':
+        result['estado'] = 'RECHAZADO'
+    elif preparation['estado'] == 'ELEGIBLE_PARA_REVISION':
+        result['estado'] = 'APROBADO'
+    else:
+        result['estado'] = 'SUBSANACION_DIGITAL'
     if special:
-        # The same 16 rules/conditions govern intake. No committee decision is
-        # fabricated and no special case becomes an ordinary approval.
-        result['preflightRadicacionEspecial'] = {**result.pop('preflightRadicacionOrdinaria'),
-            'modo':'ESPECIAL', 'requiereSeleccionHumana':True}
-        result.update(estado=classification['estado'], estamento=deepcopy(classification),
-            accionPermitida='PREPARAR_RADICACION_HASTA_SELECCION_HUMANA',
-            decisionLinixRegistrada=False)
+        result['preflightRadicacionEspecial'] = {**result.pop('preflightRadicacionOrdinaria'), 'modo': 'ESPECIAL', 'requiereSeleccionHumana': True}
+        result.update(estado=classification['estado'], estamento=deepcopy(classification), accionPermitida='PREPARAR_RADICACION_HASTA_SELECCION_HUMANA', decisionLinixRegistrada=False)
     if c.start_previos or c.intencion_existente or c.flujo_existente:
-        result.update(accionPermitida='SOLO_CONCILIAR',autorizaContinuacionInstitucional=False)
+        result.update(accionPermitida='SOLO_CONCILIAR', autorizaContinuacionInstitucional=False)
     return result
 
 

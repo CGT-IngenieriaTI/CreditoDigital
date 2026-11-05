@@ -535,8 +535,10 @@ class PersonalAuthorizationTests(TestCase):
             detail=SolicitudConsumo.objects.get(solicitud=case)
             detail.form_data.update(periodicidadPago='MENSUAL',recogerCredihoy=False)
             detail.save(update_fields=['form_data'])
-            for invalid in (replace(args['operacion'],respuesta=None),replace(args['operacion'],reutilizada=True)):
-                with self.assertRaisesRegex(ValueError,'RESPUESTA_NO_RECUPERABLE_O_PENDIENTE_CONCILIACION'):
+            for invalid,message in (
+                    (replace(args['operacion'],respuesta=None),'RESPUESTA_NO_RECUPERABLE_O_PENDIENTE_CONCILIACION'),
+                    (replace(args['operacion'],reutilizada=True),'RESPUESTA_REUTILIZADA_SIN_CUSTODIA_VERIFICADA')):
+                with self.assertRaisesRegex(ValueError,message):
                     registrar_resultado_consulta_hdc(case.pk,actor,**{**args,'operacion':invalid})
         self.assertFalse(EvaluacionConsumo.objects.exists())
         self.assertFalse(AuditLog.objects.filter(event='CREDIHOY_RESULTADO_HDC_REAL_REGISTRADO').exists())

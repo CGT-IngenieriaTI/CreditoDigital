@@ -41,12 +41,13 @@ class ContinuacionTests(TransactionTestCase):
         for p in (self.config,self.authorization,self.validation):p.start();self.addCleanup(p.stop)
         from apps.xcore_consumo.services.credihoy_v2.base import Hecho
         from apps.xcore_consumo.services.credihoy_v2.unico.reglas import HechosReglasUnicoV2
-        from apps.xcore_consumo.services.credihoy_v2.unico.hechos_continuacion import obtener
+        from apps.xcore_consumo.services.credihoy_v2.unico.hechos_continuacion import obtener, ContextoHechosContinuacion
         self.obtener_hechos_real=obtener
         facts=patch('apps.xcore_consumo.services.credihoy_v2.unico.hechos_continuacion.obtener',
-            return_value=(Hecho(fuente='SYNTHETIC_UNAVAILABLE'),HechosReglasUnicoV2(),
-                Hecho(fuente='SYNTHETIC_PAYROLL_UNAVAILABLE')))
-        facts.start();self.addCleanup(facts.stop)
+            return_value=ContextoHechosContinuacion(ingresos=Hecho(fuente='SYNTHETIC_UNAVAILABLE'),
+                reglas=HechosReglasUnicoV2(),descuentos_nomina=Hecho(fuente='SYNTHETIC_PAYROLL_UNAVAILABLE'),
+                cuota_estimada=Hecho(fuente='SYNTHETIC_QUOTA_UNAVAILABLE')))
+        self.hechos_mock=facts.start();self.addCleanup(facts.stop)
 
     def run_case(self):return continuar_credihoy_unico(self.sid,operador=self.operator)
 
@@ -379,6 +380,22 @@ class ContinuacionTests(TransactionTestCase):
         result=SimpleNamespace(operacion_id=uuid4(),respuesta=None,reutilizada=True,estado='COMPLETADA')
         with patch('apps.integraciones.risk_gateway.operaciones.servicio.OrquestadorGateway.ejecutar',return_value=result),patch('apps.xcore_consumo.services.credihoy_v2.unico.funcional.registrar_resultado_consulta_hdc') as evaluate:
             self.assertEqual(self.run_case()['estado'],'PENDIENTE_CONCILIACION');evaluate.assert_not_called()
+
+    def test_native_continuation_transports_the_bound_estimate_to_the_evaluator(self):
+        from dataclasses import replace
+        from decimal import Decimal
+        from apps.xcore_consumo.services.credihoy_v2.base import Hecho, EstadoCertificacion as EC
+        quote=Hecho(valor=Decimal('70000.10'),disponible=True,fuente='SYNTHETIC_SIMULATOR',
+            estado_certificacion=EC.OBSERVADO,referencia_evidencia='SYNTHETIC-ONLY',
+            ruta_origen='simulacion.cuotaEstimada')
+        self.hechos_mock.return_value=replace(self.hechos_mock.return_value,cuota_estimada=quote)
+        result=SimpleNamespace(operacion_id=uuid4(),respuesta=object(),reutilizada=False,estado='COMPLETADA')
+        with patch('apps.integraciones.risk_gateway.operaciones.servicio.OrquestadorGateway.ejecutar',return_value=result),patch(
+                'apps.xcore_consumo.services.credihoy_v2.unico.funcional.registrar_resultado_consulta_hdc') as evaluate:
+            self.assertEqual(self.run_case()['estado'],'EVALUACION_COMPLETADA')
+            self.assertIs(evaluate.call_args.kwargs['cuota_estimada'],quote)
+        self.hechos_mock.assert_called_once()
+        self.assertTrue(self.hechos_mock.call_args.kwargs['con_contexto'])
 
     def test_failed_evaluation_is_journaled_without_silently_retrying_hdc(self):
         result=SimpleNamespace(operacion_id=uuid4(),respuesta=object(),reutilizada=False,estado='COMPLETADA')

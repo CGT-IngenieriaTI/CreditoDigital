@@ -1,4 +1,6 @@
 """DHWS3 v1.9 tables 16/27 over an already owned and integrity-checked SOAP."""
+
+
 from dataclasses import dataclass
 from datetime import date, datetime
 import hashlib
@@ -73,3 +75,29 @@ def leer_embargos_persistidos(xml: bytes, *, referencia: str, fecha_consulta: da
             'Conteo explicito de la alerta; no se suma con cuentas para evitar duplicidad'),
         cuentas_embargadas_observadas=seized,cuentas_reactivadas_observadas=reactivated,
         cobertura_cuentas_completa=complete)
+
+
+def informe_hdc_concordante(xml, evidence):
+    """Bind the stored XML to the normalized report before deriving new facts."""
+    if not isinstance(xml, bytes) or not 0 < len(xml) <= 16 * 1024 * 1024:
+        raise ValueError('XML_HDC_INVALIDO')
+
+    def parse(raw):
+        try:
+            root = etree.fromstring(raw, etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True))
+        except etree.XMLSyntaxError:
+            raise ValueError('XML_HDC_INVALIDO') from None
+        if root.getroottree().docinfo.doctype:
+            raise ValueError('XML_DTD_PROHIBIDO')
+        return root
+    roots = [parse(xml)]
+    for node in roots[0].iter():
+        if node.text and node.text.lstrip().startswith('<'):
+            roots.append(parse(node.text.encode()))
+    reports = []
+    for root in roots:
+        reports.extend(root.xpath('//*[local-name()="Informes"]/*[local-name()="Informe"]'))
+    expected = dict(evidence['resultado']['atributos_informe_originales'])
+    if len(reports) != 1 or not expected or dict(reports[0].attrib) != expected:
+        raise ValueError('XML_HDC_NO_CORRESPONDE_A_RESPUESTA')
+    return etree.tostring(reports[0].getparent())

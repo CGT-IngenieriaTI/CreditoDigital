@@ -1,4 +1,6 @@
 """Private HTTP transport, never a staff token or a browser credential."""
+
+
 import hashlib
 import hmac
 import json
@@ -464,40 +466,62 @@ def project_row(row):
 def project_study(value, solicitud_id):
     from datetime import datetime, timezone
     try:
-        fields={'versionContrato','solicitudId','evaluacionBaseId','version','referenciaVersion',
-            'fechaEvaluacion','reglas','capacidad','decision','autorizadoDecisionCrediticia'}
-        if (type(value) is not dict or set(value)!=fields or value['versionContrato']!='credihoy-estudio-publico-v1'
-                or value['solicitudId']!=str(solicitud_id) or str(UUID(value['solicitudId']))!=value['solicitudId']
-                or type(value['evaluacionBaseId']) is not int or value['evaluacionBaseId']<1
-                or type(value['version']) is not int or value['version']<1
-                or str(UUID(value['referenciaVersion']))!=value['referenciaVersion']
-                or value['autorizadoDecisionCrediticia'] is not False
-                or value['decision'] not in {'PENDIENTE_REVISION','REQUIERE_SUBSANACION'}):raise ValueError
-        observed=datetime.fromisoformat(value['fechaEvaluacion'])
-        if observed.utcoffset() is None or observed>datetime.now(timezone.utc):raise ValueError
-        codes={f'UNICO_FILA_{n}' for n in (2,4,6,9,10,12,14,17,21,23,24,27,28,30,31,32)}
-        rows=value['reglas']
-        if type(rows) is not list or len(rows)!=16 or {r.get('codigo') for r in rows}!=codes:raise ValueError
+        fields = {'versionContrato', 'solicitudId', 'evaluacionBaseId', 'version', 'referenciaVersion', 'fechaEvaluacion', 'reglas', 'capacidad', 'decision', 'autorizadoDecisionCrediticia'}
+        if type(value) is not dict or set(value) != fields or value['versionContrato'] != 'credihoy-estudio-publico-v1' or (value['solicitudId'] != str(solicitud_id)) or (str(UUID(value['solicitudId'])) != value['solicitudId']) or (type(value['evaluacionBaseId']) is not int) or (value['evaluacionBaseId'] < 1) or (type(value['version']) is not int) or (value['version'] < 1) or (str(UUID(value['referenciaVersion'])) != value['referenciaVersion']) or (value['autorizadoDecisionCrediticia'] is not False) or (value['decision'] not in {'PENDIENTE_REVISION', 'REQUIERE_SUBSANACION'}):
+            raise ValueError
+        observed = datetime.fromisoformat(value['fechaEvaluacion'])
+        if observed.utcoffset() is None or observed > datetime.now(timezone.utc):
+            raise ValueError
+        codes = {f'UNICO_FILA_{n}' for n in (2, 4, 6, 9, 10, 12, 14, 17, 21, 23, 24, 27, 28, 30, 31, 32)}
+        rows = value['reglas']
+        if type(rows) is not list or len(rows) != 16 or {r.get('codigo') for r in rows} != codes:
+            raise ValueError
         for row in rows:
-            if (type(row) is not dict or set(row)!={'codigo','nombre','resultado','estadoEvaluacion','motivos','datosFaltantes'}
-                    or row['resultado'] not in {'CUMPLE','NO_CUMPLE','NO_EVALUABLE'}
-                    or row['estadoEvaluacion'] not in {'CUMPLE','NO_CUMPLE','NO_EVALUABLE','NO_APLICA','PENDIENTE_POLITICA'}
-                    or type(row['nombre']) is not str or not 1<=len(row['nombre'])<=120):raise ValueError
-            for key in ('motivos','datosFaltantes'):
-                if type(row[key]) is not list or len(row[key])>20 or any(type(v) is not str or not 1<=len(v)<=240 for v in row[key]):raise ValueError
-        cap=value['capacidad']
-        capacity_fields={'estado','valor','preliminarNoDecisoria','cuotaContractualDisponible'}
-        separated=('capacidadDisponible','capacidadResidualPostCuota') if value['version']>=8 else ()
-        if (type(cap) is not dict or set(cap)!=capacity_fields|set(separated)
-                or cap['estado'] not in {'EVALUABLE','NO_EVALUABLE','INFORMACION_INCONSISTENTE'}
-                or cap['cuotaContractualDisponible'] is not False):raise ValueError
-        for key in ('valor','preliminarNoDecisoria')+separated:
-            if cap[key] is not None and (type(cap[key]) is not str or not re.fullmatch(r'-?[0-9]{1,15}(?:\.[0-9]{1,8})?',cap[key])):raise ValueError
-        if any(cap[key] is None for key in separated):raise ValueError
-        if (cap['estado']=='EVALUABLE')!=(cap['valor'] is not None):raise ValueError
+            if type(row) is not dict or set(row) != {'codigo', 'nombre', 'resultado', 'estadoEvaluacion', 'motivos', 'datosFaltantes'} or row['resultado'] not in {'CUMPLE', 'NO_CUMPLE', 'NO_EVALUABLE'} or (row['estadoEvaluacion'] not in {'CUMPLE', 'NO_CUMPLE', 'NO_EVALUABLE', 'NO_APLICA', 'PENDIENTE_POLITICA'}) or (type(row['nombre']) is not str) or (not 1 <= len(row['nombre']) <= 120):
+                raise ValueError
+            for key in ('motivos', 'datosFaltantes'):
+                if type(row[key]) is not list or len(row[key]) > 20 or any((type(v) is not str or not 1 <= len(v) <= 240 for v in row[key])):
+                    raise ValueError
+        cap = value['capacidad']
+        capacity_fields = {'estado', 'valor', 'preliminarNoDecisoria', 'cuotaContractualDisponible'}
+        if 'metodologia' in cap:
+            if value['version'] < 2:
+                raise ValueError
+            capacity_fields.add('metodologia')
+            method = cap['metodologia']
+            amounts = ('disponibleAntesGastosFamiliares', 'gastosFamiliaresAplicados', 'capacidadDisponible', 'cuotaNuevaEstimada', 'residualPosteriorEstimado')
+            if type(method) is not dict or set(method) != {'version', 'deudaConciliada', *amounts} or method['version'] != 'credihoy-capacidad-publica-v1' or (type(method['deudaConciliada']) is not bool):
+                raise ValueError
+            for key in amounts:
+                if method[key] is not None and (type(method[key]) is not str or not re.fullmatch('-?[0-9]{1,15}(?:\\.[0-9]{1,8})?', method[key])):
+                    raise ValueError
+            from decimal import Decimal, localcontext
+            with localcontext() as context:
+                context.prec = 60
+                if method['gastosFamiliaresAplicados'] is not None and Decimal(method['gastosFamiliaresAplicados']) < 0:
+                    raise ValueError
+                if method['cuotaNuevaEstimada'] is not None and Decimal(method['cuotaNuevaEstimada']) <= 0:
+                    raise ValueError
+                if all((method[k] is not None for k in amounts[:3])):
+                    if Decimal(method[amounts[0]]) - Decimal(method[amounts[1]]) != Decimal(method[amounts[2]]):
+                        raise ValueError
+                if all((method[k] is not None for k in amounts[2:])):
+                    if Decimal(method[amounts[2]]) - Decimal(method[amounts[3]]) != Decimal(method[amounts[4]]):
+                        raise ValueError
+        separated = ('capacidadDisponible', 'capacidadResidualPostCuota') if value['version'] >= 8 else ()
+        if type(cap) is not dict or set(cap) != capacity_fields | set(separated) or cap['estado'] not in {'EVALUABLE', 'NO_EVALUABLE', 'INFORMACION_INCONSISTENTE'} or (cap['cuotaContractualDisponible'] is not False):
+            raise ValueError
+        for key in ('valor', 'preliminarNoDecisoria') + separated:
+            if cap[key] is not None and (type(cap[key]) is not str or not re.fullmatch('-?[0-9]{1,15}(?:\\.[0-9]{1,8})?', cap[key])):
+                raise ValueError
+        if any((cap[key] is None for key in separated)):
+            raise ValueError
+        if (cap['estado'] == 'EVALUABLE') != (cap['valor'] is not None):
+            raise ValueError
         import copy
         return copy.deepcopy(value)
-    except (KeyError,ValueError,TypeError,AttributeError):raise NoDisponible from None
+    except (KeyError, ValueError, TypeError, AttributeError):
+        raise NoDisponible from None
 
 
 def project_simulation(row):

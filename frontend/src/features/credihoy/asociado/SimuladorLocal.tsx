@@ -9,7 +9,6 @@ const cop=(v:string)=>new Intl.NumberFormat('es-CO',{style:'currency',currency:'
 export function SimuladorLocal({sid,montoInicial,plazoInicial,operar,continuar}:{sid:string;montoInicial:string;
   plazoInicial:number;operar:OperarSimulacion;continuar:()=>void}){
   const [monto,setMonto]=useState(montoInicial),[plazo,setPlazo]=useState(String(plazoInicial));
-  const [linea,setLinea]=useState<'VENTANILLA'|'LIBRANZA'>('VENTANILLA');
   const [data,setData]=useState<SimulacionLocal|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const alive=useRef(true),guard=useRef(false),generation=useRef(0);
   useEffect(()=>{alive.current=true;void run();return()=>{alive.current=false;};},[sid]);
@@ -17,7 +16,7 @@ export function SimuladorLocal({sid,montoInicial,plazoInicial,operar,continuar}:
     if(guard.current)return;
     guard.current=true;const token=++generation.current;setBusy(true);setError('');
     setData(previous=>previous?{...previous,resultado:null}:null);
-    try{const value=await operar(sid,escenario);if(alive.current&&token===generation.current){setData(value);setLinea(value.tasa.linea);}}
+    try{const value=await operar(sid,escenario);if(alive.current&&token===generation.current){setData(value);}}
     catch{if(alive.current&&token===generation.current)setError('No pudimos calcular esta simulacion. Revisa el monto, el plazo y los limites vigentes; puedes volver a consultar.');}
     finally{guard.current=false;if(alive.current)setBusy(false);}
   }
@@ -26,10 +25,10 @@ export function SimuladorLocal({sid,montoInicial,plazoInicial,operar,continuar}:
   useEffect(()=>{
     if(busy||error||!l||!monto||!plazo||Number(monto)<Number(l.montoMinimo)||Number(monto)>Number(l.montoMaximo)
       ||!Number.isInteger(Number(plazo))||Number(plazo)<l.cuotasMinimas||Number(plazo)>l.cuotasMaximas
-      ||r&&Number(r.monto)===Number(monto)&&r.plazoMeses===Number(plazo)&&data?.tasa.linea===linea)return;
-    const timer=setTimeout(()=>void run({monto,plazoMeses:Number(plazo),linea}),650);
+      ||r&&Number(r.monto)===Number(monto)&&r.plazoMeses===Number(plazo))return;
+    const timer=setTimeout(()=>void run({monto,plazoMeses:Number(plazo)}),650);
     return()=>clearTimeout(timer);
-  },[monto,plazo,linea,l?.version,busy,error,r?.monto,r?.plazoMeses]);
+  },[monto,plazo,l?.version,busy,error,r?.monto,r?.plazoMeses]);
   return <section className="ca-local-simulator" aria-label="Simulador orientativo CrediHoy" aria-busy={busy}>
     <h3>Simula tu credito</h3>
     <p>Estimacion generica. No determina tu elegibilidad, capacidad de pago ni monto aprobado.</p>
@@ -37,12 +36,8 @@ export function SimuladorLocal({sid,montoInicial,plazoInicial,operar,continuar}:
     {busy&&<p role="status">Calculando...</p>}
     {!l&&!busy&&<button type="button" className="btn btn-outline-primary" onClick={()=>void run()}>
       <RefreshCw size={17} aria-hidden="true"/>Consultar parametros</button>}
-    <form onSubmit={e=>{e.preventDefault();void run({monto,plazoMeses:Number(plazo),linea});}}>
+    <form onSubmit={e=>{e.preventDefault();void run({monto,plazoMeses:Number(plazo)});}}>
       <fieldset className="ca-form-grid" disabled={busy||!l}>
-        <label>Linea a estimar<select className="form-select" name="lineaSimulada" value={linea}
-          onChange={e=>{setLinea(e.target.value as 'VENTANILLA'|'LIBRANZA');clear();}}>
-          <option value="VENTANILLA">Ventanilla</option><option value="LIBRANZA">Libranza</option>
-        </select></label>
         <label>Monto a simular (COP)<input className="form-control" name="montoSimulado" type="number" inputMode="decimal"
           required min={l?.montoMinimo} max={l?.montoMaximo} step="0.01" value={monto}
           onChange={e=>{setMonto(e.target.value);clear();}}/></label>

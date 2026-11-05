@@ -226,3 +226,6 @@
 .ca-study-progress strong { display: block; color: var(--ca-ink); font-size: 14px; font-weight: 600; line-height: 1.5; }
 .ca-study-progress span { display: block; margin-top: 3px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .ca-study-progress .ca-study-progress--done { color: #187764; }
+.ca-methodology { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.ca-methodology dd { font-size: 22px; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .ca-methodology { grid-template-columns: minmax(0,1fr); } }

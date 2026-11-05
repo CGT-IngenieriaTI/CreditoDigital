@@ -1,4 +1,6 @@
 """Proyeccion financiera cifrada externa, solo lectura y sin datos de identidad."""
+
+
 from pathlib import Path
 import json
 
@@ -78,107 +80,88 @@ def operar_simulacion(identity, payload, rid):
     from .condicion_comercial import pagaduria_seleccion, resolver_condicion
     if not simulador_habilitado():
         raise wire.NoDisponible
-    target='borradorId' if 'borradorId' in payload else 'solicitudId'
-    if (not es_simulacion(payload) or set(payload) not in ({target, 'operacion'},
-            {target, 'operacion', 'escenario'})):
+    target = 'borradorId' if 'borradorId' in payload else 'solicitudId'
+    if not es_simulacion(payload) or set(payload) not in ({target, 'operacion'}, {target, 'operacion', 'escenario'}):
         raise ValueError('REQUEST_INVALIDO')
     sid = str(UUID(payload[target]))
     rid = str(UUID(rid))
     expires = datetime.fromisoformat(identity['_sesionExpiraAt'])
-    if (expires.utcoffset() is None or expires <= timezone.now()
-            or str(UUID(identity['_sesionReferencia'])) != identity['_sesionReferencia']):
+    if expires.utcoffset() is None or expires <= timezone.now() or str(UUID(identity['_sesionReferencia'])) != identity['_sesionReferencia']:
         raise wire.NoDisponible
     with fuente_cotizacion():
         alias = alias_cotizacion()
         if alias == 'default':
-            if (getattr(settings, 'CREDIHOY_TITULAR_FUENTE_ENABLED', True) is not True
-                    or getattr(settings, 'CREDIHOY_SEGUIMIENTO_DB_ALIAS', '') != 'default'
-                    or not getattr(settings, 'CREDIHOY_SEGUIMIENTO_SOURCE_REFERENCE', '')):
+            if getattr(settings, 'CREDIHOY_TITULAR_FUENTE_ENABLED', True) is not True or getattr(settings, 'CREDIHOY_SEGUIMIENTO_DB_ALIAS', '') != 'default' or (not getattr(settings, 'CREDIHOY_SEGUIMIENTO_SOURCE_REFERENCE', '')):
                 raise wire.NoDisponible
             permitted = getattr(settings, 'CREDIHOY_PUBLICO_ENSAYO', {}).get('solicitudes', [])
         else:
             if not getattr(settings, 'CREDIHOY_COTIZACION_SOURCE_REFERENCE', ''):
                 raise wire.NoDisponible
             permitted = getattr(settings, 'CREDIHOY_COTIZACION_SOLICITUDES', [])
-            if (not permitted and getattr(settings,'CREDIHOY_AUTORIZACION_TITULAR_ENABLED',False) is True
-                    and getattr(settings,'CREDIHOY_AUTORIZACION_DB_ALIAS','')==alias):
-                # Same already authorized holder/UUID; no contractual quote scope is opened.
-                permitted=getattr(settings,'CREDIHOY_AUTORIZACION_SOLICITUDES',[])
-        draft=target=='borradorId'
+            if not permitted and getattr(settings, 'CREDIHOY_AUTORIZACION_TITULAR_ENABLED', False) is True and (getattr(settings, 'CREDIHOY_AUTORIZACION_DB_ALIAS', '') == alias):
+                permitted = getattr(settings, 'CREDIHOY_AUTORIZACION_SOLICITUDES', [])
+        draft = target == 'borradorId'
         if draft:
             from .progreso_temporal import alias_operativo
             from .publico_seguimiento import document_hmac
             from apps.solicitudes.models import ProgresoTemporalCredihoy
-            from django.db import transaction,connections
-            draft_alias=alias_operativo(lectura={**identity,'_scopeLectura':'solicitudes:leer','_requestId':rid})
+            from django.db import transaction, connections
+            draft_alias = alias_operativo(lectura={**identity, '_scopeLectura': 'solicitudes:leer', '_requestId': rid})
             with transaction.atomic(using=draft_alias):
-                with connections[draft_alias].cursor() as c:c.execute('SET TRANSACTION READ ONLY')
-                if not ProgresoTemporalCredihoy.objects.using(draft_alias).filter(pk=sid,
-                        titular_hmac=document_hmac(identity['numeroDocumento']),vence_at__gt=timezone.now()).exists():raise Http404
-        listed=sid in permitted
-        if not listed and not draft:
+                with connections[draft_alias].cursor() as c:
+                    c.execute('SET TRANSACTION READ ONLY')
+                if not ProgresoTemporalCredihoy.objects.using(draft_alias).filter(pk=sid, titular_hmac=document_hmac(identity['numeroDocumento']), vence_at__gt=timezone.now()).exists():
+                    raise Http404
+        listed = sid in permitted
+        if not listed and (not draft):
             from .publico_controles import admision_ensayo_vigente
-            if not admision_ensayo_vigente():raise Http404
-        s=None
+            if not admision_ensayo_vigente():
+                raise Http404
+        s = None
         if not draft:
             try:
-                s = Solicitud.objects.select_related('solicitante').get(pk=sid, producto=wire.PRODUCTO,
-                    metadatos__modo__in=['CONSULTA_REAL_CONTROLADA', 'AUTOGESTION_ENVIADA'],
-                    solicitante__tipo_identificacion='CC',
-                    solicitante__numero_identificacion=identity['numeroDocumento'])
-            except Solicitud.DoesNotExist:raise Http404 from None
+                s = Solicitud.objects.select_related('solicitante').get(pk=sid, producto=wire.PRODUCTO, metadatos__modo__in=['CONSULTA_REAL_CONTROLADA', 'AUTOGESTION_ENVIADA'], solicitante__tipo_identificacion='CC', solicitante__numero_identificacion=identity['numeroDocumento'])
+            except Solicitud.DoesNotExist:
+                raise Http404 from None
         if s is not None and s.metadatos.get('modo') == 'AUTOGESTION_ENVIADA':
-            from .autoservicio import validar_vinculo_consumo,habilitar_lectura
-            habilitar_lectura({**identity,'_scopeLectura':'solicitudes:leer','_requestId':rid})
+            from .autoservicio import validar_vinculo_consumo, habilitar_lectura
+            habilitar_lectura({**identity, '_scopeLectura': 'solicitudes:leer', '_requestId': rid})
             validar_vinculo_consumo(s)
-        elif not listed and not draft:raise Http404
+        elif not listed and (not draft):
+            raise Http404
         limits = _limites()
         selected = SeleccionTarifaCredihoy.objects.filter(solicitud=s).order_by('-creado_at', '-pk').first() if s is not None else None
-        scenario=payload.get('escenario',{})
-        if type(scenario) is not dict:raise ValueError('ESCENARIO_INVALIDO')
-        line=scenario.get('linea')
-        if line is not None and line not in {'VENTANILLA','LIBRANZA'}:raise ValueError('LINEA_ESTIMACION_INVALIDA')
-        current = resolver_condicion(pagaduria_seleccion(selected)) if (selected is not None and line is None
-            and getattr(settings,'CREDIHOY_TASAS_ENABLED',False) is True) else None
-        if current is not None and line is None and (not current.get('tarifaId') or not current.get('asignacionId')
-                or any(current.get(k) != selected.resultado.get(k) for k in (
-                    'tarifaId', 'versionTarifa', 'asignacionId', 'versionAsignacion',
-                    'soporteTarifaSha256', 'soporteAsignacionSha256', 'tasaComercialNamv'))):
+        scenario = payload.get('escenario', {})
+        if type(scenario) is not dict:
+            raise ValueError('ESCENARIO_INVALIDO')
+        line = scenario.get('linea')
+        if line is not None and line not in {'VENTANILLA', 'LIBRANZA'}:
+            raise ValueError('LINEA_ESTIMACION_INVALIDA')
+        current = resolver_condicion(pagaduria_seleccion(selected) if selected is not None else _pagaduria_identidad(identity, rid))
+        if not current.get('tarifaId') or not current.get('asignacionId'):
+            raise ValueError('PAGADURIA_O_TARIFA_SIMULACION_NO_ACREDITADA')
+        if line is not None and line != current.get('linea'):
+            raise ValueError('LINEA_SIMULACION_NO_CORRESPONDE_A_PAGADURIA')
+        if selected is not None and (not current.get('tarifaId') or not current.get('asignacionId') or any((current.get(k) != selected.resultado.get(k) for k in ('tarifaId', 'versionTarifa', 'asignacionId', 'versionAsignacion', 'soporteTarifaSha256', 'soporteAsignacionSha256', 'tasaComercialNamv')))):
             raise ValueError('CONDICIONES_COMERCIALES_NO_VIGENTES')
-        if current is not None and line is None:
-            tariff = TasaComercialCredihoy.objects.select_related('perfil').prefetch_related('eventos').get(pk=current['tarifaId'])
-        else:
-            # Generic scenario line, not an assignment or a persisted commercial choice.
-            line=line or 'VENTANILLA'
-            candidates=[t for t in TasaComercialCredihoy.objects.filter(perfil__producto='390',
-                perfil__modalidad='111',linea=line).select_related('perfil').prefetch_related('eventos')
-                if tasas.vigente(t,tasas.hoy()) and tasas.condiciones_aprobadas(t)]
-            if len(candidates)!=1:raise ValueError('TARIFA_ACTIVA_NO_UNIVOCA')
-            tariff=candidates[0]
-        if (tariff.linea not in {'VENTANILLA', 'LIBRANZA'}
-                or tariff.tasa_namv != {'VENTANILLA': Decimal('17.69'), 'LIBRANZA': Decimal('16.67')}[tariff.linea]):
+        tariff = TasaComercialCredihoy.objects.select_related('perfil').prefetch_related('eventos').get(pk=current['tarifaId'])
+        if tariff.linea != current.get('linea') or tariff.numero_version != current.get('versionTarifa') or tariff.tasa_namv != Decimal(str(current.get('tasaComercialNamv'))):
+            raise ValueError('CONDICIONES_COMERCIALES_CAMBIARON')
+        if tariff.linea not in {'VENTANILLA', 'LIBRANZA'} or tariff.tasa_namv != {'VENTANILLA': Decimal('17.69'), 'LIBRANZA': Decimal('16.67')}[tariff.linea]:
             raise ValueError('TARIFA_ORIENTATIVA_NO_ACREDITADA')
-        amount, term = Decimal(limits['montoMinimo']), limits['cuotasMinimas']
+        amount, term = (Decimal(limits['montoMinimo']), limits['cuotasMinimas'])
         if 'escenario' in payload:
             e = payload['escenario']
-            if (type(e) is not dict or set(e) not in ({'monto', 'plazoMeses'},{'monto','plazoMeses','linea'})
-                    or type(e['monto']) is not str or not re.fullmatch(r'[0-9]{1,10}(\.[0-9]{1,2})?', e['monto'])
-                    or type(e['plazoMeses']) is not int):
+            if type(e) is not dict or set(e) not in ({'monto', 'plazoMeses'}, {'monto', 'plazoMeses', 'linea'}) or type(e['monto']) is not str or (not re.fullmatch('[0-9]{1,10}(\\.[0-9]{1,2})?', e['monto'])) or (type(e['plazoMeses']) is not int):
                 raise ValueError('ESCENARIO_INVALIDO')
-            amount, term = Decimal(e['monto']), e['plazoMeses']
-            if (not Decimal(limits['montoMinimo']) <= amount <= Decimal(limits['montoMaximo'])
-                    or not limits['cuotasMinimas'] <= term <= limits['cuotasMaximas']):
+            amount, term = (Decimal(e['monto']), e['plazoMeses'])
+            if not Decimal(limits['montoMinimo']) <= amount <= Decimal(limits['montoMaximo']) or not limits['cuotasMinimas'] <= term <= limits['cuotasMaximas']:
                 raise ValueError('ESCENARIO_FUERA_LIMITES')
         subtotal = orientar_capital_interes(amount, term, tarifa=tariff, fecha=tasas.hoy())
         result = orientar_simulacion(subtotal) if 'escenario' in payload else None
         if expires <= timezone.now():
             raise wire.NoDisponible
-        return {'versionContrato': 'credihoy-simulacion-local-v1', target: sid, 'requestId': rid,
-            'alcance': 'ESTIMACION_GENERICA_NO_ELEGIBILIDAD',
-            'limites': limits, 'tasa': {**subtotal['tasa'], 'linea': tariff.linea},
-            'seguro': {k: v for k, v in _seguro(amount).items() if k not in {'baseCOP', 'valorMensualEstimado'}},
-            'resultado': result, 'aviso': AVISO_SIMULACION, 'ofertable': False,
-            'autorizaDecision': False, 'autorizaStart': False, 'autorizaDesembolso': False}
+        return {'versionContrato': 'credihoy-simulacion-local-v1', target: sid, 'requestId': rid, 'alcance': 'ESTIMACION_GENERICA_NO_ELEGIBILIDAD', 'limites': limits, 'tasa': {**subtotal['tasa'], 'linea': tariff.linea}, 'seguro': {k: v for k, v in _seguro(amount).items() if k not in {'baseCOP', 'valorMensualEstimado'}}, 'resultado': result, 'aviso': AVISO_SIMULACION, 'ofertable': False, 'autorizaDecision': False, 'autorizaStart': False, 'autorizaDesembolso': False}
 
 
 def orientar_simulacion(subtotal):
@@ -283,3 +266,52 @@ def orientar_capital_interes(monto, plazo_meses, *, tarifa, fecha):
         'incluyeSeguroYCargos':False,'ofertable':False,'autorizaDecision':False,
         'faltantes':['SEGURO_VIDA_CREDIHOY','CAPITALIZACION_APORTES_APLICABLE',
             'OTROS_CONCEPTOS_APLICABLES','CUOTA_CONTRACTUAL_LINIX_CONCILIADA']}
+
+
+def _pagaduria_identidad(identity, request_id):
+    """Short simulation-only cache; the study always obtains its own fresh facts."""
+    from hashlib import sha256
+    from django.core.cache import cache
+    from django.utils import timezone
+    from ..cliente import ApiDataCrediHoyV2Client, ConfiguracionApiDataV2
+    key = 'credihoy-pagaduria-simulacion:' + sha256((identity['_sesionReferencia'] + ':' + identity['numeroDocumento']).encode()).hexdigest()
+    found = cache.get(key)
+    if found is not None:
+        return found
+    facts = ApiDataCrediHoyV2Client(ConfiguracionApiDataV2.desde_settings()).consultar(numero_documento=identity['numeroDocumento'], fecha_evaluacion=timezone.now().replace(microsecond=0), request_id=request_id)
+    if facts.pagaduria is None:
+        raise ValueError('PAGADURIA_SIMULACION_NO_DISPONIBLE')
+    cache.set(key, facts.pagaduria, timeout=60)
+    return facts.pagaduria
+
+
+def estimar_cuota_expediente(solicitud, hechos, *, fecha):
+    """Estimate from the bound dossier and payroll source, never browser amounts."""
+    from decimal import Decimal
+    from datetime import datetime
+    from hashlib import sha256
+    from zoneinfo import ZoneInfo
+    from apps.xcore_consumo.tasas_models import TasaComercialCredihoy
+    from ..hechos import HechosInternosCrediHoyV2
+    from ..base import Hecho, EstadoCertificacion as EC
+    from .funcional import _formulario_persistido
+    from .condicion_comercial import resolver_condicion
+    if not isinstance(hechos, HechosInternosCrediHoyV2) or hechos.metadatos is None or hechos.metadatos.fecha_evaluacion != fecha:
+        raise ValueError('CUOTA_HECHOS_DE_OTRO_CORTE')
+    if hechos.pagaduria is not None and (hechos.pagaduria.requestId != hechos.metadatos.request_id or datetime.fromisoformat(hechos.pagaduria.fechaConsulta) != hechos.metadatos.fecha_consulta):
+        raise ValueError('CUOTA_PAGADURIA_DE_OTRA_LECTURA')
+    form = _formulario_persistido(solicitud, solicitud.consumo_detail.form_data)
+    cutoff = fecha.astimezone(ZoneInfo('America/Bogota')).date()
+    condition = resolver_condicion(hechos.pagaduria, corte=cutoff)
+    if not condition.get('tarifaId') or condition.get('linea') not in {'LIBRANZA', 'VENTANILLA'}:
+        raise ValueError('CUOTA_PAGADURIA_O_TARIFA_NO_DISPONIBLE')
+    if condition['linea'] != {'N': 'LIBRANZA', 'V': 'VENTANILLA'}.get(hechos.pagaduria.tipo):
+        raise ValueError('CUOTA_LINEA_NO_CORRESPONDE_A_PAGADURIA')
+    tariff = TasaComercialCredihoy.objects.select_related('perfil').prefetch_related('eventos').get(pk=condition['tarifaId'])
+    if tariff.linea != condition['linea'] or tariff.numero_version != condition.get('versionTarifa') or tariff.tasa_namv != Decimal(str(condition.get('tasaComercialNamv'))):
+        raise ValueError('CUOTA_CONDICIONES_COMERCIALES_DIFIEREN')
+    subtotal = orientar_capital_interes(Decimal(form['monto']), form['plazoMeses'], tarifa=tariff, fecha=cutoff)
+    estimate = orientar_simulacion(subtotal)
+    evidence = {'solicitudId': str(solicitud.pk), 'requestId': hechos.metadatos.request_id, 'linea': tariff.linea, 'condicion': condition, 'simulacion': estimate}
+    digest = sha256(json.dumps(evidence, sort_keys=True, default=str).encode()).hexdigest()
+    return Hecho(valor=Decimal(estimate['cuotaEstimada']), disponible=True, fuente='SIMULADOR_INSTITUCIONAL_CREDIHOY', referencia_evidencia=digest, ruta_origen='simulacion.cuotaEstimada', fecha_corte=cutoff, fecha_consulta=fecha, estado_certificacion=EC.OBSERVADO, observacion='Cuota orientativa, no contractual; linea=' + tariff.linea + '; tarifa=' + str(tariff.pk) + '; version=' + str(tariff.numero_version))

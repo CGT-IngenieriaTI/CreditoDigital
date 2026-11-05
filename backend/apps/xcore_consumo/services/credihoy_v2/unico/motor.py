@@ -1,5 +1,7 @@
 """Capacidad shadow UNICO. No suma cuotas LINIX ni consulta/correlaciona HDC."""
 
+
+
 from dataclasses import fields, replace
 from decimal import Decimal, InvalidOperation, localcontext
 
@@ -203,123 +205,6 @@ def calcular_preliminar_congente(entrada, ingresos, conciliacion, *, descuentos_
     return aplicar_nomina_preliminar(result,descuentos_nomina) if descuentos_nomina is not None else result
 
 
-def normalizar_capacidad_disponible(preliminar, *, cuota_estimada=None):
-    """Add exact available/residual semantics without rewriting historical TRUNC."""
-    from copy import deepcopy
-    from .dto import EscenarioCapacidadDisponibleV2
-    if (preliminar.get('estado')!='PRELIMINAR_NO_DECISORIA'
-            or preliminar.get('autorizadoDecisionCrediticia') is not False
-            or preliminar.get('aprobacionRiesgosEndeudamiento') is not False
-            or preliminar.get('tratamientoCuotasLinix',{}).get('criterio')!='HDC_EXCLUSIVO_SIN_SEGUNDA_SUMA_LINIX'
-            or preliminar.get('tratamientoCuotasLinix',{}).get('importeAdicionalAplicado')!='0'):
-        raise ValueError('METODOLOGIA_CAPACIDAD_NO_COMPATIBLE')
-    def value(name):
-        fact=preliminar.get(name,{})
-        try:
-            if fact.get('disponible') is not True or type(fact.get('valor')) is not str:raise ValueError()
-            amount=Decimal(fact['valor'])
-            if not amount.is_finite() or (name!='capacidad' and amount<0):raise ValueError()
-            return amount
-        except (InvalidOperation,ValueError):
-            raise ValueError('OPERANDO_CAPACIDAD_DISPONIBLE_INVALIDO:'+name) from None
-    income,debt,expense,old_quota,old_residual=(value(n) for n in
-        ('ingresoComputable','subtotalMensualHdcReconocido','gastosFamiliares','cuotaParaCapacidad','capacidad'))
-    payroll=value('deduccionesNomina')
-    payroll_packet=preliminar['deduccionesNomina']
-    source=payroll_packet.get('procedencia',{})
-    origin=preliminar.get('procedencia',{}).get('ingreso',{})
-    if (payroll_packet.get('agregadoAplicadoUnaVez') is not True
-            or payroll_packet.get('componentesAplicadosAdicionalmente') is not False
-            or source.get('fuente')!='AP014MCLIENTE.V_DTONOM'
-            or source.get('disponible') is not True or source.get('valor')!=str(payroll)
-            or source.get('estado_certificacion') not in {EC.OBSERVADO.value,EC.CERTIFICADO.value}
-            or not source.get('referencia_evidencia') or not source.get('ruta_origen')
-            or not source.get('fecha_corte') or not source.get('fecha_consulta')
-            or source['fecha_corte']!=origin.get('fecha_corte')
-            or source['fecha_consulta']!=origin.get('fecha_consulta')):
-        raise ValueError('NOMINA_REGISTRADA_NO_ACREDITADA')
-    estimate=None
-    if cuota_estimada is not None:
-        if (not isinstance(cuota_estimada,Hecho) or not cuota_estimada.disponible
-                or cuota_estimada.estado_certificacion not in {EC.OBSERVADO,EC.CERTIFICADO}
-                or type(cuota_estimada.valor) is not Decimal or not cuota_estimada.valor.is_finite()
-                or cuota_estimada.valor<=0 or not cuota_estimada.fuente
-                or not cuota_estimada.referencia_evidencia or not cuota_estimada.ruta_origen):
-            raise ValueError('CUOTA_ESTIMADA_NO_ACREDITADA')
-        estimate=cuota_estimada.valor
-    with localcontext() as ctx:
-        ctx.prec=precision_exacta(income,debt,expense,old_quota,old_residual,payroll,
-            estimate if estimate is not None else Decimal(0),Decimal('0.25'))
-        if expense!=trunc_producto(income,Decimal('0.25')) or income-debt-payroll-expense-old_quota!=old_residual:
-            raise ValueError('ANTECEDENTE_TRUNC_NO_CONCILIA')
-        exact_expense=income*Decimal('0.25')
-        available=income-debt-payroll-exact_expense
-        scenario=EscenarioCapacidadDisponibleV2(ingresos=income,cuotas_hdc=debt,
-            deducciones_nomina=payroll,gastos_familiares_exactos=exact_expense,
-            capacidad_disponible=available,cuota_nueva_estimada=estimate,
-            residual_posterior_estimado=available-estimate if estimate is not None else None)
-    def money(amount):return {'disponible':amount is not None,'valor':str(amount) if amount is not None else None}
-    result=deepcopy(preliminar)
-    result.update(versionSemanticaCapacidad=scenario.version,
-        capacidadDisponible=money(scenario.capacidad_disponible),
-        gastosFamiliaresExactos=money(scenario.gastos_familiares_exactos),
-        residualPosteriorEstimado=money(scenario.residual_posterior_estimado),
-        cuotaNuevaEstimada=money(scenario.cuota_nueva_estimada),
-        semanticaCapacidadHistorica='RESIDUAL_TRUNC_POSTERIOR_CUOTA_REFERENCIA_NO_DISPONIBLE',
-        antecedenteTrunc={name:deepcopy(preliminar[name]) for name in
-            ('gastosFamiliares','cuotaParaCapacidad','capacidad')},
-        formulasCapacidad={'capacidadDisponible':'ingresoComputable - subtotalMensualHdcReconocido - deduccionesNomina - gastosFamiliaresExactos',
-            'gastosFamiliaresExactos':'ingresoComputable * 0.25; sin TRUNC',
-            'residualPosteriorEstimado':'capacidadDisponible - cuotaNuevaEstimada',
-            'capacidadHistorica':'ingresoComputable - subtotalMensualHdcReconocido - deduccionesNomina - TRUNC(ingresoComputable * 0.25) - cuotaParaCapacidad'},
-        escenarioEstimadoNoContractual=True)
-    if cuota_estimada is not None:
-        result['cuotaNuevaEstimada']['procedencia']=cuota_estimada.a_dict()
-    return result
-
-
-def aplicar_nomina_preliminar(preliminar, descuentos):
-    """Apply the sourced aggregate once, not aggregate plus its component rows."""
-    from copy import deepcopy
-    if (not isinstance(descuentos,Hecho) or not descuentos.disponible
-            or descuentos.estado_certificacion not in {EC.OBSERVADO,EC.CERTIFICADO}
-            or descuentos.fuente!='AP014MCLIENTE.V_DTONOM'
-            or not descuentos.referencia_evidencia or not descuentos.ruta_origen
-            or descuentos.fecha_corte is None or descuentos.fecha_consulta is None
-            or type(descuentos.valor) is not Decimal or not descuentos.valor.is_finite() or descuentos.valor<0):
-        raise ValueError('NOMINA_REGISTRADA_NO_ACREDITADA')
-    if (preliminar['estado']!='PRELIMINAR_NO_DECISORIA'
-            or preliminar['autorizadoDecisionCrediticia'] is not False
-            or preliminar.get('tratamientoCuotasLinix',{}).get('criterio')!='HDC_EXCLUSIVO_SIN_SEGUNDA_SUMA_LINIX'):
-        raise ValueError('METODOLOGIA_CAPACIDAD_NO_COMPATIBLE')
-    source=descuentos.a_dict()
-    previous=preliminar.get('deduccionesNomina')
-    if previous is not None and previous['procedencia']!=source:raise ValueError('NOMINA_YA_APLICADA_OTRA_FUENTE')
-    origin=preliminar.get('procedencia',{}).get('ingreso',{})
-    if (origin.get('fecha_corte')!=source.get('fecha_corte')
-            or origin.get('fecha_consulta')!=source.get('fecha_consulta')):
-        raise ValueError('NOMINA_E_INGRESO_DE_CORTES_DISTINTOS')
-    def value(name):
-        fact=preliminar[name]
-        if fact['disponible'] is not True or type(fact['valor']) is not str:raise ValueError('OPERANDO_PRELIMINAR_NO_DISPONIBLE')
-        result=Decimal(fact['valor'])
-        if not result.is_finite() or (name!='capacidad' and result<0):raise ValueError('OPERANDO_PRELIMINAR_INVALIDO')
-        return result
-    income,debt,expense,quota,residual=(value(k) for k in (
-        'ingresoComputable','subtotalMensualHdcReconocido','gastosFamiliares','cuotaParaCapacidad','capacidad'))
-    with localcontext() as ctx:
-        ctx.prec=precision_exacta(income,debt,expense,quota,residual,descuentos.valor)
-        if income-debt-expense-quota-(descuentos.valor if previous is not None else Decimal(0))!=residual:
-            raise ValueError('CAPACIDAD_PRELIMINAR_NO_CONCILIA')
-        if previous is not None:return deepcopy(preliminar)
-        result=deepcopy(preliminar)
-        result['capacidad']={'disponible':True,'valor':str(residual-descuentos.valor)}
-    result['deduccionesNomina']={'disponible':True,'valor':str(descuentos.valor),
-        'procedencia':source,'agregadoAplicadoUnaVez':True,'componentesAplicadosAdicionalmente':False}
-    result['observacion']+=' Nomina registrada incorporada una vez; no es un nuevo criterio de aprobacion.'
-    return result
-
-
 def aplicar_cuota_observada_preliminar(preliminar, cuota, referencia, *, fuente='LINIX_EJECUCION_MANUAL'):
     """Replace only the quota operand; preserve income, debt reserves and policy."""
     from copy import deepcopy
@@ -364,3 +249,91 @@ def aplicar_cuota_observada_preliminar(preliminar, cuota, referencia, *, fuente=
             +'no autoriza aprobacion.')
     result['procedencia']['cuota']={'fuente':fuente,'referenciaEvidencia':referencia}
     return result
+
+def aplicar_nomina_preliminar(preliminar, descuentos):
+    """Apply the sourced aggregate once, not aggregate plus its component rows."""
+    from copy import deepcopy
+    if (not isinstance(descuentos,Hecho) or not descuentos.disponible
+            or descuentos.estado_certificacion not in {EC.OBSERVADO,EC.CERTIFICADO}
+            or descuentos.fuente!='AP014MCLIENTE.V_DTONOM'
+            or not descuentos.referencia_evidencia or not descuentos.ruta_origen
+            or descuentos.fecha_corte is None or descuentos.fecha_consulta is None
+            or type(descuentos.valor) is not Decimal or not descuentos.valor.is_finite() or descuentos.valor<0):
+        raise ValueError('NOMINA_REGISTRADA_NO_ACREDITADA')
+    if (preliminar['estado']!='PRELIMINAR_NO_DECISORIA'
+            or preliminar['autorizadoDecisionCrediticia'] is not False
+            or preliminar.get('tratamientoCuotasLinix',{}).get('criterio')!='HDC_EXCLUSIVO_SIN_SEGUNDA_SUMA_LINIX'):
+        raise ValueError('METODOLOGIA_CAPACIDAD_NO_COMPATIBLE')
+    source=descuentos.a_dict()
+    previous=preliminar.get('deduccionesNomina')
+    if previous is not None and previous['procedencia']!=source:raise ValueError('NOMINA_YA_APLICADA_OTRA_FUENTE')
+    origin=preliminar.get('procedencia',{}).get('ingreso',{})
+    if (origin.get('fecha_corte')!=source.get('fecha_corte')
+            or origin.get('fecha_consulta')!=source.get('fecha_consulta')):
+        raise ValueError('NOMINA_E_INGRESO_DE_CORTES_DISTINTOS')
+    def value(name):
+        fact=preliminar[name]
+        if fact['disponible'] is not True or type(fact['valor']) is not str:raise ValueError('OPERANDO_PRELIMINAR_NO_DISPONIBLE')
+        result=Decimal(fact['valor'])
+        if not result.is_finite() or (name!='capacidad' and result<0):raise ValueError('OPERANDO_PRELIMINAR_INVALIDO')
+        return result
+    income,debt,expense,quota,residual=(value(k) for k in (
+        'ingresoComputable','subtotalMensualHdcReconocido','gastosFamiliares','cuotaParaCapacidad','capacidad'))
+    with localcontext() as ctx:
+        ctx.prec=precision_exacta(income,debt,expense,quota,residual,descuentos.valor)
+        if income-debt-expense-quota-(descuentos.valor if previous is not None else Decimal(0))!=residual:
+            raise ValueError('CAPACIDAD_PRELIMINAR_NO_CONCILIA')
+        if previous is not None:return deepcopy(preliminar)
+        result=deepcopy(preliminar)
+        result['capacidad']={'disponible':True,'valor':str(residual-descuentos.valor)}
+    result['deduccionesNomina']={'disponible':True,'valor':str(descuentos.valor),
+        'procedencia':source,'agregadoAplicadoUnaVez':True,'componentesAplicadosAdicionalmente':False}
+    result['observacion']+=' Nomina registrada incorporada una vez; no es un nuevo criterio de aprobacion.'
+    return result
+
+def normalizar_capacidad_disponible(preliminar, *, cuota_estimada=None):
+    """Add exact available/residual semantics without rewriting historical TRUNC."""
+    from copy import deepcopy
+    from .dto import EscenarioCapacidadDisponibleV2
+    if preliminar.get('estado') != 'PRELIMINAR_NO_DECISORIA' or preliminar.get('autorizadoDecisionCrediticia') is not False or preliminar.get('aprobacionRiesgosEndeudamiento') is not False or (preliminar.get('tratamientoCuotasLinix', {}).get('criterio') != 'HDC_EXCLUSIVO_SIN_SEGUNDA_SUMA_LINIX') or (preliminar.get('tratamientoCuotasLinix', {}).get('importeAdicionalAplicado') != '0'):
+        raise ValueError('METODOLOGIA_CAPACIDAD_NO_COMPATIBLE')
+
+    def value(name):
+        fact = preliminar.get(name, {})
+        try:
+            if fact.get('disponible') is not True or type(fact.get('valor')) is not str:
+                raise ValueError()
+            amount = Decimal(fact['valor'])
+            if not amount.is_finite() or (name != 'capacidad' and amount < 0):
+                raise ValueError()
+            return amount
+        except (InvalidOperation, ValueError):
+            raise ValueError('OPERANDO_CAPACIDAD_DISPONIBLE_INVALIDO:' + name) from None
+    income, debt, expense, old_quota, old_residual = (value(n) for n in ('ingresoComputable', 'subtotalMensualHdcReconocido', 'gastosFamiliares', 'cuotaParaCapacidad', 'capacidad'))
+    payroll = value('deduccionesNomina')
+    payroll_packet = preliminar['deduccionesNomina']
+    source = payroll_packet.get('procedencia', {})
+    origin = preliminar.get('procedencia', {}).get('ingreso', {})
+    if payroll_packet.get('agregadoAplicadoUnaVez') is not True or payroll_packet.get('componentesAplicadosAdicionalmente') is not False or source.get('fuente') != 'AP014MCLIENTE.V_DTONOM' or (source.get('disponible') is not True) or (source.get('valor') != str(payroll)) or (source.get('estado_certificacion') not in {EC.OBSERVADO.value, EC.CERTIFICADO.value}) or (not source.get('referencia_evidencia')) or (not source.get('ruta_origen')) or (not source.get('fecha_corte')) or (not source.get('fecha_consulta')) or (source['fecha_corte'] != origin.get('fecha_corte')) or (source['fecha_consulta'] != origin.get('fecha_consulta')):
+        raise ValueError('NOMINA_REGISTRADA_NO_ACREDITADA')
+    estimate = None
+    if cuota_estimada is not None:
+        if not isinstance(cuota_estimada, Hecho) or not cuota_estimada.disponible or cuota_estimada.estado_certificacion not in {EC.OBSERVADO, EC.CERTIFICADO} or (type(cuota_estimada.valor) is not Decimal) or (not cuota_estimada.valor.is_finite()) or (cuota_estimada.valor <= 0) or (not cuota_estimada.fuente) or (not cuota_estimada.referencia_evidencia) or (not cuota_estimada.ruta_origen):
+            raise ValueError('CUOTA_ESTIMADA_NO_ACREDITADA')
+        estimate = cuota_estimada.valor
+    with localcontext() as ctx:
+        ctx.prec = precision_exacta(income, debt, expense, old_quota, old_residual, payroll, estimate if estimate is not None else Decimal(0), Decimal('0.25'))
+        if expense != trunc_producto(income, Decimal('0.25')) or income - debt - payroll - expense - old_quota != old_residual:
+            raise ValueError('ANTECEDENTE_TRUNC_NO_CONCILIA')
+        exact_expense = income * Decimal('0.25')
+        available = income - debt - payroll - exact_expense
+        scenario = EscenarioCapacidadDisponibleV2(ingresos=income, cuotas_hdc=debt, deducciones_nomina=payroll, gastos_familiares_exactos=exact_expense, capacidad_disponible=available, cuota_nueva_estimada=estimate, residual_posterior_estimado=available - estimate if estimate is not None else None)
+
+    def money(amount):
+        return {'disponible': amount is not None, 'valor': str(amount) if amount is not None else None}
+    result = deepcopy(preliminar)
+    result.update(versionSemanticaCapacidad=scenario.version, disponibleAntesGastosFamiliares=money(income - debt - payroll), capacidadDisponible=money(scenario.capacidad_disponible), gastosFamiliaresExactos=money(scenario.gastos_familiares_exactos), residualPosteriorEstimado=money(scenario.residual_posterior_estimado), cuotaNuevaEstimada=money(scenario.cuota_nueva_estimada), semanticaCapacidadHistorica='RESIDUAL_TRUNC_POSTERIOR_CUOTA_REFERENCIA_NO_DISPONIBLE', antecedenteTrunc={name: deepcopy(preliminar[name]) for name in ('gastosFamiliares', 'cuotaParaCapacidad', 'capacidad')}, formulasCapacidad={'disponibleAntesGastosFamiliares': 'ingresoComputable - subtotalMensualHdcReconocido - deduccionesNomina', 'capacidadDisponible': 'ingresoComputable - subtotalMensualHdcReconocido - deduccionesNomina - gastosFamiliaresExactos', 'gastosFamiliaresExactos': 'ingresoComputable * 0.25; sin TRUNC', 'residualPosteriorEstimado': 'capacidadDisponible - cuotaNuevaEstimada', 'capacidadHistorica': 'ingresoComputable - subtotalMensualHdcReconocido - deduccionesNomina - TRUNC(ingresoComputable * 0.25) - cuotaParaCapacidad'}, escenarioEstimadoNoContractual=True)
+    if cuota_estimada is not None:
+        result['cuotaNuevaEstimada']['procedencia'] = cuota_estimada.a_dict()
+    return result
+

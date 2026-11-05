@@ -108,7 +108,10 @@ export interface EstudioPublico {
     motivos:string[];datosFaltantes:string[]}[];
   capacidad:{estado:'EVALUABLE'|'NO_EVALUABLE'|'INFORMACION_INCONSISTENTE';valor:string|null;
     preliminarNoDecisoria:string|null;cuotaContractualDisponible:false;
-    capacidadDisponible?:string|null;capacidadResidualPostCuota?:string|null};
+    capacidadDisponible?:string|null;capacidadResidualPostCuota?:string|null;
+    metodologia?:{version:'credihoy-capacidad-publica-v1';deudaConciliada:boolean;
+      disponibleAntesGastosFamiliares:string|null;gastosFamiliaresAplicados:string|null;
+      capacidadDisponible:string|null;cuotaNuevaEstimada:string|null;residualPosteriorEstimado:string|null}};
   decision:'PENDIENTE_REVISION'|'REQUIERE_SUBSANACION';autorizadoDecisionCrediticia:false;
 }
 export interface SimulacionPublica {cuota:string;tasaNominalNamv:string;
@@ -264,6 +267,13 @@ export function validarEstudioPublico(raw:unknown,sid:string,now=Date.now()):Est
   });
   if(new Set(rules.map(r=>r.codigo)).size!==16)fail();
   const capacityFields=['estado','valor','preliminarNoDecisoria','cuotaContractualDisponible'];
+  if(c.metodologia!==undefined){
+    capacityFields.push('metodologia');const m=obj(c.metodologia);
+    const amounts=['disponibleAntesGastosFamiliares','gastosFamiliaresAplicados','capacidadDisponible','cuotaNuevaEstimada','residualPosteriorEstimado'];
+    if(Number(p.version)<2||!sameKeys(m,['version','deudaConciliada',...amounts])
+      ||m.version!=='credihoy-capacidad-publica-v1'||typeof m.deudaConciliada!=='boolean')fail();
+    for(const key of amounts)if(m[key]!==null&&(typeof m[key]!=='string'||!/^\-?\d{1,15}(?:\.\d{1,8})?$/.test(String(m[key]))))fail();
+  }
   const separatedCapacity=Number(p.version)>=8;
   if(separatedCapacity)capacityFields.push('capacidadDisponible','capacidadResidualPostCuota');
   if(!sameKeys(c,capacityFields)

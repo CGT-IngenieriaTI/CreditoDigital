@@ -1,6 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {ArrowLeft,ArrowRight,BadgeCheck,Calculator,CheckCircle2,ChevronDown,ChevronRight,Menu,
-  Clock3,FileCheck2,Files,History,Info,LayoutDashboard,LogOut,RefreshCw,ShieldCheck,UserRound,type LucideIcon} from 'lucide-react';
+  Clock3,ExternalLink,FileCheck2,Files,History,Info,LayoutDashboard,LogOut,RefreshCw,ShieldCheck,UserRound,type LucideIcon} from 'lucide-react';
 import {CredihoyAccesoAsociado,type SeguimientoAsociadoProps} from '../components/CredihoyAccesoAsociado';
 import {CredihoyShell} from '../components/CredihoyShell';
 import {crearEstadoInicial} from '../state';
@@ -12,12 +12,12 @@ import {SimuladorLocal} from './SimuladorLocal';
 import {resolverSiguienteAccion} from './siguienteAccion';
 
 type Vista='estado'|'simulador'|'solicitud'|'autorizaciones'|'evaluacion'|'firma'|'historial';
-const ESTADOS_ESTUDIO={CUMPLE:'Cumple',NO_CUMPLE:'Requiere subsanacion',NO_EVALUABLE:'Datos pendientes',
+const ESTADOS_ESTUDIO={CUMPLE:'Cumple',NO_CUMPLE:'No cumple',NO_EVALUABLE:'Datos pendientes',
   NO_APLICA:'No aplica',PENDIENTE_POLITICA:'Politica pendiente'};
 const MOTIVOS_ESTUDIO:Record<string,string>={
   'Debes actualizar tus datos para continuar con tu solicitud.':'Debes actualizar tus datos con Congente para continuar. Tu autorizacion esta conservada.',
   HECHO_NO_CERTIFICADO:'La fuente disponible no acredita este dato. Congente debe comprobarlo.',
-  COMPARACION_DOCUMENTADA:'La informacion verificada satisface esta condicion.',
+  COMPARACION_DOCUMENTADA:'La informacion fue comparada con la condicion indicada en este resultado.',
   REGLA_INACTIVA_NO_APLICADA:'Esta validacion no se aplica a tu solicitud.',
   SOLO_RENOVACION_GER_PO_068_6_2_3_7:'Esta validacion corresponde a renovaciones, no a esta solicitud.',
   AUSENCIA_CREDIHOY_111_CERTIFICADA_SIN_RECOGIDA:'No se identifico otro CrediHoy que debas recoger en esta solicitud.',
@@ -330,7 +330,15 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
               <span>Version {s.estudio.version} - {fechaPublica(s.estudio.fechaEvaluacion)}</span></div>
             <Aviso tono="warning" titulo={s.estudio.decision==='REQUIERE_SUBSANACION'?'Hay requisitos por subsanar':'Estudio pendiente de revision'}>
               Los datos incompletos y las validaciones pendientes no son un rechazo definitivo de tu credito.</Aviso>
-            {s.estudio.version>=8?<dl className="ca-metrics">
+            {s.estudio.capacidad.metodologia?<dl className="ca-metrics ca-methodology">
+              {([['disponibleAntesGastosFamiliares','Disponible antes de gastos familiares'],
+                ['gastosFamiliaresAplicados','Gastos familiares aplicados'],
+                ['capacidadDisponible','Capacidad disponible'],['cuotaNuevaEstimada','Cuota nueva estimada'],
+                ['residualPosteriorEstimado','Residual posterior estimado']] as const).map(([key,label])=>{
+                  const value=s.estudio!.capacidad.metodologia![key];
+                  return <div key={key}><dt>{label}</dt><dd>{value==null?'Por determinar':moneda(value)}</dd></div>;
+                })}
+            </dl>:s.estudio.version>=8?<dl className="ca-metrics">
               <div><dt>Capacidad disponible antes de la cuota nueva</dt><dd data-testid="study-capacity-available">
                 {s.estudio.capacidad.capacidadDisponible==null?'Por determinar':moneda(s.estudio.capacidad.capacidadDisponible)}</dd></div>
               <div><dt>Residual despues de la cuota estimada</dt><dd data-testid="study-capacity-residual">
@@ -343,8 +351,11 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
               {s.estudio.reglas.map(regla=><li key={regla.codigo}>
                 <div className="ca-study-rule-heading"><div><span className="ca-study-rule-code">Fila {regla.codigo.replace('UNICO_FILA_','')}</span>
                   <h4>{regla.nombre}</h4></div>
-                  <Etiqueta tono={regla.estadoEvaluacion==='CUMPLE'?'success':regla.estadoEvaluacion==='NO_APLICA'?'neutral':'warning'}>
-                    {ESTADOS_ESTUDIO[regla.estadoEvaluacion]}</Etiqueta></div>
+                  <Etiqueta tono={regla.estadoEvaluacion==='CUMPLE'?'success':regla.estadoEvaluacion==='NO_APLICA'||regla.codigo==='UNICO_FILA_6'?'neutral':'warning'}>
+                    {regla.codigo==='UNICO_FILA_6'&&regla.estadoEvaluacion==='NO_CUMPLE'?'Alerta informativa':
+                      regla.codigo==='UNICO_FILA_9'&&regla.estadoEvaluacion==='NO_CUMPLE'?'Requiere subsanacion':ESTADOS_ESTUDIO[regla.estadoEvaluacion]}</Etiqueta></div>
+                {regla.codigo==='UNICO_FILA_6'&&regla.estadoEvaluacion==='NO_CUMPLE'&&
+                  <p className="ca-muted">Se reportaron embargos. Esta condicion es informativa y no implica un rechazo automatico.</p>}
                 {(regla.motivos.length>0||regla.datosFaltantes.length>0)&&<details><summary>Detalle de la validacion</summary>
                   {regla.motivos.length>0&&<ul>{regla.motivos.map((motivo,index)=><li key={index}>{motivoEstudio(motivo)}</li>)}</ul>}
                   {regla.datosFaltantes.length>0&&<p>Por acreditar: {regla.datosFaltantes.map(motivoEstudio).join(', ')}.</p>}
@@ -355,6 +366,12 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
           {!s.estudio&&<Pendientes items={s.pendientes}/>}<Aviso titulo="Para continuar">{
             s.estudio?.reglas.some(r=>r.codigo==='UNICO_FILA_9'&&r.estadoEvaluacion==='NO_CUMPLE')?
               'Actualiza tus datos con Congente. Tu solicitud y tu autorizacion estan conservadas; no envies otra solicitud ni solicites otro codigo.':s.siguientePaso}</Aviso>
+          {s.estudio?.reglas.some(r=>r.codigo==='UNICO_FILA_9'&&r.estadoEvaluacion==='NO_CUMPLE')&&
+            <div className="ca-bottom-actions"><a className="btn btn-outline-primary"
+              href="https://consulta.congente.coop:8030/home/verificacion_view/."
+              target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">
+              <ExternalLink size={16} aria-hidden="true"/>Actualiza tus datos para continuar
+            </a></div>}
         </>}
         {s&&vista==='firma'&&<><Etiqueta tono="warning">{institucion?'Firma pendiente':'Firma no acreditada'}</Etiqueta>
           <DocumentosAsociado institucion={institucion}/></>}

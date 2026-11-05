@@ -3,13 +3,15 @@ from datetime import datetime
 
 VERSION='credihoy-progreso-estudio-v1'
 STATES={'AUTORIZACION_CONFIRMADA','VALIDACION_ADICIONAL','RESULTADO_DISPONIBLE'}
+COMPLETED=['SOLICITUD','AUTORIZACION','PREPARACION','CONSULTA','EVALUACION','RESULTADO']
 
 
 def project(value):
     if (type(value) is not dict or set(value)!={'version','estado','confirmadoEn','observadoEn','autorizacionVigente','etapaActiva','etapasCompletadas'}
             or value['version']!=VERSION or value['estado'] not in STATES
             or type(value['autorizacionVigente']) is not bool or value['etapaActiva'] is not None
-            or value['etapasCompletadas']!=['AUTORIZACION']):
+            or value['etapasCompletadas'] not in (['AUTORIZACION'],['SOLICITUD','AUTORIZACION'],COMPLETED)
+            or value['etapasCompletadas']==COMPLETED and value['estado']!='RESULTADO_DISPONIBLE'):
         raise ValueError('PROGRESO_ESTUDIO_NO_ACREDITADO')
     confirmed=datetime.fromisoformat(value['confirmadoEn']);observed=datetime.fromisoformat(value['observadoEn'])
     if confirmed.utcoffset() is None or observed.utcoffset() is None or confirmed>observed:
@@ -44,4 +46,4 @@ def read(case,alias,study=None):
         not valid or validar_consumo(case) or snapshot.get('estado')=='VALIDACION_ADICIONAL') else 'AUTORIZACION_CONFIRMADA'
     return project({'version':VERSION,'estado':state,'confirmadoEn':proof['confirmadoEn'],
         'observadoEn':now.isoformat(),'autorizacionVigente':valid,'etapaActiva':None,
-        'etapasCompletadas':['AUTORIZACION']})
+        'etapasCompletadas':list(COMPLETED) if study is not None else ['SOLICITUD','AUTORIZACION']})

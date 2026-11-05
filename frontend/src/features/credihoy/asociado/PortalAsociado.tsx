@@ -15,6 +15,15 @@ type Vista='estado'|'simulador'|'solicitud'|'autorizaciones'|'evaluacion'|'firma
 const ESTADOS_ESTUDIO={CUMPLE:'Cumple',NO_CUMPLE:'Requiere subsanacion',NO_EVALUABLE:'Datos pendientes',
   NO_APLICA:'No aplica',PENDIENTE_POLITICA:'Politica pendiente'};
 const MOTIVOS_ESTUDIO:Record<string,string>={
+  'Debes actualizar tus datos para continuar con tu solicitud.':'Debes actualizar tus datos con Congente para continuar. Tu autorizacion esta conservada.',
+  HECHO_NO_CERTIFICADO:'La fuente disponible no acredita este dato. Congente debe comprobarlo.',
+  COMPARACION_DOCUMENTADA:'La informacion verificada satisface esta condicion.',
+  REGLA_INACTIVA_NO_APLICADA:'Esta validacion no se aplica a tu solicitud.',
+  SOLO_RENOVACION_GER_PO_068_6_2_3_7:'Esta validacion corresponde a renovaciones, no a esta solicitud.',
+  AUSENCIA_CREDIHOY_111_CERTIFICADA_SIN_RECOGIDA:'No se identifico otro CrediHoy que debas recoger en esta solicitud.',
+  cuentas_embargadas:'confirmacion sobre cuentas embargadas',edad_anios:'edad con evidencia',
+  saldo_aportes_utilizable:'saldo de aportes utilizable',capacidadDisponible:'capacidad con todas las obligaciones conciliadas',
+  cuotaNuevaEstimada:'cuota estimada de la nueva solicitud',
   CAPACIDAD_PRELIMINAR_NO_DECISORIA_DEUDA_INCOMPLETA:'Falta conciliar el endeudamiento completo. La capacidad preliminar no permite decidir.',
   ACTUALIZACION_DATOS_FUERA_VIGENCIA:'Debes actualizar tus datos institucionales con Congente.',
   CAPACIDAD_PAGO_NO_DISPONIBLE:'La capacidad definitiva requiere informacion adicional.'};
@@ -192,17 +201,20 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
         {solicitudes?.length===0&&vista!=='solicitud'&&<EstadoVacio titulo="Inicia tu solicitud CrediHoy" icono={Files}>
           {formularioBorrador?'Selecciona Solicitar mi CrediHoy para completar y guardar tu solicitud.':'Tu identidad esta verificada, pero el inicio de solicitudes no esta disponible en esta sesion. Actualiza el estado o contacta a Congente.'}</EstadoVacio>}
         {s&&vista==='estado'&&s.progreso&&<section aria-label="Progreso de tu estudio" aria-live="polite">
-          <h3>Estamos estudiando tu CrediHoy.</h3>
+          <h3>{s.estudio?'Tu estudio esta disponible.':'Estamos estudiando tu CrediHoy.'}</h3>
           <ol className="ca-study-progress">
+            <li className="ca-study-progress--done"><CheckCircle2 size={22} aria-hidden="true"/><div><strong>Solicitud registrada</strong><span>Completada</span></div></li>
             <li className="ca-study-progress--done"><CheckCircle2 size={22} aria-hidden="true"/><div><strong>Autorizacion confirmada</strong><span>Completada</span></div></li>
-            <li><Clock3 size={22} aria-hidden="true"/><div><strong>Preparacion del estudio</strong><span>{s.progreso.estado==='VALIDACION_ADICIONAL'?'Validacion pendiente':'Pendiente'}</span></div></li>
-            <li><Clock3 size={22} aria-hidden="true"/><div><strong>Consulta crediticia</strong><span>No acreditada en este seguimiento</span></div></li>
-            <li><Clock3 size={22} aria-hidden="true"/><div><strong>Evaluacion</strong><span>{s.estudio?'Resultado conservado':'Sin evaluacion acreditada'}</span></div></li>
-            <li><Clock3 size={22} aria-hidden="true"/><div><strong>Resultado</strong><span>{s.progreso.estado==='RESULTADO_DISPONIBLE'?'Disponible':'Pendiente'}</span></div></li>
+            {(['Preparacion del estudio','Consulta crediticia','Evaluacion','Resultado del estudio'] as const).map(label=><li key={label} className={s.estudio?'ca-study-progress--done':undefined}>
+              {s.estudio?<CheckCircle2 size={22} aria-hidden="true"/>:<Clock3 size={22} aria-hidden="true"/>}
+              <div><strong>{label}</strong><span>{s.estudio?(label==='Resultado del estudio'?'Disponible':'Completada'):
+                label==='Preparacion del estudio'&&s.progreso?.estado==='VALIDACION_ADICIONAL'?'Validacion pendiente':'Pendiente'}</span></div></li>)}
+            <li><Clock3 size={22} aria-hidden="true"/><div><strong>Decision institucional</strong><span>{institucion?'Registrada':'Pendiente'}</span></div></li>
           </ol>
           {s.progreso.estado==='VALIDACION_ADICIONAL'?<Aviso tono="warning">Tu estudio necesita una validacion adicional. Congente debe revisar las condiciones pendientes para continuar. Tu autorizacion esta conservada; no solicites otro codigo ni envies otra solicitud.</Aviso>:
             s.progreso.estado==='RESULTADO_DISPONIBLE'?<Aviso tono="success">El resultado de tu estudio esta disponible en Resultado. No sustituye una decision institucional de credito.</Aviso>:
               <Aviso>{esperaEstudioAgotada?'La preparacion requiere seguimiento de Congente. Tu autorizacion esta conservada.':'Tu autorizacion esta confirmada. La preparacion del estudio sigue pendiente.'}</Aviso>}
+          {s.estudio&&<button type="button" className="btn btn-primary" onClick={()=>setVista('evaluacion')}><BadgeCheck size={17} aria-hidden="true"/>Ver resultado de mi estudio</button>}
         </section>}
         {s&&vista==='estado'&&!s.progreso&&<div className="ca-dashboard">
           {s.envio&&<section className="ca-document-band" aria-label="Confirmacion de envio"><h3>Recibimos tu solicitud de CrediHoy.</h3>
@@ -325,7 +337,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
                 {s.estudio.capacidad.capacidadResidualPostCuota==null?'Por determinar':moneda(s.estudio.capacidad.capacidadResidualPostCuota)}</dd></div>
             </dl>:<dl className="ca-metrics"><div><dt>{s.estudio.version===7?'Residual del estudio':'Capacidad del estudio'}</dt><dd className="ca-metric-text">
               {s.estudio.capacidad.estado==='EVALUABLE'?moneda(s.estudio.capacidad.valor):'Por determinar'}</dd></div>
-              <div><dt>{s.estudio.version===7?'Residual preliminar, no decisorio':'Calculo preliminar, no decisorio'}</dt><dd>{s.estudio.capacidad.preliminarNoDecisoria===null?'No disponible':moneda(s.estudio.capacidad.preliminarNoDecisoria)}</dd></div></dl>}
+              <div><dt>{s.estudio.version===1?'Capacidad disponible preliminar':s.estudio.version===7?'Residual preliminar, no decisorio':'Calculo preliminar, no decisorio'}</dt><dd>{s.estudio.capacidad.preliminarNoDecisoria===null?'No disponible':moneda(s.estudio.capacidad.preliminarNoDecisoria)}</dd></div></dl>}
             <p className="ca-notice">La capacidad preliminar no acredita aprobacion ni una cuota contractual.</p>
             <ol className="ca-study-rules" aria-label="Las 16 reglas del estudio">
               {s.estudio.reglas.map(regla=><li key={regla.codigo}>
@@ -340,7 +352,9 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
               </li>)}
             </ol>
           </div>}
-          <Pendientes items={s.pendientes}/><Aviso titulo="Para continuar">{s.siguientePaso}</Aviso>
+          {!s.estudio&&<Pendientes items={s.pendientes}/>}<Aviso titulo="Para continuar">{
+            s.estudio?.reglas.some(r=>r.codigo==='UNICO_FILA_9'&&r.estadoEvaluacion==='NO_CUMPLE')?
+              'Actualiza tus datos con Congente. Tu solicitud y tu autorizacion estan conservadas; no envies otra solicitud ni solicites otro codigo.':s.siguientePaso}</Aviso>
         </>}
         {s&&vista==='firma'&&<><Etiqueta tono="warning">{institucion?'Firma pendiente':'Firma no acreditada'}</Etiqueta>
           <DocumentosAsociado institucion={institucion}/></>}

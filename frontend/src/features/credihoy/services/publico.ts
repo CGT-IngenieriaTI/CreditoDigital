@@ -95,7 +95,8 @@ export interface SolicitudPublica { referencia:string; titulo:string; monto:stri
   simulacionLocal?:SimulacionLocal;
   procedencia?:{origen:'HISTORICO_PILOTO'|'FUENTE_OPERATIVA';estadoRegistrado:string;actualizadoAt:string;consultadoAt:string} }
 export interface ProgresoEstudio {version:'credihoy-progreso-estudio-v1';estado:'AUTORIZACION_CONFIRMADA'|'VALIDACION_ADICIONAL'|'RESULTADO_DISPONIBLE';
-  confirmadoEn:string;observadoEn:string;autorizacionVigente:boolean;etapaActiva:null;etapasCompletadas:['AUTORIZACION']}
+  confirmadoEn:string;observadoEn:string;autorizacionVigente:boolean;etapaActiva:null;
+  etapasCompletadas:('SOLICITUD'|'AUTORIZACION'|'PREPARACION'|'CONSULTA'|'EVALUACION'|'RESULTADO')[]}
 export interface InstitucionalPublica {estado:'APROBADA_PENDIENTE_FIRMA';fechaDecision:string;actualizadoAt:string;
   documentos:'NO_ACREDITADOS';firma:'PENDIENTE';
   incidencias:'NO_DISPONIBLE'|'EN_REVISION'|'ANTECEDENTES_SIN_PENDIENTE_ACTIVO'|'SIN_INCIDENCIAS_REGISTRADAS'}
@@ -332,9 +333,13 @@ export function validarSolicitudPublica(raw:unknown,now=Date.now()):SolicitudPub
   let progreso:ProgresoEstudio|undefined;
   if(p.progreso!==undefined&&p.progreso!==null){
     const g=obj(p.progreso);
+    const stages=JSON.stringify(g.etapasCompletadas);
+    const complete=stages==='["SOLICITUD","AUTORIZACION","PREPARACION","CONSULTA","EVALUACION","RESULTADO"]';
     if(procedencia?.origen!=='FUENTE_OPERATIVA'||Object.keys(g).sort().join(',')!=='autorizacionVigente,confirmadoEn,estado,etapaActiva,etapasCompletadas,observadoEn,version'
       ||g.version!=='credihoy-progreso-estudio-v1'||!['AUTORIZACION_CONFIRMADA','VALIDACION_ADICIONAL','RESULTADO_DISPONIBLE'].includes(text(g.estado))
-      ||typeof g.autorizacionVigente!=='boolean'||g.etapaActiva!==null||JSON.stringify(g.etapasCompletadas)!=='["AUTORIZACION"]'
+      ||typeof g.autorizacionVigente!=='boolean'||g.etapaActiva!==null
+      ||!['["AUTORIZACION"]','["SOLICITUD","AUTORIZACION"]','["SOLICITUD","AUTORIZACION","PREPARACION","CONSULTA","EVALUACION","RESULTADO"]'].includes(stages)
+      ||complete&&(g.estado!=='RESULTADO_DISPONIBLE'||!estudio)
       ||!Number.isFinite(Date.parse(text(g.confirmadoEn)))||!Number.isFinite(Date.parse(text(g.observadoEn)))
       ||Date.parse(text(g.confirmadoEn))>Date.parse(text(g.observadoEn))||Date.parse(text(g.observadoEn))>now+5000)fail();
     progreso=g as unknown as ProgresoEstudio;

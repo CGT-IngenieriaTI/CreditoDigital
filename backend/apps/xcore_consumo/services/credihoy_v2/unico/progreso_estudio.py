@@ -3,8 +3,9 @@ from datetime import datetime
 
 VERSION='credihoy-progreso-estudio-v1'
 STATES={'AUTORIZACION_CONFIRMADA','VALIDACION_ADICIONAL','RESULTADO_DISPONIBLE'}
-COMPLETED=['SOLICITUD','AUTORIZACION','PREPARACION','CONSULTA','EVALUACION','RESULTADO']
 
+
+COMPLETED=['SOLICITUD','AUTORIZACION','PREPARACION','CONSULTA','EVALUACION','RESULTADO']
 
 def project(value):
     if (type(value) is not dict or set(value)!={'version','estado','confirmadoEn','observadoEn','autorizacionVigente','etapaActiva','etapasCompletadas'}

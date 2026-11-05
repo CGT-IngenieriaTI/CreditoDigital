@@ -4,6 +4,8 @@
 
 
 
+
+
 from decimal import Decimal
 from dataclasses import replace
 import hashlib
@@ -660,7 +662,7 @@ def preparar_revision_estudio(solicitud_id, operador):
     """Append an immutable draft from fresh facts; never update the base study."""
     from dataclasses import asdict
     from uuid import uuid4
-    from apps.xcore_consumo.services.otp_crypto import encrypt_text
+    from apps.xcore_consumo.services.otp_crypto import encrypt_text, decrypt_text
     from .hechos_continuacion import obtener as obtener_hechos
     from .evaluacion_controlada import evaluar_respuestas_controladas
     if transaction.get_connection().in_atomic_block:
@@ -687,15 +689,39 @@ def preparar_revision_estudio(solicitud_id, operador):
     def semantic(fact):
         return {k: v for k, v in fact.a_dict().items() if k in {'valor', 'disponible', 'fuente', 'ruta_origen', 'estado_certificacion'}}
     sources = {'versionCadena': 'credihoy-cadena-20261105-v1', 'formularioSha256': form_hash, 'reglas': {name: semantic(getattr(context.reglas, name)) for name in asdict(context.reglas)}, 'ingresos': semantic(context.ingresos), 'nomina': semantic(context.descuentos_nomina), 'cuota': {**semantic(context.cuota_estimada), 'condicion': context.cuota_estimada.observacion}, 'respuestaHdcSha256': proof, 'xmlSha256': hashlib.sha256(xml).hexdigest()}
+    drafts = AuditLog.objects.filter(solicitud=case, event='CREDIHOY_ESTUDIO_REVISION_PREPARADA')
     fingerprint = _digest(sources)
     reference = str(uuid5(NAMESPACE_URL, 'credihoy-revision-estudio:' + str(case.pk) + ':' + fingerprint))
-    drafts = AuditLog.objects.filter(solicitud=case, event='CREDIHOY_ESTUDIO_REVISION_PREPARADA')
+    existing = drafts.filter(request_id=reference).first()
+    if existing is not None:
+        raw = decrypt_text(existing.payload['resultadoCifrado'])
+        if hashlib.sha256(raw.encode()).hexdigest() != existing.payload['resultadoSha256']:
+            raise ValueError('REVISION_CONSERVADA_NO_INTEGRA')
+        if 'decisionDigital' not in json.loads(raw)['resultado']:
+            return existing.pk
+    from .elegibilidad import contexto_desde_estudio, evaluar_decision_digital
+    from .condiciones_producto import politica_digital
+    observed = contexto_desde_estudio(case, evaluation.resultados[KEY_HDC], ahora=context.fecha_evaluacion or timezone.now())
+    from .normativa import actualizacion_al_corte
+    from .estamentos import BLOQUEADO, actualizar_estamentos
+    updated = actualizacion_al_corte(context.reglas.fecha_actualizacion_datos, context.fecha_evaluacion or timezone.now())
+    if updated and updated['cumple'] and (observed.clasificacion_estamentos['estado'] == BLOQUEADO):
+        try:
+            actualizar_estamentos(case.pk, actor=operador, autogestion=True, revision_conservada=True)
+        except ValueError:
+            pass
+        observed = contexto_desde_estudio(case, evaluation.resultados[KEY_HDC], ahora=context.fecha_evaluacion or timezone.now())
+    sources['decisionFuentes'] = {'clasificacionEstamentos': {k: v for k, v in observed.clasificacion_estamentos.items() if k not in ('consultaReferencia', 'fechaConsulta')}, 'politicaSha256': _digest(politica_digital())}
+    fingerprint = _digest(sources)
+    reference = str(uuid5(NAMESPACE_URL, 'credihoy-revision-estudio:' + str(case.pk) + ':' + fingerprint))
     existing = drafts.filter(request_id=reference).first()
     if existing is not None:
         return existing.pk
     entry = EntradaCredihoyUnicoV2(monto_solicitado=Decimal(form['monto']), plazo_meses=form['plazoMeses'], periodicidad_pago=form['periodicidadPago'], modalidad_codigo='111', recogida=RecogidaCredihoyUnicoV2(aplica=form['recogerCredihoy']))
     evaluated = evaluar_respuestas_controladas(entry, hdc=operation, operaciones_esperadas={operation.operacion_id: ('HDC', operation.request_id)}, ingresos=context.ingresos, hechos_reglas=context.reglas, fecha=context.fecha_evaluacion or timezone.now(), request_id=reference, descuentos_nomina=context.descuentos_nomina, cuota_estimada=context.cuota_estimada if context.cuota_estimada.disponible else None, informe_xml=xml, fecha_consulta_hdc=queried, custodia_respuesta_sha256=proof)
     evaluated.update(solicitudId=str(case.pk), estadoTramite='SUBSANACION_REQUERIDA' if any((r['codigo'] == 'UNICO_FILA_9' and r['estadoEvaluacion'] == 'NO_CUMPLE' for r in evaluated['reglas'])) else 'EN_REVISION', HDCNuevas=0)
+    decision_context = contexto_desde_estudio(case, evaluated, ahora=context.fecha_evaluacion or timezone.now())
+    evaluated['decisionDigital'] = evaluar_decision_digital(decision_context, ahora=context.fecha_evaluacion or timezone.now())
     with transaction.atomic(durable=True):
         locked = obtener_para_evaluacion(case.pk, operador, autogestion=True, lock=True, revision_conservada=True)
         current = EvaluacionConsumo.objects.get(pk=evaluation.pk, solicitud=locked)

@@ -1,6 +1,8 @@
 """Private HTTP transport, never a staff token or a browser credential."""
 
 
+
+
 import hashlib
 import hmac
 import json
@@ -467,6 +469,14 @@ def project_study(value, solicitud_id):
     from datetime import datetime, timezone
     try:
         fields = {'versionContrato', 'solicitudId', 'evaluacionBaseId', 'version', 'referenciaVersion', 'fechaEvaluacion', 'reglas', 'capacidad', 'decision', 'autorizadoDecisionCrediticia'}
+        if type(value) is dict and 'decisionPolitica' in value:
+            fields.add('decisionPolitica')
+            decision = value['decisionPolitica']
+            if type(decision) is not dict or set(decision) != {'version', 'versionPolitica', 'estado', 'motivos', 'decisionLinixRegistrada', 'autorizaDesembolso'} or decision['version'] != 'credihoy-decision-publica-v1' or (type(decision['versionPolitica']) is not str) or (not 1 <= len(decision['versionPolitica']) <= 120) or (decision['estado'] not in {'APROBADO', 'RECHAZADO', 'EN_REVISION'}) or (decision['decisionLinixRegistrada'] is not False) or (decision['autorizaDesembolso'] is not False) or (type(decision['motivos']) is not list) or (len(decision['motivos']) > 40):
+                raise ValueError
+            for reason in decision['motivos']:
+                if type(reason) is not dict or set(reason) != {'codigo', 'regla'} or type(reason['codigo']) is not str or (not re.fullmatch('[A-Z][A-Z0-9_]{1,120}', reason['codigo'])) or (reason['regla'] is not None and (not re.fullmatch('UNICO_FILA_[0-9]{1,2}', str(reason['regla'])))):
+                    raise ValueError
         if type(value) is not dict or set(value) != fields or value['versionContrato'] != 'credihoy-estudio-publico-v1' or (value['solicitudId'] != str(solicitud_id)) or (str(UUID(value['solicitudId'])) != value['solicitudId']) or (type(value['evaluacionBaseId']) is not int) or (value['evaluacionBaseId'] < 1) or (type(value['version']) is not int) or (value['version'] < 1) or (str(UUID(value['referenciaVersion'])) != value['referenciaVersion']) or (value['autorizadoDecisionCrediticia'] is not False) or (value['decision'] not in {'PENDIENTE_REVISION', 'REQUIERE_SUBSANACION'}):
             raise ValueError
         observed = datetime.fromisoformat(value['fechaEvaluacion'])

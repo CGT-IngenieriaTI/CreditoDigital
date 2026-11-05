@@ -1,4 +1,6 @@
 """Institutional novelty evidence; never consults Oracle or chooses a decision."""
+
+
 from datetime import datetime
 from decimal import Decimal, localcontext
 import re
@@ -45,33 +47,38 @@ def validar_lectura_original(evidencia, *, solicitud_id, documento, request_id):
     except (KeyError,TypeError,AttributeError,ValueError):raise ValueError('LECTURA_ORIGINAL_ESTAMENTOS_NO_ACREDITADA') from None
 
 
-def actualizar_estamentos(solicitud_id, *, actor, cliente=None, autogestion=False):
+def actualizar_estamentos(solicitud_id, *, actor, cliente=None, autogestion=False, revision_conservada=False):
     """Owned dossier -> existing API -> persisted original evidence; no Oracle here."""
     from uuid import uuid4
     from django.db import transaction
     from django.utils import timezone
     from apps.xcore_consumo.models import ConsultaEstamentoOracle
     from .funcional import obtener_para_evaluacion, _firma
-    from ..cliente import ApiDataCrediHoyV2Client,ConfiguracionApiDataV2
-    rid=str(uuid4())
+    from ..cliente import ApiDataCrediHoyV2Client, ConfiguracionApiDataV2
+    rid = str(uuid4())
     with transaction.atomic():
-        case=obtener_para_evaluacion(solicitud_id,actor,autogestion=autogestion,lock=True)
-        if autogestion:_firma(case)
-        attempt=ConsultaEstamentoOracle.objects.create(solicitud=case,estado='PENDIENTE',request_payload={'requestId':rid})
-        document=case.solicitante.numero_identificacion
+        case = obtener_para_evaluacion(solicitud_id, actor, autogestion=autogestion, lock=True, revision_conservada=revision_conservada)
+        if autogestion:
+            _firma(case)
+        attempt = ConsultaEstamentoOracle.objects.create(solicitud=case, estado='PENDIENTE', request_payload={'requestId': rid})
+        document = case.solicitante.numero_identificacion
     try:
-        client=cliente or ApiDataCrediHoyV2Client(ConfiguracionApiDataV2.desde_settings())
-        evidence=client.consultar_estamentos(numero_documento=document,solicitud_id=str(case.pk),
-            fecha_evaluacion=timezone.now().replace(microsecond=0),request_id=rid)
-        validar_lectura_original(evidence,solicitud_id=case.pk,documento=document,request_id=rid)
-        attempt.estado='OK';attempt.response_payload=evidence;attempt.resultado='SELECT_ORIGINAL'
-        attempt.mensaje='Lectura original institucional conservada; no constituye decision.'
-        attempt.save(update_fields=['estado','response_payload','resultado','mensaje','updated_at'])
+        client = cliente or ApiDataCrediHoyV2Client(ConfiguracionApiDataV2.desde_settings())
+        evidence = client.consultar_estamentos(numero_documento=document, solicitud_id=str(case.pk), fecha_evaluacion=timezone.now().replace(microsecond=0), request_id=rid)
+        validar_lectura_original(evidence, solicitud_id=case.pk, documento=document, request_id=rid)
+        attempt.estado = 'OK'
+        attempt.response_payload = evidence
+        attempt.resultado = 'SELECT_ORIGINAL'
+        attempt.mensaje = 'Lectura original institucional conservada; no constituye decision.'
+        attempt.save(update_fields=['estado', 'response_payload', 'resultado', 'mensaje', 'updated_at'])
         return evidence
     except Exception as exc:
-        attempt.estado='ERROR';attempt.response_payload={'requestId':rid,'errorTipo':type(exc).__name__}
-        attempt.mensaje='Lectura no acreditada; no inferir ausencia de novedades.'
-        attempt.save(update_fields=['estado','response_payload','mensaje','updated_at'])
+        code = getattr(exc, 'codigo', None)
+        code = getattr(code, 'value', code)
+        attempt.estado = 'ERROR'
+        attempt.response_payload = {'requestId': rid, 'errorTipo': type(exc).__name__, 'errorCodigo': code if isinstance(code, str) and re.fullmatch('[A-Z][A-Z0-9_]{1,120}', code) else None, 'httpStatus': getattr(exc, 'status_http', None)}
+        attempt.mensaje = 'Lectura no acreditada; no inferir ausencia de novedades.'
+        attempt.save(update_fields=['estado', 'response_payload', 'mensaje', 'updated_at'])
         raise ValueError('LECTURA_ESTAMENTOS_NO_ACREDITADA_SIN_REINTENTO') from None
 
 

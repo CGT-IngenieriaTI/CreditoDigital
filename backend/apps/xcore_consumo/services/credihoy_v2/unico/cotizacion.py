@@ -1,4 +1,6 @@
 """Explicit quote only. No scoring, provider refresh, financial formula or radication."""
+
+
 import hashlib
 import json
 from uuid import UUID,uuid4
@@ -67,8 +69,12 @@ def _actor(operador,titular):
 
 def _evaluacion_huella(s):
     from apps.xcore_consumo.models import EvaluacionConsumo
-    rows=list(EvaluacionConsumo.objects.filter(solicitud=s).order_by('pk').values())
-    return hashlib.sha256(json.dumps(rows,sort_keys=True,default=str).encode()).hexdigest()
+    if s.metadatos.get('modo') == 'AUTOGESTION_ENVIADA':
+        from .funcional import leer_estado_funcional
+        current = leer_estado_funcional(s)
+        return hashlib.sha256(json.dumps({'resultado': current['resultado'], 'revision': current.get('revisionEstudio')}, sort_keys=True, default=str).encode()).hexdigest()
+    rows = list(EvaluacionConsumo.objects.filter(solicitud=s).order_by('pk').values())
+    return hashlib.sha256(json.dumps(rows, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def _calendario_guardado(detail, medio):
@@ -274,41 +280,51 @@ def _exigir_decision_ofertable(s, detail):
     from .funcional import KEY as study_key
     from .condiciones_producto import politica_digital
     try:
-        history=detail.orchestration_data.get('credihoy_decisiones_digitales_v1')
-        if type(history) is not dict or not history:raise ValueError()
-        entries=[]
-        now=timezone.now()
-        for key,entry in history.items():
-            body={k:v for k,v in entry.items() if k!='sha256'}
-            when=datetime.fromisoformat(entry['registradoEn'])
-            if (str(UUID(key))!=key or entry['operacionId']!=key
-                    or entry['solicitudId']!=str(s.pk) or not entry['actorTecnicoId']
-                    or when.utcoffset() is None or when>now
-                    or entry['sha256']!=hashlib.sha256(
-                        json.dumps(body,sort_keys=True,default=str).encode()).hexdigest()):
+        history = detail.orchestration_data.get('credihoy_decisiones_digitales_v1')
+        automatic = getattr(s, 'metadatos', {}).get('modo') == 'AUTOGESTION_ENVIADA'
+        if automatic:
+            from apps.utils.models import AuditLog
+            records = list(AuditLog.objects.filter(solicitud=s, event='CREDIHOY_DECISION_DIGITAL_LOCAL').order_by('-created_at', '-pk')[:101])
+            if len(records) > 100:
                 raise ValueError()
-            entries.append((when,entry))
-        latest=max(when for when,_ in entries)
-        current=[entry for when,entry in entries if when==latest]
-        if len(current)!=1:raise ValueError()
-        entry=current[0];decision=entry['resultado'];policy=politica_digital()
-        evaluations=list(EvaluacionConsumo.objects.filter(solicitud=s).values_list('resultados',flat=True))
-        snapshots=[e[study_key] for e in evaluations if type(e) is dict and study_key in e]
-        if len(snapshots)!=1:raise ValueError()
-        snapshot=snapshots[0]
-        if (type(snapshot) is not dict or snapshot.get('solicitudId')!=str(s.pk)
-                or entry['evaluacionSha256']!=hashlib.sha256(
-                    json.dumps(snapshot,sort_keys=True,default=str).encode()).hexdigest()
-                or decision['estado']!='APROBADO' or decision['solicitudId']!=str(s.pk)
-                or decision['versionPolitica']!=policy['version']
-                or decision['referencia']!=policy['referencia']
-                or decision['reglasOriginales']!=snapshot['reglas']
-                or decision['decisionLinixRegistrada'] is not False
-                or decision['autorizaDesembolso'] is not False):
+            history = {str(record.request_id): record.payload for record in records}
+        if type(history) is not dict or not history:
             raise ValueError()
-        return {'operacionId':entry['operacionId'],'sha256':entry['sha256'],
-            'evaluacionSha256':entry['evaluacionSha256'],'versionPolitica':decision['versionPolitica']}
-    except (KeyError,TypeError,ValueError,AttributeError):
+        entries = []
+        now = timezone.now()
+        for key, entry in history.items():
+            body = {k: v for k, v in entry.items() if k != 'sha256'}
+            when = datetime.fromisoformat(entry['registradoEn'])
+            if str(UUID(key)) != key or entry['operacionId'] != key or entry['solicitudId'] != str(s.pk) or (not entry['actorTecnicoId']) or (when.utcoffset() is None) or (when > now) or (entry['sha256'] != hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()):
+                raise ValueError()
+            entries.append((when, entry))
+        latest = max((when for when, _ in entries))
+        current = [entry for when, entry in entries if when == latest]
+        if len(current) != 1:
+            raise ValueError()
+        entry = current[0]
+        decision = entry['resultado']
+        policy = politica_digital()
+        if automatic:
+            from .funcional import leer_estado_funcional
+            from .elegibilidad import contexto_desde_estudio, evaluar_decision_digital
+            state = leer_estado_funcional(s)
+            snapshot = state['resultado']
+            if entry.get('revisionReferencia') != state.get('revisionEstudio', {}).get('versionReferencia'):
+                raise ValueError()
+            current = evaluar_decision_digital(contexto_desde_estudio(s, snapshot, ahora=now), ahora=now)
+            if json.loads(json.dumps(current, default=str)) != decision:
+                raise ValueError()
+        else:
+            evaluations = list(EvaluacionConsumo.objects.filter(solicitud=s).values_list('resultados', flat=True))
+            snapshots = [e[study_key] for e in evaluations if type(e) is dict and study_key in e]
+            if len(snapshots) != 1:
+                raise ValueError()
+            snapshot = snapshots[0]
+        if type(snapshot) is not dict or snapshot.get('solicitudId') != str(s.pk) or entry['evaluacionSha256'] != hashlib.sha256(json.dumps(snapshot, sort_keys=True, default=str).encode()).hexdigest() or (decision['estado'] != 'APROBADO') or (decision['solicitudId'] != str(s.pk)) or (decision['versionPolitica'] != policy['version']) or (decision['referencia'] != policy['referencia']) or (decision['reglasOriginales'] != snapshot['reglas']) or (decision['decisionLinixRegistrada'] is not False) or (decision['autorizaDesembolso'] is not False):
+            raise ValueError()
+        return {'operacionId': entry['operacionId'], 'sha256': entry['sha256'], 'evaluacionSha256': entry['evaluacionSha256'], 'versionPolitica': decision['versionPolitica']}
+    except (KeyError, TypeError, ValueError, AttributeError):
         raise ValueError('OFERTA_REQUIERE_DECISION_DIGITAL_APROBADA_DEL_ESTUDIO_VIGENTE') from None
 
 

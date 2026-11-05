@@ -113,6 +113,9 @@ export interface EstudioPublico {
       disponibleAntesGastosFamiliares:string|null;gastosFamiliaresAplicados:string|null;
       capacidadDisponible:string|null;cuotaNuevaEstimada:string|null;residualPosteriorEstimado:string|null}};
   decision:'PENDIENTE_REVISION'|'REQUIERE_SUBSANACION';autorizadoDecisionCrediticia:false;
+
+decisionPolitica?:{version:'credihoy-decision-publica-v1';versionPolitica:string;estado:'APROBADO'|'RECHAZADO'|'EN_REVISION';
+    motivos:{codigo:string;regla:string|null}[];decisionLinixRegistrada:false;autorizaDesembolso:false};
 }
 export interface SimulacionPublica {cuota:string;tasaNominalNamv:string;
   origen:'REFERENCIA_INSTITUCIONAL_REGISTRADA'|'CALCULO_INSTITUCIONAL';
@@ -244,6 +247,16 @@ export function validarEstudioPublico(raw:unknown,sid:string,now=Date.now()):Est
   const p=obj(raw),c=obj(p.capacidad);
   const fields=['versionContrato','solicitudId','evaluacionBaseId','version','referenciaVersion',
     'fechaEvaluacion','reglas','capacidad','decision','autorizadoDecisionCrediticia'];
+if(p.decisionPolitica!==undefined){
+    fields.push('decisionPolitica');const d=obj(p.decisionPolitica);
+    if(Object.keys(d).sort().join(',')!==['version','versionPolitica','estado','motivos','decisionLinixRegistrada','autorizaDesembolso'].sort().join(',')
+      ||d.version!=='credihoy-decision-publica-v1'||!text(d.versionPolitica)||text(d.versionPolitica).length>120
+      ||!['APROBADO','RECHAZADO','EN_REVISION'].includes(text(d.estado))
+      ||d.decisionLinixRegistrada!==false||d.autorizaDesembolso!==false||!Array.isArray(d.motivos)||d.motivos.length>40)fail();
+    for(const value of d.motivos as unknown[]){const reason=obj(value);
+      if(Object.keys(reason).sort().join(',')!=='codigo,regla'||!/^([A-Z][A-Z0-9_]{1,120})$/.test(text(reason.codigo))
+        ||reason.regla!==null&&!/^UNICO_FILA_[0-9]{1,2}$/.test(text(reason.regla)))fail();}
+  }
   const sameKeys=(v:Record<string,unknown>,keys:string[])=>Object.keys(v).sort().join(',')===[...keys].sort().join(',');
   if(!sameKeys(p,fields)||p.versionContrato!=='credihoy-estudio-publico-v1'||p.solicitudId!==sid||!uuid.test(sid)
     ||!Number.isSafeInteger(p.evaluacionBaseId)||Number(p.evaluacionBaseId)<1

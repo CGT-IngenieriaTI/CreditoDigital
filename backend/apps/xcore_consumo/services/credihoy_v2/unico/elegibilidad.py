@@ -1,6 +1,8 @@
 """Puerta de negocio previa a LINIX; no calcula riesgo ni emite decisiones."""
 
 
+
+
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -401,8 +403,16 @@ def evaluar_decision_digital(c, *, ahora):
     if not special and (classification.get('estado') != ORDINARIO or classification.get('autorizaAutomatizacion') is not True):
         return {**result, 'estado': 'BLOQUEO_ESTAMENTOS_SIN_EVIDENCIA'}
     rows = deepcopy(c.reglas)
+    from .inventario import inventario_reglas_unico_v2
+    inactive = {f'UNICO_FILA_{v.fila}' for v in inventario_reglas_unico_v2() if not v.activa}
+    inactive_used = set()
     for row in rows:
         state = row.get('estadoEvaluacion', row.get('resultado', 'NO_EVALUABLE'))
+        if row.get('codigo') in inactive and state == 'NO_APLICA' and (row.get('efecto') == 'INFORMATIVO') and (row.get('motivos') == ['REGLA_INACTIVA_NO_APLICADA']):
+            row.update(justificacionExclusion='REGLA_INACTIVA_EN_MATRIZ_DOCUMENTAL', referenciaExclusion=p['referencia'])
+            inactive_used.add(row['codigo'])
+        if row.get('codigo') == 'UNICO_FILA_31' and state == 'NO_APLICA' and (row.get('efecto') == 'INFORMATIVO') and (row.get('motivos') == ['SOLO_RENOVACION_GER_PO_068_6_2_3_7']):
+            row.update(justificacionExclusion='SOLICITUD_NUEVA_NO_RENOVACION', referenciaExclusion='GER-PO.068:6.2.3.7')
         if row.get('codigo') == 'UNICO_FILA_6' and state == 'NO_CUMPLE' and row.get('evidencia'):
             row.update(efecto='INFORMATIVO', excepcionAplicada=p['excepcionEmbargos'], versionExcepcion=p['version'])
             result['alertas'].append({'codigo': 'CUENTAS_EMBARGADAS', 'hechoOriginal': deepcopy(next((r for r in c.reglas if r['codigo'] == 'UNICO_FILA_6'))), 'excepcion': p['version'], 'noOmiteControlLegalCuentaDesembolso': True})
@@ -424,7 +434,7 @@ def evaluar_decision_digital(c, *, ahora):
                     row.update(estadoEvaluacion='CUMPLE', evidencia=deepcopy(collection['evidencia']))
                 elif collection.get('estado') == 'REQUIERE_RECOGIDA_OBLIGATORIA':
                     row.update(estadoEvaluacion='NO_EVALUABLE', motivos=['SUBSANACION_RECOGIDA_OBLIGATORIA'])
-    policy = PoliticaElegibilidad(p['version'], p['referencia'], True, datetime(2026, 10, 26, tzinfo=timezone.utc), datetime.max.replace(tzinfo=timezone.utc), PERFIL, tuple((ReglaPolitica(code, code != 'UNICO_FILA_6', True, True, code != 'UNICO_FILA_6', permite_no_aplica=True, referencia_exclusion=p['referencia']) for code in CODIGOS)))
+    policy = PoliticaElegibilidad(p['version'], p['referencia'], True, datetime(2026, 10, 26, tzinfo=timezone.utc), datetime.max.replace(tzinfo=timezone.utc), PERFIL, tuple((ReglaPolitica(code, code != 'UNICO_FILA_6', True, code not in inactive_used, code != 'UNICO_FILA_6', permite_no_aplica=True, permite_inactiva=code in inactive_used, referencia_exclusion=p['referencia']) for code in CODIGOS)))
     checked = evaluar_elegibilidad(replace(c, reglas=rows), policy, ahora=ahora)
     transport_causes = [v for v in checked['causales'] if v['codigo'] != 'DECISION_GRANT_AUSENTE_INVALIDO_O_INCOMPATIBLE']
     result['preflightRadicacionOrdinaria'] = {**checked, 'causales': transport_causes, 'elegible': not transport_causes, 'estado': 'ELEGIBLE_PARA_RADICACION' if not transport_causes else 'RADICACION_BLOQUEADA', 'decisionPoliticaVersion': p['version'], 'requiereGrantAprobadorHumano': False, 'transporteHabilitado': False}
@@ -444,7 +454,7 @@ def evaluar_decision_digital(c, *, ahora):
     return result
 
 
-def registrar_decision_digital(solicitud_id, *, operador, contexto, snapshot_clave, clave_idempotencia, ahora):
+def registrar_decision_digital(solicitud_id, *, operador, contexto, snapshot_clave, clave_idempotencia, ahora, autogestion=False, revision_referencia=None):
     """Append to the existing dossier journal, not to a historical rule snapshot.
 
     Internal owner-authorized operation; no new public route, START or financial
@@ -453,33 +463,113 @@ def registrar_decision_digital(solicitud_id, *, operador, contexto, snapshot_cla
     from copy import deepcopy
     from uuid import UUID
     from django.db import transaction
-    from apps.xcore_consumo.models import SolicitudConsumo,EvaluacionConsumo
+    from apps.xcore_consumo.models import SolicitudConsumo, EvaluacionConsumo
     from apps.utils.models import AuditLog
     from .consentimiento_real import obtener
-    key=str(UUID(str(clave_idempotencia)))
+    key = str(UUID(str(clave_idempotencia)))
     with transaction.atomic():
-        case=obtener(solicitud_id,operador,lock=True)
-        detail=SolicitudConsumo.objects.select_for_update().get(solicitud=case)
-        evaluation=EvaluacionConsumo.objects.select_for_update().get(solicitud=case)
-        snapshot=evaluation.resultados.get(snapshot_clave)
-        digest=hashlib.sha256(json.dumps(snapshot,sort_keys=True,default=str).encode()).hexdigest()
-        if (contexto.solicitud_id!=str(case.pk) or contexto.evaluacion_id!=digest
-                or type(snapshot) is not dict or snapshot.get('solicitudId')!=str(case.pk)
-                or list(contexto.reglas)!=snapshot.get('reglas')):
+        if autogestion:
+            from .funcional import obtener_para_evaluacion, leer_estado_funcional
+            case = obtener_para_evaluacion(solicitud_id, operador, autogestion=True, lock=True, revision_conservada=True)
+        else:
+            case = obtener(solicitud_id, operador, lock=True)
+        detail = SolicitudConsumo.objects.select_for_update().get(solicitud=case)
+        evaluation = EvaluacionConsumo.objects.select_for_update().get(solicitud=case)
+        if autogestion:
+            state = leer_estado_funcional(case)
+            if not revision_referencia or state.get('revisionEstudio', {}).get('versionReferencia') != str(revision_referencia):
+                raise ValueError('DECISION_REVISION_NO_VIGENTE')
+            snapshot = state['resultado']
+            if asdict(contexto) != asdict(contexto_desde_estudio(case, snapshot, ahora=ahora)):
+                raise ValueError('DECISION_CONTEXTO_NO_CORRESPONDE_A_FUENTES')
+        else:
+            snapshot = evaluation.resultados.get(snapshot_clave)
+        digest = hashlib.sha256(json.dumps(snapshot, sort_keys=True, default=str).encode()).hexdigest()
+        if contexto.solicitud_id != str(case.pk) or contexto.evaluacion_id != digest or type(snapshot) is not dict or (snapshot.get('solicitudId') != str(case.pk)) or (list(contexto.reglas) != snapshot.get('reglas')):
             raise ValueError('DECISION_DE_OTRA_EVALUACION_O_EXPEDIENTE')
-        result=json.loads(json.dumps(evaluar_decision_digital(contexto,ahora=ahora),default=str))
-        history=deepcopy(detail.orchestration_data.get('credihoy_decisiones_digitales_v1',{}))
+        result = json.loads(json.dumps(evaluar_decision_digital(contexto, ahora=ahora), default=str))
+        if autogestion:
+            existing = list(AuditLog.objects.filter(solicitud=case, event='CREDIHOY_DECISION_DIGITAL_LOCAL', request_id=key)[:2])
+            if existing:
+                old = existing[0].payload
+                if len(existing) != 1 or old.get('resultado') != result or old.get('evaluacionSha256') != digest or (old.get('revisionReferencia') != str(revision_referencia)) or (old.get('solicitudId') != str(case.pk)) or (old.get('sha256') != hashlib.sha256(json.dumps({k: v for k, v in old.items() if k != 'sha256'}, sort_keys=True, default=str).encode()).hexdigest()):
+                    raise ValueError('IDEMPOTENCIA_DECISION_DIGITAL_CONFLICTO')
+                return old
+            body = {'solicitudId': str(case.pk), 'evaluacionSha256': digest, 'resultado': result, 'operacionId': key, 'registradoEn': ahora.isoformat(), 'actorTecnicoId': str(operador.pk), 'revisionReferencia': str(revision_referencia), 'contextoSha256': hashlib.sha256(json.dumps(asdict(contexto), sort_keys=True, default=str).encode()).hexdigest()}
+            body['sha256'] = hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
+            AuditLog.objects.create(solicitud=case, event='CREDIHOY_DECISION_DIGITAL_LOCAL', actor=str(operador.pk), request_id=key, payload=body)
+            return body
+        history = deepcopy(detail.orchestration_data.get('credihoy_decisiones_digitales_v1', {}))
         if key in history:
-            if history[key]['resultado']!=result or history[key]['evaluacionSha256']!=digest:
+            if history[key]['resultado'] != result or history[key]['evaluacionSha256'] != digest:
                 raise ValueError('IDEMPOTENCIA_DECISION_DIGITAL_CONFLICTO')
             return history[key]
-        body={'solicitudId':str(case.pk),'evaluacionSha256':digest,'resultado':result,
-            'operacionId':key,'registradoEn':ahora.isoformat(),'actorTecnicoId':str(operador.pk)}
-        body['sha256']=hashlib.sha256(json.dumps(body,sort_keys=True,default=str).encode()).hexdigest()
-        history[key]=body
-        detail.orchestration_data={**detail.orchestration_data,'credihoy_decisiones_digitales_v1':history}
-        detail.save(update_fields=['orchestration_data','updated_at'])
-        AuditLog.objects.create(solicitud=case,event='CREDIHOY_DECISION_DIGITAL_LOCAL',actor=str(operador.pk),
-            request_id=key,payload={'estado':result['estado'],'versionPolitica':result['versionPolitica'],
-                'sha256':body['sha256'],'aprobacionLinixEjecutada':False})
+        body = {'solicitudId': str(case.pk), 'evaluacionSha256': digest, 'resultado': result, 'operacionId': key, 'registradoEn': ahora.isoformat(), 'actorTecnicoId': str(operador.pk)}
+        body['sha256'] = hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
+        history[key] = body
+        detail.orchestration_data = {**detail.orchestration_data, 'credihoy_decisiones_digitales_v1': history}
+        detail.save(update_fields=['orchestration_data', 'updated_at'])
+        AuditLog.objects.create(solicitud=case, event='CREDIHOY_DECISION_DIGITAL_LOCAL', actor=str(operador.pk), request_id=key, payload={'estado': result['estado'], 'versionPolitica': result['versionPolitica'], 'sha256': body['sha256'], 'aprobacionLinixEjecutada': False})
         return body
+
+
+def contexto_desde_estudio(s, resultado, *, ahora):
+    """Bind the existing decision engine to current institutional observations."""
+    from apps.xcore_consumo.models import ConsultaEstamentoOracle
+    from .estamentos import clasificar_novedades
+    from .reglas import definicion_funcional_reglas_unico_v2
+    from .condiciones_producto import politica_digital
+    if resultado.get('solicitudId') != str(s.pk):
+        raise ValueError('DECISION_ESTUDIO_DE_OTRO_EXPEDIENTE')
+    rows = resultado['reglas']
+    capacity = resultado['capacidadMatematica']
+    row = [v for v in rows if v.get('codigo') == 'UNICO_FILA_2']
+    if len(row) != 1:
+        raise ValueError('DECISION_INVENTARIO_CAPACIDAD_INVALIDO')
+    definition = row[0].get('evidencia', {}).get('definicionFuncionalComunicada')
+    criterion = None
+    reference = None
+    if definition == definicion_funcional_reglas_unico_v2() and row[0].get('estadoEvaluacion') in {'CUMPLE', 'NO_CUMPLE'}:
+        criterion = row[0]['estadoEvaluacion'] == 'CUMPLE'
+        reference = politica_digital()['referencia'] + ':' + definition['version']
+    holder = hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest()
+    observed = ConsultaEstamentoOracle.objects.filter(solicitud=s, estado='OK').order_by('-created_at', '-pk').first()
+    classification = clasificar_novedades(observed.response_payload if observed else None, solicitud_id=s.pk, titular_referencia=holder, ahora=ahora, monto=s.monto_solicitado)
+    collection = None
+    row32 = [v for v in rows if v.get('codigo') == 'UNICO_FILA_32']
+    if len(row32) == 1:
+        evidence = row32[0].get('evidencia', {}).get('existeCredihoy111Registrado', {})
+        if row32[0].get('estadoEvaluacion') == 'NO_APLICA' and row32[0].get('motivos') == ['AUSENCIA_CREDIHOY_111_CERTIFICADA_SIN_RECOGIDA'] and (evidence.get('disponible') is True) and (evidence.get('valor') is False) and (evidence.get('estado_certificacion') == 'CERTIFICADO') and all((evidence.get(k) for k in ('fuente', 'ruta_origen', 'referencia_evidencia', 'fecha_corte'))):
+            collection = {'solicitudId': str(s.pk), 'estado': 'NO_APLICA', 'evidencia': evidence}
+    return ContextoElegibilidad(solicitud_id=str(s.pk), evaluacion_id=hashlib.sha256(json.dumps(resultado, sort_keys=True, default=str).encode()).hexdigest(), perfil=PERFIL, reglas=tuple(rows), capacidad_estado=capacity['estado'], capacidad_cumple_criterio=criterion, capacidad_referencia=reference, decision_autorizada=False, decision_referencia=None, huella_decision=None, consumidor=None, xml_completo=None, xml_referencia=None, condiciones_completas=None, consentimiento_vigente=None, consentimiento_referencia=None, documentos_vigentes=None, documentos_referencia=None, titular_referencia=holder, clasificacion_estamentos=classification, resultado_recogida=collection)
+
+
+def continuar_decision_estudio(solicitud_id, operador):
+    from dataclasses import asdict
+    from uuid import uuid5, NAMESPACE_URL
+    from django.utils import timezone
+    from .funcional import obtener_para_evaluacion, leer_estado_funcional
+    from .condiciones_producto import politica_digital
+    case = obtener_para_evaluacion(solicitud_id, operador, autogestion=True, revision_conservada=True)
+    state = leer_estado_funcional(case)
+    revision = state.get('revisionEstudio')
+    if not revision:
+        raise ValueError('DECISION_REQUIERE_REVISION_VERIFICADA')
+    now = timezone.now()
+    context = contexto_desde_estudio(case, state['resultado'], ahora=now)
+    reference = hashlib.sha256(json.dumps({'revision': revision['versionReferencia'], 'contexto': asdict(context), 'politica': politica_digital()}, sort_keys=True, default=str).encode()).hexdigest()
+    key = str(uuid5(NAMESPACE_URL, 'credihoy-decision-revision:' + str(case.pk) + ':' + reference))
+    return registrar_decision_digital(case.pk, operador=operador, contexto=context, snapshot_clave=None, clave_idempotencia=key, ahora=now, autogestion=True, revision_referencia=revision['versionReferencia'])
+
+
+def proyectar_decision_estudio(result):
+    state = result['estado']
+    public_state = state if state in {'APROBADO', 'RECHAZADO'} else 'EN_REVISION'
+    reasons = [{'codigo': v['codigo'], 'regla': v.get('regla')} for v in result.get('causalElegibilidad', [])]
+    if state == 'BLOQUEO_ESTAMENTOS_SIN_EVIDENCIA':
+        reasons.append({'codigo': 'CLASIFICACION_INSTITUCIONAL_PENDIENTE', 'regla': None})
+    elif state.startswith('REQUIERE_'):
+        reasons.append({'codigo': 'REVISION_ESTAMENTO_INSTITUCIONAL', 'regla': None})
+    elif state == 'POLITICA_NO_APLICABLE':
+        reasons.append({'codigo': 'POLITICA_PRODUCTO_NO_APLICABLE', 'regla': None})
+    return {'version': 'credihoy-decision-publica-v1', 'versionPolitica': result['versionPolitica'], 'estado': public_state, 'motivos': reasons, 'decisionLinixRegistrada': False, 'autorizaDesembolso': False}

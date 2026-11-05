@@ -28,6 +28,14 @@ const MOTIVOS_ESTUDIO:Record<string,string>={
   ACTUALIZACION_DATOS_FUERA_VIGENCIA:'Debes actualizar tus datos institucionales con Congente.',
   CAPACIDAD_PAGO_NO_DISPONIBLE:'La capacidad definitiva requiere informacion adicional.'};
 function motivoEstudio(value:string){return MOTIVOS_ESTUDIO[value]??'Esta validacion requiere revision de Congente.';}
+function motivoDecision(codigo:string,regla:string|null){
+  if(regla==='UNICO_FILA_9')return 'Debes actualizar tus datos con Congente.';
+  if(codigo==='CLASIFICACION_INSTITUCIONAL_PENDIENTE')return 'Congente debe verificar el estamento que corresponde a tu solicitud.';
+  if(codigo==='REVISION_ESTAMENTO_INSTITUCIONAL')return 'Tu solicitud requiere revision del estamento institucional correspondiente.';
+  if(codigo==='CAPACIDAD_NO_EVALUABLE')return 'Falta informacion acreditada para decidir sobre tu capacidad de pago.';
+  if(codigo==='REGLA_EXCLUYENTE_NO_CUMPLE')return 'Tu solicitud no cumple una condicion obligatoria del credito.';
+  return 'Congente debe revisar una condicion pendiente de tu solicitud.';
+}
 export const VISTAS:{codigo:Vista;nombre:string;icono:LucideIcon;descripcion:string}[]=[
   {codigo:'estado',nombre:'Mi solicitud',icono:LayoutDashboard,descripcion:'El resumen de tu solicitud y los pasos que siguen.'},
   {codigo:'solicitud',nombre:'Mis datos',icono:UserRound,descripcion:'Tu identidad y la informacion guardada de tu solicitud.'},
@@ -107,6 +115,24 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
   const inicioPersonal=useRef(false);
   const heading=useRef<HTMLHeadingElement>(null),navigation=useRef<HTMLElement>(null);
   const s=solicitudes?.find(v=>v.referencia===seleccion)??solicitudes?.[0];
+const refreshStudy=useRef(actualizar),readingStudy=useRef(busy);
+  refreshStudy.current=actualizar;readingStudy.current=busy;
+  const reviewReads=useRef({sid:'',count:0,last:0});
+  const esperaRevision=Boolean(s?.estudio&&(s.estudio.decision==='REQUIERE_SUBSANACION'
+    ||s.estudio.decisionPolitica?.estado==='EN_REVISION'));
+  useEffect(()=>{
+    if(!s||!esperaRevision||!seguimientoHabilitado||!['estado','evaluacion'].includes(vista))return;
+    if(reviewReads.current.sid!==s.referencia)reviewReads.current={sid:s.referencia,count:0,last:Date.now()};
+    const read=()=>{
+      const state=reviewReads.current,now=Date.now();
+      if(document.visibilityState!=='visible'||readingStudy.current||state.count>=10||now-state.last<90000)return;
+      state.last=now;state.count++;refreshStudy.current();
+    };
+    const timer=setInterval(read,90000);
+    document.addEventListener('visibilitychange',read);window.addEventListener('focus',read);
+    return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',read);window.removeEventListener('focus',read);};
+  },[s?.referencia,esperaRevision,seguimientoHabilitado,vista]);
+  
   const [acto,setActo]=useState<{sid:string;data:AutorizacionTitular|null}|null>(null);
   const [consultandoActo,setConsultandoActo]=useState(false);
   const leerActo=useRef(autorizar);leerActo.current=autorizar;
@@ -328,8 +354,12 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
           {s.estudio&&<div className="ca-study">
             <div className="ca-study-heading"><h3 className="ca-section-title">Estudio de tu solicitud</h3>
               <span>Version {s.estudio.version} - {fechaPublica(s.estudio.fechaEvaluacion)}</span></div>
-            <Aviso tono="warning" titulo={s.estudio.decision==='REQUIERE_SUBSANACION'?'Hay requisitos por subsanar':'Estudio pendiente de revision'}>
-              Los datos incompletos y las validaciones pendientes no son un rechazo definitivo de tu credito.</Aviso>
+            {s.estudio.decisionPolitica?<Aviso tono={s.estudio.decisionPolitica.estado==='APROBADO'?'success':s.estudio.decisionPolitica.estado==='RECHAZADO'?'error':'warning'}
+              titulo={s.estudio.decisionPolitica.estado==='APROBADO'?'Aprobado por la politica de credito':s.estudio.decisionPolitica.estado==='RECHAZADO'?'Solicitud rechazada por la politica de credito':'Solicitud en revision'}>
+              {s.estudio.decisionPolitica.motivos.length>0&&<ul>{s.estudio.decisionPolitica.motivos.map((m,i)=><li key={i}>{motivoDecision(m.codigo,m.regla)}</li>)}</ul>}
+              <p>La oferta contractual, la formalizacion y el registro institucional conservan sus validaciones pendientes.</p>
+            </Aviso>:<Aviso tono="warning" titulo={s.estudio.decision==='REQUIERE_SUBSANACION'?'Hay requisitos por subsanar':'Estudio pendiente de revision'}>
+              Los datos incompletos y las validaciones pendientes no son un rechazo definitivo de tu credito.</Aviso>}
             {s.estudio.capacidad.metodologia?<dl className="ca-metrics ca-methodology">
               {([['disponibleAntesGastosFamiliares','Disponible antes de gastos familiares'],
                 ['gastosFamiliaresAplicados','Gastos familiares aplicados'],

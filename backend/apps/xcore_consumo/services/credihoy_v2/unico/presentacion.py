@@ -1,6 +1,8 @@
 """Serializador existente compartido; sin fixtures ni construccion de hechos."""
 
 
+
+
 from datetime import datetime, timezone
 from .inventario import inventario_reglas_unico_v2
 from .reglas import estado_evaluacion_regla, datos_faltantes_regla

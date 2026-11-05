@@ -3,6 +3,8 @@
 
 
 
+
+
 import hashlib
 import hmac
 import json
@@ -603,3 +605,16 @@ def project_simulation(row):
         return json.loads(json.dumps(row))
     except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):raise NoDisponible from None
 
+
+
+def project_study_decision(result):
+    state = result['estado']
+    public_state = state if state in {'APROBADO', 'RECHAZADO'} else 'EN_REVISION'
+    reasons = [{'codigo': v['codigo'], 'regla': v.get('regla')} for v in result.get('causalElegibilidad', [])]
+    if state == 'BLOQUEO_ESTAMENTOS_SIN_EVIDENCIA':
+        reasons.append({'codigo': 'CLASIFICACION_INSTITUCIONAL_PENDIENTE', 'regla': None})
+    elif state.startswith('REQUIERE_'):
+        reasons.append({'codigo': 'REVISION_ESTAMENTO_INSTITUCIONAL', 'regla': None})
+    elif state == 'POLITICA_NO_APLICABLE':
+        reasons.append({'codigo': 'POLITICA_PRODUCTO_NO_APLICABLE', 'regla': None})
+    return {'version': 'credihoy-decision-publica-v1', 'versionPolitica': result['versionPolitica'], 'estado': public_state, 'motivos': reasons, 'decisionLinixRegistrada': False, 'autorizaDesembolso': False}

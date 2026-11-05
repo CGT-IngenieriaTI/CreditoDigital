@@ -3,6 +3,8 @@
 
 
 
+
+
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -563,13 +565,35 @@ def continuar_decision_estudio(solicitud_id, operador):
 
 
 def proyectar_decision_estudio(result):
-    state = result['estado']
-    public_state = state if state in {'APROBADO', 'RECHAZADO'} else 'EN_REVISION'
-    reasons = [{'codigo': v['codigo'], 'regla': v.get('regla')} for v in result.get('causalElegibilidad', [])]
-    if state == 'BLOQUEO_ESTAMENTOS_SIN_EVIDENCIA':
-        reasons.append({'codigo': 'CLASIFICACION_INSTITUCIONAL_PENDIENTE', 'regla': None})
-    elif state.startswith('REQUIERE_'):
-        reasons.append({'codigo': 'REVISION_ESTAMENTO_INSTITUCIONAL', 'regla': None})
-    elif state == 'POLITICA_NO_APLICABLE':
-        reasons.append({'codigo': 'POLITICA_PRODUCTO_NO_APLICABLE', 'regla': None})
-    return {'version': 'credihoy-decision-publica-v1', 'versionPolitica': result['versionPolitica'], 'estado': public_state, 'motivos': reasons, 'decisionLinixRegistrada': False, 'autorizaDesembolso': False}
+    from .publico_institucional import project_study_decision
+    return project_study_decision(result)
+
+
+def leer_decision_estudio(s, *, ahora=None):
+    """Read the latest policy decision, bound to the verified current revision."""
+    from copy import deepcopy
+    from uuid import UUID
+    from django.utils import timezone
+    from apps.utils.models import AuditLog
+    from .funcional import leer_estado_funcional
+    now = ahora or timezone.now()
+    record = AuditLog.objects.filter(solicitud=s, event='CREDIHOY_DECISION_DIGITAL_LOCAL').order_by('-created_at', '-pk').first()
+    if record is None:
+        return None
+    try:
+        state = leer_estado_funcional(s)
+        revision = state.get('revisionEstudio', {}).get('versionReferencia')
+        body = record.payload
+        if not revision or body.get('revisionReferencia') != str(revision):
+            return None
+        key = str(UUID(body['operacionId']))
+        date = datetime.fromisoformat(body['registradoEn'])
+        if key != str(record.request_id) or body['solicitudId'] != str(s.pk) or (not body['actorTecnicoId']) or (date.utcoffset() is None) or (date > now) or (body['sha256'] != hashlib.sha256(json.dumps({k: v for k, v in body.items() if k != 'sha256'}, sort_keys=True, default=str).encode()).hexdigest()) or (body['evaluacionSha256'] != hashlib.sha256(json.dumps(state['resultado'], sort_keys=True, default=str).encode()).hexdigest()):
+            raise ValueError()
+        context = contexto_desde_estudio(s, state['resultado'], ahora=now)
+        expected = json.loads(json.dumps(evaluar_decision_digital(context, ahora=now), default=str))
+        if body['contextoSha256'] != hashlib.sha256(json.dumps(asdict(context), sort_keys=True, default=str).encode()).hexdigest() or body['resultado'] != expected:
+            raise ValueError()
+        return deepcopy(body)
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise ValueError('DECISION_PERSISTIDA_NO_VERIFICABLE') from None

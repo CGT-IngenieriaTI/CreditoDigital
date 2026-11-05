@@ -1,0 +1,27 @@
+{
+  "estado": "BACKEND_C_ADAPTADORES_IMAGEN_FUERA215",
+  "imagenBase": "sha256:be58a567c4b14f6e0785c51b674d22353d933ba138ae3667b3b626eaafc05ce7",
+  "imagenConfigId": "sha256:e8d93bfb182c700b1306432ba086db887433e20dc4b734fcd207bc910dd739ed",
+  "baseLocalId": "sha256:2879d0e5876d78278a62d2d7099e70cfe7161d310a0da25cfaa5c2baab77a8b9",
+  "configYCapasBaseVerificadas": true,
+  "tag": "credihoy-c-continuacion:9dc3004a7b6ca8e8-compact",
+  "archivoSha256": "f8c9948485062253176b01180fdfd5048f7a9abe76c5636eb6b5068b2bdd58f4",
+  "fuentesTarSha256": "1cef07aee04efc3dab3df69504a346bb27c4876fdb1eafa62a811755e816dc60",
+  "manifest": {
+    "hashes": {
+      "apps/xcore_consumo/services/credihoy_v2/unico/funcional.py": "61f7d42cf745872d5935ab677607c68311a7307eb539123d51afc9a7526f4afa"
+    },
+    "version": "backend-c-clasificacion-continuidad-v16"
+  },
+  "pruebas": {
+    "pruebas": 8
+  },
+  "publicado": false,
+  "builds215": 0,
+  "OTP": 0,
+  "HDC": 0,
+  "START": 0,
+  "overlayAgrupado": true,
+  "capas": 123,
+  "capasBase": 121
+}

@@ -12,6 +12,8 @@
 
 
 
+
+
 from decimal import Decimal
 from dataclasses import replace
 import hashlib
@@ -699,12 +701,13 @@ def preparar_revision_estudio(solicitud_id, operador):
     fingerprint = _digest(sources)
     reference = str(uuid5(NAMESPACE_URL, 'credihoy-revision-estudio:' + str(case.pk) + ':' + fingerprint))
     existing = drafts.filter(request_id=reference).first()
+    legacy_existing = None
     if existing is not None:
         raw = decrypt_text(existing.payload['resultadoCifrado'])
         if hashlib.sha256(raw.encode()).hexdigest() != existing.payload['resultadoSha256']:
             raise ValueError('REVISION_CONSERVADA_NO_INTEGRA')
         if 'decisionDigital' not in json.loads(raw)['resultado']:
-            return existing.pk
+            legacy_existing = existing
     from .elegibilidad import contexto_desde_estudio, evaluar_decision_digital
     from .condiciones_producto import politica_digital
     observed = contexto_desde_estudio(case, evaluation.resultados[KEY_HDC], ahora=context.fecha_evaluacion or timezone.now())
@@ -717,6 +720,8 @@ def preparar_revision_estudio(solicitud_id, operador):
         except ValueError:
             pass
         observed = contexto_desde_estudio(case, evaluation.resultados[KEY_HDC], ahora=context.fecha_evaluacion or timezone.now())
+    if legacy_existing is not None and observed.clasificacion_estamentos['estado'] == BLOQUEADO:
+        return legacy_existing.pk
     sources['decisionFuentes'] = {'clasificacionEstamentos': {k: v for k, v in observed.clasificacion_estamentos.items() if k not in ('consultaReferencia', 'fechaConsulta')}, 'politicaSha256': _digest(politica_digital())}
     fingerprint = _digest(sources)
     reference = str(uuid5(NAMESPACE_URL, 'credihoy-revision-estudio:' + str(case.pk) + ':' + fingerprint))

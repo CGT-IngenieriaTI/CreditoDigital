@@ -5,6 +5,8 @@
 
 
 
+
+
 from datetime import datetime
 from decimal import Decimal, localcontext
 import re
@@ -34,21 +36,11 @@ def exigir_consulta_familiar_segura():
 def validar_lectura_original(evidencia, *, solicitud_id, documento, request_id):
     from hashlib import sha256
     try:
-        if (type(evidencia) is not dict or evidencia['versionContrato']!='credihoy-estamentos-select-v1'
-                or evidencia['fuente']!='API_DATA.SELECT_FUENTES_SP_CONSULTAFAMILIAR'
-                or evidencia['fuenteSPSha256']!=contrato_familiar()['fuenteSha256']
-                or evidencia['solicitudId']!=str(solicitud_id) or evidencia['requestId']!=request_id
-                or evidencia['consultaReferencia']!=request_id
-                or evidencia['titularReferencia']!=sha256(documento.encode()).hexdigest()
-                or evidencia['soloLectura'] is not True or evidencia['autorizaAprobacion'] is not False
-                or evidencia.get('lectorSelectExclusivo') is not True
-                or evidencia['ejecutaStart'] is not False or evidencia['contratoAcreditado'] is not True
-                or evidencia['mocked'] is not False or evidencia['completa'] is not True or evidencia['estado']!='OK'
-                or set(evidencia['fuentesVerificadas'])!={'GR001MTERCERO','AP579DCARGXASO','NO223MEMPLEADO','GR1068MGRUPFAM'}
-                or not re.fullmatch('[a-f0-9]{64}',evidencia['selectSha256'])):
+        if type(evidencia) is not dict or evidencia['versionContrato'] != 'credihoy-estamentos-select-v1' or evidencia['fuente'] != 'API_DATA.SELECT_FUENTES_SP_CONSULTAFAMILIAR' or (evidencia['fuenteSPSha256'] != contrato_familiar()['fuenteSha256']) or (evidencia['solicitudId'] != str(solicitud_id)) or (evidencia['requestId'] != request_id) or (evidencia['consultaReferencia'] != request_id) or (evidencia['titularReferencia'] != sha256(documento.encode()).hexdigest()) or (evidencia['soloLectura'] is not True) or (evidencia['autorizaAprobacion'] is not False) or (not _lectura_select_acreditada(evidencia)) or (evidencia['ejecutaStart'] is not False) or (evidencia['contratoAcreditado'] is not True) or (evidencia['mocked'] is not False) or (evidencia['completa'] is not True) or (evidencia['estado'] != 'OK') or (set(evidencia['fuentesVerificadas']) != {'GR001MTERCERO', 'AP579DCARGXASO', 'NO223MEMPLEADO', 'GR1068MGRUPFAM'}) or (not re.fullmatch('[a-f0-9]{64}', evidencia['selectSha256'])):
             raise ValueError()
         return evidencia
-    except (KeyError,TypeError,AttributeError,ValueError):raise ValueError('LECTURA_ORIGINAL_ESTAMENTOS_NO_ACREDITADA') from None
+    except (KeyError, TypeError, AttributeError, ValueError):
+        raise ValueError('LECTURA_ORIGINAL_ESTAMENTOS_NO_ACREDITADA') from None
 
 
 def actualizar_estamentos(solicitud_id, *, actor, cliente=None, autogestion=False, revision_conservada=False):
@@ -62,13 +54,16 @@ def actualizar_estamentos(solicitud_id, *, actor, cliente=None, autogestion=Fals
     rid = str(uuid4())
     with transaction.atomic():
         case = obtener_para_evaluacion(solicitud_id, actor, autogestion=autogestion, lock=True, revision_conservada=revision_conservada)
-        if autogestion:
-            _firma(case)
+        consent = _firma(case) if autogestion else None
+        consent_ref = None
+        if consent is not None:
+            from hashlib import sha256
+            consent_ref = sha256(json.dumps({'consentimientoId': consent.pk, 'textoHash': consent.text_hash, 'version': consent.version}, sort_keys=True, default=str).encode()).hexdigest()
         attempt = ConsultaEstamentoOracle.objects.create(solicitud=case, estado='PENDIENTE', request_payload={'requestId': rid})
         document = case.solicitante.numero_identificacion
     try:
         client = cliente or ApiDataCrediHoyV2Client(ConfiguracionApiDataV2.desde_settings())
-        evidence = client.consultar_estamentos(numero_documento=document, solicitud_id=str(case.pk), fecha_evaluacion=timezone.now().replace(microsecond=0), request_id=rid)
+        evidence = client.consultar_estamentos(numero_documento=document, solicitud_id=str(case.pk), fecha_evaluacion=timezone.now().replace(microsecond=0), request_id=rid, **{'consentimiento_referencia': consent_ref} if consent_ref else {})
         validar_lectura_original(evidence, solicitud_id=case.pk, documento=document, request_id=rid)
         attempt.estado = 'OK'
         attempt.response_payload = evidence
@@ -169,69 +164,64 @@ def normalizar(value):
 
 
 def clasificar_novedades(evidencia, *, solicitud_id, titular_referencia, ahora, monto, smmlv=None, patrimonio=None):
-    instante(ahora,'ahora')
-    result={'version':VERSION,'solicitudId':str(solicitud_id),'titularReferencia':titular_referencia,
-        'estado':BLOQUEADO,'autorizaAutomatizacion':False,'descripcionOriginal':[],
-        'consultaReferencia':None,'fechaConsulta':None,'motivo':'CONTRATO_O_EVIDENCIA_NO_ACREDITADOS',
-        'actividadSeleccionEstamento':121,'rutaSeleccion':10002852,'paradaInstitucionalGarantizada':False,
-        'accionPermitida':'NO_INICIAR_CADENA_LINIX','contencionLocal':'TRANSPORTE_ORDINARIO_CERRADO'}
+    instante(ahora, 'ahora')
+    result = {'version': VERSION, 'solicitudId': str(solicitud_id), 'titularReferencia': titular_referencia, 'estado': BLOQUEADO, 'autorizaAutomatizacion': False, 'descripcionOriginal': [], 'consultaReferencia': None, 'fechaConsulta': None, 'motivo': 'CONTRATO_O_EVIDENCIA_NO_ACREDITADOS', 'actividadSeleccionEstamento': 121, 'rutaSeleccion': 10002852, 'paradaInstitucionalGarantizada': False, 'accionPermitida': 'NO_INICIAR_CADENA_LINIX', 'contencionLocal': 'TRANSPORTE_ORDINARIO_CERRADO'}
     try:
-        if (type(evidencia) is not dict or evidencia.get('fuente') not in {'SP_CONSULTAFAMILIAR','API_DATA.SELECT_FUENTES_SP_CONSULTAFAMILIAR'}
-                or evidencia.get('estado')!='OK' or evidencia.get('mocked') is not False
-                or evidencia.get('completa') is not True or evidencia.get('contratoAcreditado') is not True
-                or evidencia['solicitudId']!=str(solicitud_id) or evidencia['titularReferencia']!=titular_referencia
-                or not re.fullmatch(r'[a-f0-9]{64}',titular_referencia)
-                or not evidencia['consultaReferencia']):return result
-        if evidencia.get('fuente')=='API_DATA.SELECT_FUENTES_SP_CONSULTAFAMILIAR':
-            if (evidencia.get('versionContrato')!='credihoy-estamentos-select-v1'
-                    or evidencia.get('fuenteSPSha256')!=contrato_familiar()['fuenteSha256']
-                    or evidencia.get('lectorSelectExclusivo') is not True
-                    or evidencia.get('soloLectura') is not True):return result
-        when=datetime.fromisoformat(evidencia['fechaConsulta'])
-        if when.utcoffset() is None or when>ahora or (ahora-when).total_seconds()>300:return result
-        rows=evidencia['filas']
-        if type(rows) is not list or not rows:return result
-        flags=[]
+        if type(evidencia) is not dict or evidencia.get('fuente') not in {'SP_CONSULTAFAMILIAR', 'API_DATA.SELECT_FUENTES_SP_CONSULTAFAMILIAR'} or evidencia.get('estado') != 'OK' or (evidencia.get('mocked') is not False) or (evidencia.get('completa') is not True) or (evidencia.get('contratoAcreditado') is not True) or (evidencia['solicitudId'] != str(solicitud_id)) or (evidencia['titularReferencia'] != titular_referencia) or (not re.fullmatch('[a-f0-9]{64}', titular_referencia)) or (not evidencia['consultaReferencia']):
+            return result
+        if evidencia.get('fuente') == 'API_DATA.SELECT_FUENTES_SP_CONSULTAFAMILIAR':
+            if evidencia.get('versionContrato') != 'credihoy-estamentos-select-v1' or evidencia.get('fuenteSPSha256') != contrato_familiar()['fuenteSha256'] or (not _lectura_select_acreditada(evidencia)) or (evidencia.get('soloLectura') is not True):
+                return result
+        when = datetime.fromisoformat(evidencia['fechaConsulta'])
+        if when.utcoffset() is None or when > ahora or (ahora - when).total_seconds() > 300:
+            return result
+        rows = evidencia['filas']
+        if type(rows) is not list or not rows:
+            return result
+        flags = []
         for row in rows:
-            if type(row) is not dict or set(row)!={'resultado','tipofamiliar'}:return result
-            if type(row['resultado']) is not str or type(row['tipofamiliar']) is not str:return result
-            status=normalizar(row['resultado']); description=normalizar(row['tipofamiliar'])
-            if status not in {'si','no'} or (status=='no' and description not in {'','ninguna'}) or (status=='si' and not description):return result
-            if status=='no':flags.append(ORDINARIO);continue
-            tokens=set(re.findall(r'[a-z]+',description))
-            related=bool(tokens & {'grado','afinidad','consanguinidad','civil','conyuge','pariente'})
-            employee=bool(tokens & {'trabajador','colaborador'})
-            if not employee:return result
+            if type(row) is not dict or set(row) != {'resultado', 'tipofamiliar'}:
+                return result
+            if type(row['resultado']) is not str or type(row['tipofamiliar']) is not str:
+                return result
+            status = normalizar(row['resultado'])
+            description = normalizar(row['tipofamiliar'])
+            if status not in {'si', 'no'} or (status == 'no' and description not in {'', 'ninguna'}) or (status == 'si' and (not description)):
+                return result
+            if status == 'no':
+                flags.append(ORDINARIO)
+                continue
+            tokens = set(re.findall('[a-z]+', description))
+            related = bool(tokens & {'grado', 'afinidad', 'consanguinidad', 'civil', 'conyuge', 'pariente'})
+            employee = bool(tokens & {'trabajador', 'colaborador'})
+            if not employee:
+                return result
             flags.append(FAMILIAR if related else COLABORADOR)
-        if ORDINARIO in flags and len(set(flags))>1:
-            return {**result,'motivo':'NOVEDADES_CONTRADICTORIAS'}
-        state=FAMILIAR if FAMILIAR in flags else COLABORADOR if COLABORADOR in flags else ORDINARIO
-        result.update(estado=state,descripcionOriginal=[r['tipofamiliar'] for r in rows],
-            consultaReferencia=evidencia['consultaReferencia'],fechaConsulta=when.isoformat(),motivo=None)
-        if state==FAMILIAR:
-            result.update(rutaDestinoCandidata=10002991,actividadDestinoCandidata=5997,
-                motivo='COMITE_INSTITUCIONAL_NO_SUSTITUIBLE_POR_CGTE')
-        elif state==COLABORADOR:
-            valid=lambda h:isinstance(h,Hecho) and h.disponible and h.estado_certificacion==EC.CERTIFICADO and type(h.valor) is Decimal and h.valor.is_finite() and h.valor>0 and all((h.referencia_evidencia,h.fuente,h.ruta_origen,h.fecha_corte))
-            verified=valid(smmlv) and valid(patrimonio) and smmlv.fecha_corte==patrimonio.fecha_corte
+        if ORDINARIO in flags and len(set(flags)) > 1:
+            return {**result, 'motivo': 'NOVEDADES_CONTRADICTORIAS'}
+        state = FAMILIAR if FAMILIAR in flags else COLABORADOR if COLABORADOR in flags else ORDINARIO
+        result.update(estado=state, descripcionOriginal=[r['tipofamiliar'] for r in rows], consultaReferencia=evidencia['consultaReferencia'], fechaConsulta=when.isoformat(), motivo=None)
+        if state == FAMILIAR:
+            result.update(rutaDestinoCandidata=10002991, actividadDestinoCandidata=5997, motivo='COMITE_INSTITUCIONAL_NO_SUSTITUIBLE_POR_CGTE')
+        elif state == COLABORADOR:
+            valid = lambda h: isinstance(h, Hecho) and h.disponible and (h.estado_certificacion == EC.CERTIFICADO) and (type(h.valor) is Decimal) and h.valor.is_finite() and (h.valor > 0) and all((h.referencia_evidencia, h.fuente, h.ruta_origen, h.fecha_corte))
+            verified = valid(smmlv) and valid(patrimonio) and (smmlv.fecha_corte == patrimonio.fecha_corte)
             from zoneinfo import ZoneInfo
             if verified:
-                cutoff=smmlv.fecha_corte
-                cutoff=cutoff.astimezone(ZoneInfo('America/Bogota')).date() if isinstance(cutoff,datetime) else cutoff
-                verified=cutoff==ahora.astimezone(ZoneInfo('America/Bogota')).date()
-            within=False
+                cutoff = smmlv.fecha_corte
+                cutoff = cutoff.astimezone(ZoneInfo('America/Bogota')).date() if isinstance(cutoff, datetime) else cutoff
+                verified = cutoff == ahora.astimezone(ZoneInfo('America/Bogota')).date()
+            within = False
             if verified and type(monto) is Decimal and monto.is_finite():
                 with localcontext() as ctx:
-                    ctx.prec=50
-                    within=smmlv.valor<=monto<=patrimonio.valor*Decimal('0.10')
-            result.update(rutaDestinoCandidata=10002856,actividadDestinoCandidata=6094,
-                rangoConsejoVerificado=bool(verified),dentroDeRangoConsejo=within,
-                motivo='CONSEJO_REQUERIDO' if within else 'PATRIMONIO_O_RUTA_APLICABLE_PENDIENTES')
+                    ctx.prec = 50
+                    within = smmlv.valor <= monto <= patrimonio.valor * Decimal('0.10')
+            result.update(rutaDestinoCandidata=10002856, actividadDestinoCandidata=6094, rangoConsejoVerificado=bool(verified), dentroDeRangoConsejo=within, motivo='CONSEJO_REQUERIDO' if within else 'PATRIMONIO_O_RUTA_APLICABLE_PENDIENTES')
         else:
-            result.update(autorizaAutomatizacion=True,accionPermitida='EVALUAR_POLITICA_ORDINARIA',
-                rutaDestinoCandidata=None,actividadDestinoCandidata=None)
+            result.update(autorizaAutomatizacion=True, accionPermitida='EVALUAR_POLITICA_ORDINARIA', rutaDestinoCandidata=None, actividadDestinoCandidata=None)
         return result
-    except (KeyError,ValueError,TypeError,AttributeError):return result
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return result
 
 
 def resultado_cursor_familiar(columnas, filas, *, columnas_acreditadas=None):
@@ -254,3 +244,7 @@ def resultado_cursor_familiar(columnas, filas, *, columnas_acreditadas=None):
         'contratoVersion':contract['version'],'contratoFuenteSha256':contract['fuenteSha256'],
         'contratoAcreditado':positive or negative,
         'filas':[{'resultado':r[0],'tipofamiliar':r[1]} for r in filas]}
+
+
+def _lectura_select_acreditada(evidencia):
+    return evidencia.get('lectorSelectExclusivo') is True or (evidencia.get('lectorSelectExclusivo') is False and evidencia.get('ejecucionSelectAcotada') == {'version': 'CGTE_SELECT_ACOTADO_V1', 'usuario': 'CGTE', 'transaccionReadOnly': True, 'rollbackRequerido': True, 'procedimientoEjecutado': False} and (type(evidencia.get('autorizacionReferencia')) is str) and (re.fullmatch('[a-f0-9]{64}', evidencia['autorizacionReferencia']) is not None))

@@ -1,0 +1,30 @@
+{
+  "imagenConfigId": "sha256:f563bb46e018debed43bbeed699370aa00ffff7f3531d0104b57c9ff961d5fba",
+  "archivoSha256": "bd841070a3a6e7967db2ced15b45db27148bc5639fd2dff7120f0a92f2b8fcd7",
+  "manifest": {
+    "hashes": {
+      "apps/xcore_consumo/services/credihoy_v2/cliente.py": "41b55032d94b547550997530c645ff9b1423bbd26bff9b4c54908fed6cc80a5f",
+      "apps/integraciones/risk_gateway/transporte.py": "53b9221cfa08dce54d5cc1860e0fb10bb26ac1d5ab5b96470ed00274c22632af",
+      "apps/integraciones/risk_gateway/clientes.py": "9ca19d4c5d0ce3c08aad8a2309880b78eb83906f5f1f3b53171fc578f6834f8c",
+      "apps/xcore_consumo/services/credihoy_v2/unico/reglas.py": "ca5bb215fa8e5259de5fd3289ab38dc55ca5be20713f182270f02ea7902f1743",
+      "apps/xcore_consumo/services/credihoy_v2/unico/proyeccion_interna.py": "711ace4c2e7134acdf5d40750bc91694112624a34063550945e9ce28376f89e1",
+      "apps/xcore_consumo/services/credihoy_v2/unico/condicion_comercial.py": "4cdd90122d6debfb6d54e424994468029b8bf276b261132d8e322e3893041135",
+      "apps/xcore_consumo/services/credihoy_v2/unico/simulacion_lectura.py": "e4648bb531eab1a169dbee3c42f521fc4f93655744bf5d13b6701828200947c0",
+      "apps/xcore_consumo/services/credihoy_v2/unico/embargos.py": "43804a356167d81285250d22246ae307a4f53ebfa2e306af6b0ea90529274996",
+      "apps/xcore_consumo/services/credihoy_v2/unico/conciliacion.py": "9a8dcd0de4bd4eda57e8861f3e6a4555705f631754a9a00540ca80de7d272768",
+      "apps/xcore_consumo/services/credihoy_v2/unico/motor.py": "0118777730d1da619db749532cb9a05e99c66cfefd4fa9e81ebd614a0403ee33",
+      "apps/xcore_consumo/services/credihoy_v2/unico/hechos_continuacion.py": "cdb665bb990850f66c9b1d07f8409b75372ed88949dbc3d047cdd3134bc11c5c",
+      "apps/xcore_consumo/services/credihoy_v2/unico/presentacion.py": "d608e88584e6d9da9683e5dfc350b706d4f079fca182b48c7c892ede0f782182",
+      "apps/xcore_consumo/services/credihoy_v2/unico/evaluacion_controlada.py": "0b3fa9eeaec4a24792fde7c658eef6b66db878884626434fe8691f55e24b19bc",
+      "apps/xcore_consumo/services/credihoy_v2/unico/estamentos.py": "cf8bae64ededb312bda0e768965978f23e598912f1822a50f4c98f0bdab862d2",
+      "apps/xcore_consumo/services/credihoy_v2/unico/elegibilidad.py": "ccdace52bed25d01c9595d23f9b77d0ee17ebd67d8658cc966102e8b74833703",
+      "apps/xcore_consumo/services/credihoy_v2/unico/cotizacion.py": "8e582b188aef612c775cf7e954e3f0e484ae400720240e0ec824bb04368ecbd4",
+      "apps/xcore_consumo/services/credihoy_v2/unico/publico_institucional.py": "4743bb6acdb44d68c0ade05b230b985a87b215437b9f488c205f619bb09ced4d",
+      "apps/xcore_consumo/services/credihoy_v2/unico/funcional.py": "491f68a5a0e736266ca038804904d495137af80672822f8b93633915fdc4c993",
+      "apps/xcore_consumo/services/orchestration.py": "b49c906cda78caed19370f435a3089792ac618d48e8d1af7e9e7124b067c6399",
+      "apps/xcore_consumo/services/credihoy_v2/unico/estado_credito.py": "4d6ef14c6abac19320b994133020f0093fcefb379d1e110a6f8f156dd5966e84"
+    },
+    "version": "backend-c-subsanacion-decision-v14"
+  },
+  "publicado": false
+}

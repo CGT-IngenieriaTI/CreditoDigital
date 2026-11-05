@@ -125,15 +125,18 @@ class ApiDataCrediHoyV2Client:
         self._token_temporal = None
         self._token_expira = 0
 
-    def _token(self, request_id):
+    def _token(self, request_id, *, estamentos=None):
+        if estamentos is not None and self.configuracion.token:
+            raise ApiDataCrediHoyV2Error(Codigo.NO_AUTORIZADO)
         if self.configuracion.token:
             return self.configuracion.token
-        if self._token_temporal is not None and time.monotonic() < self._token_expira:
+        if estamentos is None and self._token_temporal is not None and time.monotonic() < self._token_expira:
             return self._token_temporal
         try:
             response = self.session.post(self.configuracion.base_url.rstrip("/") + ENDPOINT_TOKEN,
                 headers={"X-Request-ID": request_id, "Accept": "application/json"},
-                json={"client_id": self.configuracion.client_id, "client_secret": self.configuracion.client_secret},
+                json={"client_id": self.configuracion.client_id, "client_secret": self.configuracion.client_secret,
+                    **({'estamentos':estamentos} if estamentos is not None else {})},
                 timeout=self.configuracion.timeout, allow_redirects=False, verify=True)
         except requests.Timeout:
             raise ApiDataCrediHoyV2Error(Codigo.TIMEOUT) from None
@@ -150,9 +153,10 @@ class ApiDataCrediHoyV2Client:
                     or any(c.isspace() for c in p["access_token"])
                     or type(p.get("expires_in")) is not int or p["expires_in"] <= 0):
                 raise ApiDataCrediHoyV2Error(Codigo.RESPUESTA_INVALIDA)
-            self._token_temporal = p["access_token"]
-            self._token_expira = time.monotonic() + p["expires_in"]
-            return self._token_temporal
+            if estamentos is None:
+                self._token_temporal = p["access_token"]
+                self._token_expira = time.monotonic() + p["expires_in"]
+            return p["access_token"]
         finally:
             response.close()
 
@@ -235,7 +239,7 @@ class ApiDataCrediHoyV2Client:
         finally:
             response.close()
 
-    def consultar_estamentos(self, *, numero_documento, solicitud_id, fecha_evaluacion, request_id):
+    def consultar_estamentos(self, *, numero_documento, solicitud_id, fecha_evaluacion, request_id,consentimiento_referencia=None):
         """Same internal facts URL/token/transport, a read-only dedicated scope."""
         from uuid import UUID
         try:
@@ -245,9 +249,16 @@ class ApiDataCrediHoyV2Client:
         except (ValueError,TypeError):
             raise ApiDataCrediHoyV2Error(Codigo.REQUEST_INVALIDO) from None
         payload={**entrada.a_payload_http(),'solicitudId':sid,'alcance':'ESTAMENTOS'}
+        binding=None
+        if consentimiento_referencia is not None:
+            if type(consentimiento_referencia) is not str or not re.fullmatch('[a-f0-9]{64}',consentimiento_referencia):
+                raise ApiDataCrediHoyV2Error(Codigo.REQUEST_INVALIDO)
+            binding={'solicitudId':sid,'titularSha256':hashlib.sha256(numero_documento.encode()).hexdigest(),
+                'consentimientoSha256':consentimiento_referencia,'requestId':request_id}
         try:
             response=self.session.post(self.configuracion.base_url.rstrip('/')+ENDPOINT_V2,
-                headers={'Authorization':'Bearer '+self._token(request_id),'X-Request-ID':request_id,'Accept':'application/json'},
+                headers={'Authorization':'Bearer '+(self._token(request_id,estamentos=binding) if binding else self._token(request_id)),
+                    'X-Request-ID':request_id,'Accept':'application/json'},
                 json=payload,timeout=self.configuracion.timeout,allow_redirects=False,verify=True)
         except requests.Timeout:raise ApiDataCrediHoyV2Error(Codigo.TIMEOUT) from None
         except requests.RequestException:raise ApiDataCrediHoyV2Error(Codigo.NETWORK) from None
@@ -255,6 +266,8 @@ class ApiDataCrediHoyV2Client:
             if response.status_code in (401,403):raise ApiDataCrediHoyV2Error(Codigo.NO_AUTORIZADO)
             if response.status_code!=200:raise ApiDataCrediHoyV2Error(Codigo.ERROR_TEMPORAL)
             evidence=self._json(response)
+            if binding and (type(evidence) is not dict or evidence.get('autorizacionReferencia')!=consentimiento_referencia):
+                raise ApiDataCrediHoyV2Error(Codigo.RESPUESTA_INVALIDA)
             from .unico.estamentos import validar_lectura_original
             return validar_lectura_original(evidence,solicitud_id=sid,documento=numero_documento,request_id=request_id)
         finally:response.close()

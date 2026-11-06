@@ -324,6 +324,20 @@ class ContractRecoveryTests(TransactionTestCase):
             self.assertEqual(task.run(),{'estado':'RECUPERACION_NO_HABILITADA','procesadas':0})
         self.assertEqual(AuditLog.objects.count(),0)
 
+    def test_recovery_worker_startup_and_disabled_shadow_do_not_import_shadow_engine(self):
+        import builtins,importlib,sys
+        native=builtins.__import__
+        def no_shadow(name,*args,**kwargs):
+            if 'credihoy_shadow' in name or 'credihoy_integracion' in name:
+                raise AssertionError('UNRELATED_SHADOW_ENGINE_IMPORT')
+            return native(name,*args,**kwargs)
+        from apps.xcore_consumo import tasks
+        with patch('builtins.__import__',side_effect=no_shadow),override_settings(CREDIHOY_SHADOW_ENABLED=False):
+            self.assertEqual(tasks.evaluar_credihoy_shadow.run(solicitud_id=str(self.case.pk),request_id=self.key,
+                fecha_evaluacion='2026-11-06',evaluacion_actualizada='2026-11-06',
+                version_politica='SYNTHETIC_NOT_EXECUTED'),'DESHABILITADO')
+        self.assertEqual(tasks.evaluar_credihoy_shadow.name,'credihoy.evaluar_shadow')
+
 
 class ElectronicAcceptanceEvidenceTests(TransactionTestCase):
     """Synthetic PKI/typed acceptance boundary, not an institutional trust policy."""

@@ -6,6 +6,7 @@ import hashlib
 from io import BytesIO
 import json
 from pathlib import Path
+from typing import ClassVar
 
 from pypdf import PdfReader
 
@@ -13,6 +14,7 @@ from pypdf import PdfReader
 MAX_PDF = 6_000_000
 TOKEN_URL = "https://authorizer.autenticsign.com/v2/authorizer/getToken"
 DEV_URL = "https://stag-api.autenticsign.com"
+PRODUCTION_URL = "https://api.autenticsign.com"
 
 
 class AutenticError(Exception):
@@ -48,11 +50,24 @@ def validar_pdf(content):
 
 @dataclass(frozen=True)
 class ConfiguracionDEV:
+    AUDIENCE: ClassVar[str] = "stag-api.autenticsign.com"
     client_id: str = field(repr=False)
     client_secret: str = field(repr=False)
     permitir_documentos: bool = False
     hosts_descarga: tuple = ()
     timeout: tuple = (5, 20)
+
+    @property
+    def base_url(self):
+        return DEV_URL
+
+    @property
+    def audience(self):
+        return self.AUDIENCE
+
+    @property
+    def ambiente(self):
+        return "DEV"
 
     def __post_init__(self):
         if (not texto(self.client_id) or not texto(self.client_secret)
@@ -68,12 +83,24 @@ class ConfiguracionDEV:
         try:
             data = json.loads(Path(ruta).read_text(encoding="utf-8-sig"), object_pairs_hook=_config_unica)
             if (set(data) != {"audience", "grant_type", "client_id", "client_secret"}
-                    or data["audience"] != "stag-api.autenticsign.com"
+                    or data["audience"] != cls.AUDIENCE
                     or data["grant_type"] != "client_credentials"):
                 raise ValueError
             return cls(client_id=data["client_id"], client_secret=data["client_secret"])
         except (OSError, ValueError, TypeError, KeyError, UnicodeError):
             raise AutenticError("CONFIGURACION_DEV_INVALIDA") from None
+
+
+@dataclass(frozen=True)
+class ConfiguracionProduccion(ConfiguracionDEV):
+    AUDIENCE: ClassVar[str] = "api.autenticsign.com"
+    @property
+    def base_url(self):
+        return PRODUCTION_URL
+
+    @property
+    def ambiente(self):
+        return "PRODUCCION"
 
 
 @dataclass(frozen=True, repr=False)

@@ -104,7 +104,7 @@ class AutenticDEVClient:
             self.autenticar()
             headers["Authorization"] = "Bearer " + self._token
         token_request = method == 'POST' and url == TOKEN_URL
-        signing_request = method == 'POST' and url == DEV_URL + '/v2/signature/'
+        signing_request = method == 'POST' and url == self.config.base_url + '/v2/signature/'
         operation='TOKEN' if token_request else 'FIRMA' if signing_request else 'CERTIFICACION' if method=='POST' else 'DESCARGA'
         self._evento_http={'operacion':operation,'fecha':datetime.now(timezone.utc).isoformat(),
             'referenciaLocal':str(uuid4()),'http':None}
@@ -151,7 +151,7 @@ class AutenticDEVClient:
                     content.extend(block)
                 if method=='GET':
                     import hashlib
-                    self.auditoria_descarga={'version':'AUTENTIC_DESCARGA_V1','ambiente':'DEV',
+                    self.auditoria_descarga={'version':'AUTENTIC_DESCARGA_V1','ambiente':self.config.ambiente,
                         'http':response.status_code,'TLSVerificado':True,'sinRedirecciones':True,
                         'urlSha256':hashlib.sha256(url.encode()).hexdigest(),
                         'zipSha256':hashlib.sha256(content).hexdigest()}
@@ -187,7 +187,7 @@ class AutenticDEVClient:
             return {"autenticado": True, "token_en_cache": True}
         self._token = None
         self._vence = 0
-        result = self._json(TOKEN_URL, {"audience": "stag-api.autenticsign.com",
+        result = self._json(TOKEN_URL, {"audience": self.config.audience,
             "grant_type": "client_credentials", "client_id": self.config.client_id,
             "client_secret": self.config.client_secret})
         token, ttl = result.get("access_token"), result.get("expires_in")
@@ -225,7 +225,7 @@ class AutenticDEVClient:
         self.autenticar()
         registro.iniciar(clave)
         try:
-            p = self._json(DEV_URL + "/v2/signature/", checked.payload, bearer=True, estados=(201,))
+            p = self._json(self.config.base_url + "/v2/signature/", checked.payload, bearer=True, estados=(201,))
             if (type(p.get('operationCode')) is not int or p['operationCode'] != 1000
                     or not all(texto(p.get(k)) for k in ('transactionId', 'processedDate', 'urlDocuments'))):
                 raise AutenticError("FIRMA_RESPUESTA_NO_CERTIFICADA")
@@ -284,7 +284,7 @@ class AutenticDEVClient:
         self.autenticar()
         registro.iniciar(clave)
         try:
-            p = self._json(DEV_URL + '/v2/certification/', request.payload, bearer=True, limite=9_000_000)
+            p = self._json(self.config.base_url + '/v2/certification/', request.payload, bearer=True, limite=9_000_000)
             if type(p.get('operationCode')) is not int or p['operationCode'] != 1000:
                 raise AutenticError("CERTIFICACION_NO_DISPONIBLE")
             content = base64.b64decode(p['certificationContent'], validate=True)

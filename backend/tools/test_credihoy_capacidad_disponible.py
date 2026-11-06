@@ -12,6 +12,83 @@ from apps.xcore_consumo.services.credihoy_v2.unico.motor import normalizar_capac
 
 
 class AvailableCapacityTests(TestCase):
+    def test_study_input_hash_keeps_history_and_allows_only_downstream_changes(self):
+        from copy import deepcopy
+        import hashlib,json
+        from apps.xcore_consumo.services.credihoy_v2.unico.funcional import huella_consumo_estudio
+        detail=dict(id=1,solicitud_id='SYNTHETIC',created_at='2026-11-05',form_data={'amount':'400000'},
+                    core_data={'source':'INSTITUTIONAL'},selected_hc2_keys=['A'],
+                    orchestration_data={'originalEvidence':{'digest':'ORIGINAL'}},updated_at='BEFORE',estado='ESTUDIADA')
+        self.assertEqual(huella_consumo_estudio(detail),hashlib.sha256(json.dumps(detail,
+            sort_keys=True,separators=(',',':'),ensure_ascii=True,default=str).encode()).hexdigest())
+        version='credihoy-estudio-tecnico-firmado-v2'
+        original=huella_consumo_estudio(detail,version)
+        offer=deepcopy(detail)
+        offer['orchestration_data']['credihoy_ofertas_linix_v1']={'SYNTHETIC':'NATIVE-OFFER'}
+        offer['orchestration_data']['credihoy_aceptaciones_oferta_v1']={'SYNTHETIC':'PERSONAL'}
+        offer.update(updated_at='AFTER',estado='OFERTADA')
+        self.assertEqual(huella_consumo_estudio(offer,version),original)
+        for field in ('id','solicitud_id','created_at','form_data','core_data','selected_hc2_keys'):
+            altered=deepcopy(offer);altered[field]='ALTERED'
+            self.assertNotEqual(huella_consumo_estudio(altered,version),original)
+        altered=deepcopy(offer);altered['orchestration_data']['unknownEvidence']='ALTERED'
+        self.assertNotEqual(huella_consumo_estudio(altered,version),original)
+        with self.assertRaisesRegex(ValueError,'VERSION_NO_ADMITIDA'):
+            huella_consumo_estudio(detail,'UNKNOWN')
+
+    def decision_snapshot(self,*,quota='204793.29',state='CUMPLE'):
+        from apps.xcore_consumo.services.credihoy_v2.unico.reglas import definicion_funcional_reglas_unico_v2
+        preliminary=normalizar_capacidad_disponible(self.preliminary(),cuota_estimada=self.fact(quota))
+        return {'capacidadMatematica':{'estado':'NO_EVALUABLE','disponible':False,'valor':None},
+            'capacidadPreliminar':preliminary,'conciliacionHdc':{'cobertura_completa':True,'partidas_resueltas':True},
+            'reglas':[{'codigo':'UNICO_FILA_2','resultado':state,'estadoEvaluacion':state,
+                'evidencia':{'definicionFuncionalComunicada':definicion_funcional_reglas_unico_v2()}}]}
+
+    def test_decision_contract_uses_same_typed_operands_as_rule_two_not_legacy_residual(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico.evaluacion_controlada import construir_capacidad_decisoria,leer_capacidad_decisoria
+        result=self.decision_snapshot();before=deepcopy(result)
+        packet=construir_capacidad_decisoria(result)
+        self.assertEqual(packet['estado'],'EVALUABLE');self.assertTrue(packet['cumpleCriterio'])
+        self.assertFalse(packet['cuotaContractual']);self.assertFalse(packet['autorizaAprobacionFinal'])
+        self.assertEqual(packet['escenario']['capacidad_disponible'],'814791.75')
+        self.assertEqual(result,before)
+        result['capacidadDecisoria']=packet;result['reglas'][0]['evidencia']['capacidadDecisoria']=deepcopy(packet)
+        self.assertEqual(leer_capacidad_decisoria(result),packet)
+        self.assertEqual(result['capacidadMatematica']['estado'],'NO_EVALUABLE')
+
+    def test_capacity_decision_preserves_unfavorable_result(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico.evaluacion_controlada import construir_capacidad_decisoria
+        packet=construir_capacidad_decisoria(self.decision_snapshot(quota='900000',state='NO_CUMPLE'))
+        self.assertEqual(packet['estado'],'EVALUABLE');self.assertFalse(packet['cumpleCriterio'])
+
+    def test_capacity_decision_rejects_label_or_operands_without_evidence(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico.evaluacion_controlada import construir_capacidad_decisoria
+        for path,value in (('capacidadDisponible','1'),('residualPosteriorEstimado','999'),('gastosFamiliaresExactos','608877')):
+            result=self.decision_snapshot();result['capacidadPreliminar'][path]['valor']=value
+            with self.subTest(path=path),self.assertRaisesRegex(ValueError,'PERSISTIDO_NO_ACREDITADO'):
+                construir_capacidad_decisoria(result)
+        result=self.decision_snapshot();result['reglas'][0]['estadoEvaluacion']='NO_CUMPLE'
+        with self.assertRaisesRegex(ValueError,'NO_CORRESPONDE_A_REGLA_2'):construir_capacidad_decisoria(result)
+        result=self.decision_snapshot();result['conciliacionHdc']['partidas_resueltas']=False
+        with self.assertRaisesRegex(ValueError,'NO_CORRESPONDE_A_REGLA_2'):construir_capacidad_decisoria(result)
+
+    def test_capacity_packet_and_rule_evidence_must_both_match_reconstruction(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico.evaluacion_controlada import construir_capacidad_decisoria,leer_capacidad_decisoria
+        result=self.decision_snapshot();packet=construir_capacidad_decisoria(result)
+        result['capacidadDecisoria']=packet;result['reglas'][0]['evidencia']['capacidadDecisoria']=deepcopy(packet)
+        result['reglas'][0]['evidencia']['capacidadDecisoria']['cumpleCriterio']=False
+        with self.assertRaisesRegex(ValueError,'PERSISTIDA_NO_INTEGRA'):leer_capacidad_decisoria(result)
+
+    def test_persisted_capacity_keeps_observed_sources_and_requires_quote_dates(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico.motor import escenario_capacidad_persistido
+        source=self.decision_snapshot()['capacidadPreliminar'];before=deepcopy(source)
+        scenario=escenario_capacidad_persistido(source)
+        self.assertEqual(scenario.cuota_nueva_estimada,Decimal('204793.29'))
+        self.assertEqual(source,before)
+        self.assertEqual(source['cuotaNuevaEstimada']['procedencia']['estado_certificacion'],'OBSERVADO')
+        source['cuotaNuevaEstimada']['procedencia']['fecha_consulta']=None
+        with self.assertRaisesRegex(ValueError,'PERSISTIDO_NO_ACREDITADO'):escenario_capacidad_persistido(source)
+
     def setUp(self):
         for target in ('socket.create_connection','socket.getaddrinfo','requests.sessions.Session.request',
                        'django.db.backends.base.base.BaseDatabaseWrapper.cursor'):

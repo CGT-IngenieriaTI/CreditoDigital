@@ -7,10 +7,6 @@
 
 
 
-
-
-
-
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -540,6 +536,11 @@ def contexto_desde_estudio(s, resultado, *, ahora):
     if definition == definicion_funcional_reglas_unico_v2() and row[0].get('estadoEvaluacion') in {'CUMPLE', 'NO_CUMPLE'}:
         criterion = row[0]['estadoEvaluacion'] == 'CUMPLE'
         reference = politica_digital()['referencia'] + ':' + definition['version']
+    if 'capacidadDecisoria' in resultado:
+        from .evaluacion_controlada import leer_capacidad_decisoria
+        capacity = leer_capacidad_decisoria(resultado)
+        criterion = capacity['cumpleCriterio']
+        reference = politica_digital()['referencia'] + ':' + capacity['version'] + ':' + capacity['evidenciaSha256']
     holder = hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest()
     observed = ConsultaEstamentoOracle.objects.filter(solicitud=s, estado='OK', created_at__lte=ahora).order_by('-created_at', '-pk').first()
     classification = clasificar_novedades(observed.response_payload if observed else None, solicitud_id=s.pk, titular_referencia=holder, ahora=ahora, monto=s.monto_solicitado)

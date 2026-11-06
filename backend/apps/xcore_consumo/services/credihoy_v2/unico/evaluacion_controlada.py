@@ -2,6 +2,8 @@
 
 
 
+
+
 from dataclasses import replace
 from datetime import datetime
 
@@ -62,14 +64,12 @@ def evaluar_respuestas_controladas(entrada, *, hdc, operaciones_esperadas, ingre
     preliminary = None
     escenario = None
     if conciliacion is not None:
-        from decimal import Decimal
-        from .dto import EscenarioCapacidadDisponibleV2
-        from .motor import calcular_preliminar_congente, normalizar_capacidad_disponible
+        from .motor import calcular_preliminar_congente, normalizar_capacidad_disponible, escenario_capacidad_persistido
         preliminary = calcular_preliminar_congente(entrada, ingresos, conciliacion, descuentos_nomina=descuentos_nomina)
         if preliminary is not None and descuentos_nomina is not None:
             preliminary = normalizar_capacidad_disponible(preliminary, cuota_estimada=cuota_estimada)
             if conciliacion.cobertura_completa is True and conciliacion.partidas_resueltas is True and (preliminary['cuotaNuevaEstimada']['disponible'] is True):
-                escenario = EscenarioCapacidadDisponibleV2(ingresos=Decimal(preliminary['ingresoComputable']['valor']), cuotas_hdc=Decimal(preliminary['subtotalMensualHdcReconocido']['valor']), deducciones_nomina=Decimal(preliminary['deduccionesNomina']['valor']), gastos_familiares_exactos=Decimal(preliminary['gastosFamiliaresExactos']['valor']), capacidad_disponible=Decimal(preliminary['capacidadDisponible']['valor']), cuota_nueva_estimada=Decimal(preliminary['cuotaNuevaEstimada']['valor']), residual_posterior_estimado=Decimal(preliminary['residualPosteriorEstimado']['valor']))
+                escenario = escenario_capacidad_persistido(preliminary)
     reglas = evaluar_reglas_unico_v2(entrada, hechos=contexto, capacidad=capacidad, fecha_evaluacion=fecha, capacidad_disponible=escenario, titularidad_recogida=titularidad_recogida)
     r = serializar_evaluacion(capacidad, reglas, request_id, fuente='CONSULTA_REAL_CONTROLADA', fecha=fecha, evidencia_reglas=evidencia_monetaria(entrada, contexto), hechos_reglas=contexto)
     r.update(estadoTramite='PENDIENTE_REVISION', revisionHumanaHabilitada=False, motivoRevision='DECISION_Y_VIA_DE_REVISION_REQUIEREN_AUTORIZACION_FUNCIONAL', ingresosAplicables={'disponible': capacidad.ingresos_mensuales.disponible, 'valor': None if capacidad.ingresos_mensuales.valor is None else str(capacidad.ingresos_mensuales.valor)}, cuotasHdcAplicables={'disponible': capacidad.cuotas_deudas_hdc_aplicables.disponible, 'valor': None if capacidad.cuotas_deudas_hdc_aplicables.valor is None else str(capacidad.cuotas_deudas_hdc_aplicables.valor)}, evidenciaConsultaControlada={'HDC': {'consultaId': str(hdc.consulta_id), 'estado': hdc.estado, 'fechaOriginal': externos.fecha_consulta_original, 'agregadoUtilizable': cuotas.disponible, 'motivoAgregado': cuotas.observacion}}, vigenciaParaDecision='NO_CERTIFICADA')
@@ -90,4 +90,37 @@ def evaluar_respuestas_controladas(entrada, *, hdc, operaciones_esperadas, ingre
     for row in r['reglas']:
         if row['codigo'] in {'UNICO_FILA_2', 'UNICO_FILA_32'}:
             row.setdefault('evidencia', {})['definicionFuncionalComunicada'] = definicion_funcional_reglas_unico_v2()
+    r['capacidadDecisoria'] = construir_capacidad_decisoria(r)
+    next((row for row in r['reglas'] if row['codigo'] == 'UNICO_FILA_2'))['evidencia']['capacidadDecisoria'] = r['capacidadDecisoria']
     return r
+
+
+def construir_capacidad_decisoria(resultado):
+    import hashlib, json
+    from .motor import escenario_capacidad_persistido
+    from .reglas import evaluar_capacidad_disponible_regla_unico, definicion_funcional_reglas_unico_v2
+    rows = [r for r in resultado['reglas'] if r.get('codigo') == 'UNICO_FILA_2']
+    if len(rows) != 1:
+        raise ValueError('CAPACIDAD_DECISORIA_REGLA_AMBIGUA')
+    row = rows[0]
+    preliminary = resultado.get('capacidadPreliminar')
+    coverage = resultado.get('conciliacionHdc', {})
+    scenario = None
+    if coverage.get('cobertura_completa') is True and coverage.get('partidas_resueltas') is True and (type(preliminary) is dict) and (preliminary.get('cuotaNuevaEstimada', {}).get('disponible') is True):
+        scenario = escenario_capacidad_persistido(preliminary)
+    comparison, motive, refs = evaluar_capacidad_disponible_regla_unico(scenario)
+    definition = definicion_funcional_reglas_unico_v2()
+    if row.get('estadoEvaluacion') != comparison.value or row.get('resultado') != comparison.value or row.get('evidencia', {}).get('definicionFuncionalComunicada') != definition:
+        raise ValueError('CAPACIDAD_DECISORIA_NO_CORRESPONDE_A_REGLA_2')
+    evidence = {'preliminar': preliminary, 'conciliacion': coverage, 'definicion': definition}
+    return {'version': VERSION_CAPACIDAD_DECISORIA, 'estado': 'EVALUABLE' if scenario else 'NO_EVALUABLE', 'cumpleCriterio': comparison.value == 'CUMPLE' if scenario else None, 'escenario': scenario.a_dict() if scenario else None, 'motivos': [motive], 'referencias': list(refs), 'evidenciaSha256': hashlib.sha256(json.dumps(evidence, sort_keys=True, default=str).encode()).hexdigest(), 'cuotaContractual': False, 'autorizaAprobacionFinal': False}
+
+
+def leer_capacidad_decisoria(resultado):
+    expected = construir_capacidad_decisoria(resultado)
+    row = next((r for r in resultado['reglas'] if r.get('codigo') == 'UNICO_FILA_2'))
+    if resultado.get('capacidadDecisoria') != expected or row.get('evidencia', {}).get('capacidadDecisoria') != expected:
+        raise ValueError('CAPACIDAD_DECISORIA_PERSISTIDA_NO_INTEGRA')
+    return expected
+
+VERSION_CAPACIDAD_DECISORIA = 'credihoy-capacidad-decisoria-v1'

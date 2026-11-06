@@ -12,10 +12,6 @@
 
 
 
-
-
-
-
 from decimal import Decimal
 from dataclasses import replace
 import hashlib
@@ -554,7 +550,7 @@ def procesar_funcional(solicitud_id, operador, *, accion, payload, clave, reques
     return estado_funcional(solicitud_id, operador)
 
 
-def aplicar_revision_estudio_registrada(s,evaluation,state):
+def aplicar_revision_estudio_registrada(s, evaluation, state):
     """Read the latest immutable revision and its already verified signed summary."""
     import base64
     from uuid import UUID
@@ -563,61 +559,60 @@ def aplicar_revision_estudio_registrada(s,evaluation,state):
     from apps.xcore_consumo.models import ConsentimientoConsumo
     from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
     from . import centrales_personal as central
-    if evaluation is None:return state
-    entries=list(AuditLog.objects.filter(solicitud=s,event='CREDIHOY_ESTUDIO_VERSION_REGISTRADA').order_by('created_at','pk')[:101])
-    if not entries:return state
-    if len(entries)>100:raise ConflictoFuncional('VERSIONES_ESTUDIO_REQUIEREN_CONCILIACION')
-    def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True,default=str).encode()
-    def digest(value):return hashlib.sha256(canonical(value)).hexdigest()
+    if evaluation is None:
+        return state
+    entries = list(AuditLog.objects.filter(solicitud=s, event='CREDIHOY_ESTUDIO_VERSION_REGISTRADA').order_by('created_at', 'pk')[:101])
+    if not entries:
+        return state
+    if len(entries) > 100:
+        raise ConflictoFuncional('VERSIONES_ESTUDIO_REQUIEREN_CONCILIACION')
+
+    def canonical(value):
+        return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, default=str).encode()
+
+    def digest(value):
+        return hashlib.sha256(canonical(value)).hexdigest()
     try:
-        selected={}
-        base_hash=hashlib.sha256(json.dumps({'input':evaluation.input_snapshot,'resultados':evaluation.resultados},sort_keys=True,default=str).encode()).hexdigest()
-        titular=hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest()
+        selected = {}
+        base_hash = hashlib.sha256(json.dumps({'input': evaluation.input_snapshot, 'resultados': evaluation.resultados}, sort_keys=True, default=str).encode()).hexdigest()
+        titular = hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest()
         for entry in entries:
-            raw=decrypt_text(entry.payload['resultadoCifrado'])
-            if hashlib.sha256(raw.encode()).hexdigest()!=entry.payload['resultadoSha256']:raise ValueError()
-            version=json.loads(raw);reference=str(UUID(version['versionReferencia']))
-            request=version['fuentes']['huellaSolicitud']
-            if (str(entry.request_id)!=reference or reference!=version['versionReferencia']
-                    or version['solicitudId']!=str(s.pk) or version['evaluacionBaseId']!=evaluation.pk
-                    or type(version['version']) is not int or version['version']<2
-                    or request['documentoSha256']!=titular or request['evaluacionSha256']!=base_hash
-                    or version['resultado']['requestId']!=reference):raise ValueError()
-            if version['version'] in selected:raise ValueError()
-            selected[version['version']]=(entry,version)
-        entry,version=selected[max(selected)]
-        reference=version['versionReferencia']
-        op=OperacionGateway.objects.get(pk=entry.payload['recibo']['operacionHdc'],solicitud=s,
-            proveedor='HDC',estado__in=['COMPLETADA','SIN_INFORMACION'])
+            raw = decrypt_text(entry.payload['resultadoCifrado'])
+            if hashlib.sha256(raw.encode()).hexdigest() != entry.payload['resultadoSha256']:
+                raise ValueError()
+            version = json.loads(raw)
+            reference = str(UUID(version['versionReferencia']))
+            request = version['fuentes']['huellaSolicitud']
+            if str(entry.request_id) != reference or reference != version['versionReferencia'] or version['solicitudId'] != str(s.pk) or (version['evaluacionBaseId'] != evaluation.pk) or (type(version['version']) is not int) or (version['version'] < 2) or (request['documentoSha256'] != titular) or (request['evaluacionSha256'] != base_hash) or (version['resultado']['requestId'] != reference):
+                raise ValueError()
+            if version['version'] in selected:
+                raise ValueError()
+            selected[version['version']] = (entry, version)
+        entry, version = selected[max(selected)]
+        reference = version['versionReferencia']
+        op = OperacionGateway.objects.get(pk=entry.payload['recibo']['operacionHdc'], solicitud=s, proveedor='HDC', estado__in=['COMPLETADA', 'SIN_INFORMACION'])
         _exigir_recibo_hdc(op)
-        key=str(uuid5(NAMESPACE_URL,'credihoy-estudio-publico:'+str(s.pk)+':'+reference))
-        summary=AuditLog.objects.get(solicitud=s,event='CREDIHOY_ESTUDIO_PUBLICO_VERIFICADO',request_id=key)
-        envelope=summary.payload;body=envelope['payload'];study=body['estudio']
-        if envelope['algoritmo']!='Ed25519':raise ValueError()
-        central._clave_publica().verify(base64.b64decode(envelope['firmaBase64'],validate=True),
-            b'credihoy-estudio-publico-tecnico-v1\x00'+canonical(body))
-        consent=ConsentimientoConsumo.objects.values().get(solicitud=s)
-        detail=SolicitudConsumo.objects.values().get(solicitud=s)
-        current=EvaluacionConsumo.objects.values().get(pk=evaluation.pk,solicitud=s)
-        if (body['version']!='credihoy-estudio-tecnico-firmado-v1' or body['proposito']!='LECTURA_ESTUDIO_NO_DECISION'
-                or body['solicitudId']!=str(s.pk) or body['titularSha256']!=titular
-                or body['evaluacionBaseSha256']!=digest(current) or body['consentimientoSha256']!=digest(consent)
-                or body['consumoSha256']!=digest(detail) or study['version']!=version['version']
-                or study['versionContrato']!='credihoy-estudio-publico-v1'
-                or study['referenciaVersion']!=reference or study['evaluacionBaseId']!=evaluation.pk
-                or study['solicitudId']!=str(s.pk) or study['autorizadoDecisionCrediticia'] is not False):raise ValueError()
-        rules=version['resultado']['reglas']
-        if len(rules)!=16 or len({r['codigo'] for r in rules})!=16:raise ValueError()
-        projected=[{k:r[k] for k in ('codigo','nombre','resultado','estadoEvaluacion','motivos','datosFaltantes')} for r in rules]
-        if study['reglas']!=projected:raise ValueError()
-        return {**state,'resultado':version['resultado'],'revisionEstudio':{
-            'version':version['version'],'versionReferencia':reference,'versionSha256':entry.payload['resultadoSha256'],
-            'resultadoSha256':_digest(version['resultado']),'estudioSha256':digest(study),
-            'evaluacionBaseId':evaluation.pk,'operacionHdc':str(op.pk),
-            'revisionHdcActiva':evaluation.input_snapshot.get('revisionHdcActiva'),
-            'condicionesYConsentimientoVerificados':True,'firmaResumenVerificada':True}}
-    except (KeyError,TypeError,ValueError,AttributeError,InvalidSignature,
-            AuditLog.DoesNotExist,AuditLog.MultipleObjectsReturned,OperacionGateway.DoesNotExist):
+        key = str(uuid5(NAMESPACE_URL, 'credihoy-estudio-publico:' + str(s.pk) + ':' + reference))
+        summary = AuditLog.objects.get(solicitud=s, event='CREDIHOY_ESTUDIO_PUBLICO_VERIFICADO', request_id=key)
+        envelope = summary.payload
+        body = envelope['payload']
+        study = body['estudio']
+        if envelope['algoritmo'] != 'Ed25519':
+            raise ValueError()
+        central._clave_publica().verify(base64.b64decode(envelope['firmaBase64'], validate=True), b'credihoy-estudio-publico-tecnico-v1\x00' + canonical(body))
+        consent = ConsentimientoConsumo.objects.values().get(solicitud=s)
+        detail = SolicitudConsumo.objects.values().get(solicitud=s)
+        current = EvaluacionConsumo.objects.values().get(pk=evaluation.pk, solicitud=s)
+        if body['version'] not in {'credihoy-estudio-tecnico-firmado-v1', 'credihoy-estudio-tecnico-firmado-v2'} or body['proposito'] != 'LECTURA_ESTUDIO_NO_DECISION' or body['solicitudId'] != str(s.pk) or (body['titularSha256'] != titular) or (body['evaluacionBaseSha256'] != digest(current)) or (body['consentimientoSha256'] != digest(consent)) or (body['consumoSha256'] != huella_consumo_estudio(detail, body['version'])) or (study['version'] != version['version']) or (study['versionContrato'] != 'credihoy-estudio-publico-v1') or (study['referenciaVersion'] != reference) or (study['evaluacionBaseId'] != evaluation.pk) or (study['solicitudId'] != str(s.pk)) or (study['autorizadoDecisionCrediticia'] is not False):
+            raise ValueError()
+        rules = version['resultado']['reglas']
+        if len(rules) != 16 or len({r['codigo'] for r in rules}) != 16:
+            raise ValueError()
+        projected = [{k: r[k] for k in ('codigo', 'nombre', 'resultado', 'estadoEvaluacion', 'motivos', 'datosFaltantes')} for r in rules]
+        if study['reglas'] != projected:
+            raise ValueError()
+        return {**state, 'resultado': version['resultado'], 'revisionEstudio': {'version': version['version'], 'versionReferencia': reference, 'versionSha256': entry.payload['resultadoSha256'], 'resultadoSha256': _digest(version['resultado']), 'estudioSha256': digest(study), 'evaluacionBaseId': evaluation.pk, 'operacionHdc': str(op.pk), 'revisionHdcActiva': evaluation.input_snapshot.get('revisionHdcActiva'), 'condicionesYConsentimientoVerificados': True, 'firmaResumenVerificada': True}}
+    except (KeyError, TypeError, ValueError, AttributeError, InvalidSignature, AuditLog.DoesNotExist, AuditLog.MultipleObjectsReturned, OperacionGateway.DoesNotExist):
         raise ConflictoFuncional('REVISION_ESTUDIO_VIGENTE_NO_VERIFICABLE') from None
 
 
@@ -698,7 +693,8 @@ def preparar_revision_estudio(solicitud_id, operador):
 
     def semantic(fact):
         return {k: v for k, v in fact.a_dict().items() if k in {'valor', 'disponible', 'fuente', 'ruta_origen', 'estado_certificacion'}}
-    sources = {'versionCadena': 'credihoy-cadena-20261105-v1', 'formularioSha256': form_hash, 'reglas': {name: semantic(getattr(context.reglas, name)) for name in asdict(context.reglas)}, 'ingresos': semantic(context.ingresos), 'nomina': semantic(context.descuentos_nomina), 'cuota': {**semantic(context.cuota_estimada), 'condicion': context.cuota_estimada.observacion}, 'respuestaHdcSha256': proof, 'xmlSha256': hashlib.sha256(xml).hexdigest()}
+    from .evaluacion_controlada import VERSION_CAPACIDAD_DECISORIA
+    sources = {'versionCadena': 'credihoy-cadena-20261105-v1', 'versionCapacidadDecisoria': VERSION_CAPACIDAD_DECISORIA, 'formularioSha256': form_hash, 'reglas': {name: semantic(getattr(context.reglas, name)) for name in asdict(context.reglas)}, 'ingresos': semantic(context.ingresos), 'nomina': semantic(context.descuentos_nomina), 'cuota': {**semantic(context.cuota_estimada), 'condicion': context.cuota_estimada.observacion}, 'respuestaHdcSha256': proof, 'xmlSha256': hashlib.sha256(xml).hexdigest()}
     drafts = AuditLog.objects.filter(solicitud=case, event='CREDIHOY_ESTUDIO_REVISION_PREPARADA')
     fingerprint = _digest(sources)
     reference = str(uuid5(NAMESPACE_URL, 'credihoy-revision-estudio:' + str(case.pk) + ':' + fingerprint))
@@ -792,3 +788,17 @@ def recuperar_xml_hdc(solicitud_id, *, operacion):
             return read(existing)
         AuditLog.objects.create(solicitud_id=solicitud_id, event='CREDIHOY_HDC_XML_CUSTODIADO', request_id=str(op.request_id), actor='servicio:continuacion', payload={'operacionId': str(op.pk), 'consultaId': str(op.consulta_id), 'sha256': hashlib.sha256(raw).hexdigest(), 'xmlCifrado': encrypt_text(base64.b64encode(raw).decode()), 'consultaNueva': False})
     return raw
+
+
+def huella_consumo_estudio(detail, version='credihoy-estudio-tecnico-firmado-v1'):
+    """Separate immutable study inputs from append-only downstream operations."""
+    from copy import deepcopy
+    if version == 'credihoy-estudio-tecnico-firmado-v1':
+        value = detail
+    elif version == 'credihoy-estudio-tecnico-firmado-v2':
+        value = {k: deepcopy(detail[k]) for k in ('id', 'solicitud_id', 'created_at', 'form_data', 'core_data', 'selected_hc2_keys')}
+        downstream = {'credihoy_cotizacion_institucional', 'credihoy_cotizacion_institucional_escenarios_v1', 'credihoy_calendario_pago_v1', 'credihoy_calendario_pago_v1_revalidacion', 'credihoy_calendario_pago_v1_revalidacion_historial', 'credihoy_composiciones_contractuales_v1', 'credihoy_ofertas_linix_v1', 'credihoy_oferta_linix_actual', 'credihoy_aceptaciones_oferta_v1', 'credihoy_autentic_envios_v1', 'credihoy_autentic_identidad_v1'}
+        value['orchestration_data'] = {k: deepcopy(v) for k, v in detail['orchestration_data'].items() if k not in downstream}
+    else:
+        raise ValueError('HUELLA_ESTUDIO_VERSION_NO_ADMITIDA')
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, default=str).encode()).hexdigest()

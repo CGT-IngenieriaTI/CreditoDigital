@@ -2,6 +2,8 @@
 
 
 
+
+
 from dataclasses import fields, replace
 from decimal import Decimal, InvalidOperation, localcontext
 
@@ -337,3 +339,40 @@ def normalizar_capacidad_disponible(preliminar, *, cuota_estimada=None):
         result['cuotaNuevaEstimada']['procedencia'] = cuota_estimada.a_dict()
     return result
 
+
+
+def escenario_capacidad_persistido(preliminar):
+    """Rebuild the same sourced operands; never promote a stored row label."""
+    from datetime import date, datetime
+    from .dto import EscenarioCapacidadDisponibleV2
+    try:
+        raw = preliminar['cuotaNuevaEstimada']['procedencia']
+        if set(raw) != set(Hecho.__dataclass_fields__):
+            raise ValueError()
+        values = dict(raw)
+        if type(values['valor']) is not str:
+            raise ValueError()
+        values['valor'] = Decimal(values['valor'])
+        values['estado_certificacion'] = EC(values['estado_certificacion'])
+        if values['fecha_corte'] is not None:
+            try:
+                values['fecha_corte'] = date.fromisoformat(values['fecha_corte'])
+            except ValueError:
+                values['fecha_corte'] = datetime.fromisoformat(values['fecha_corte'])
+        if values['fecha_consulta'] is not None:
+            values['fecha_consulta'] = datetime.fromisoformat(values['fecha_consulta'])
+        quote = Hecho(**values)
+        if quote.fecha_corte is None or quote.fecha_consulta is None:
+            raise ValueError()
+        checked = normalizar_capacidad_disponible(preliminar, cuota_estimada=quote)
+        if checked != preliminar:
+            raise ValueError()
+
+        def amount(name):
+            fact = checked[name]
+            if fact['disponible'] is not True or type(fact['valor']) is not str:
+                raise ValueError()
+            return Decimal(fact['valor'])
+        return EscenarioCapacidadDisponibleV2(ingresos=amount('ingresoComputable'), cuotas_hdc=amount('subtotalMensualHdcReconocido'), deducciones_nomina=amount('deduccionesNomina'), gastos_familiares_exactos=amount('gastosFamiliaresExactos'), capacidad_disponible=amount('capacidadDisponible'), cuota_nueva_estimada=amount('cuotaNuevaEstimada'), residual_posterior_estimado=amount('residualPosteriorEstimado'))
+    except (KeyError, TypeError, ValueError, ArithmeticError):
+        raise ValueError('ESCENARIO_CAPACIDAD_PERSISTIDO_NO_ACREDITADO') from None

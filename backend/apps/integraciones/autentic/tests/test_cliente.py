@@ -15,7 +15,8 @@ from pypdf import PdfWriter
 import requests
 
 from ..cliente import AutenticDEVClient, ReciboFirma
-from ..contratos import AutenticError, ConfiguracionDEV, DEV_URL, TOKEN_URL, preparar_firma
+from ..contratos import (AutenticError, ConfiguracionDEV, ConfiguracionProduccion,
+                        DEV_URL, PRODUCTION_URL, TOKEN_URL, preparar_firma)
 from ..evidencia import verificar_zip
 from ..operaciones import RegistroFirmas
 
@@ -76,6 +77,44 @@ class Session:
 
 
 class AutenticTests(unittest.TestCase):
+    def test_production_is_explicit_and_disabled_for_documents_by_default(self):
+        config = ConfiguracionProduccion('SYNTHETIC', 'SYNTHETIC-SECRET')
+        self.assertFalse(config.permitir_documentos)
+        self.assertEqual(config.base_url, PRODUCTION_URL)
+        self.assertEqual(config.audience, 'api.autenticsign.com')
+        self.assertNotIn('SYNTHETIC-SECRET', repr(config))
+        session = Session(Response(token()))
+        client = AutenticDEVClient(config, session=session)
+        self.addCleanup(client.close)
+        client.autenticar()
+        self.assertEqual(session.calls[0][2]['json']['audience'], config.audience)
+        with self.assertRaises(AutenticError):
+            client.firmar(solicitud(), clave='PROD-SYNTHETIC', registro=self.registro,
+                          referencia_autorizacion='SYNTHETIC')
+        self.assertEqual(len(session.calls), 1)
+
+    def test_production_signature_uses_same_durable_contract_and_correct_endpoint(self):
+        session = Session(Response(token()), Response(recibo(), status=201))
+        client = AutenticDEVClient(ConfiguracionProduccion('SYNTHETIC', 'SECRET',
+                                   permitir_documentos=True), session=session)
+        self.addCleanup(client.close)
+        result = client.firmar(solicitud(), clave='PROD-ONLY-MOCK', registro=self.registro,
+                               referencia_autorizacion='SYNTHETIC-NO-REAL-SIGNATURE')
+        self.assertEqual(session.calls[-1][1], PRODUCTION_URL + '/v2/signature/')
+        self.assertEqual(result.estado, 'FIRMA_REPORTADA_NO_VERIFICADA')
+
+    def test_production_loader_never_accepts_staging_profile(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / 'profile.json'
+            data = dict(audience='stag-api.autenticsign.com', grant_type='client_credentials',
+                        client_id='SYNTHETIC', client_secret='SECRET')
+            path.write_text(json.dumps(data))
+            with self.assertRaises(AutenticError):
+                ConfiguracionProduccion.desde_archivo(path)
+            data['audience'] = 'api.autenticsign.com'
+            path.write_text(json.dumps(data))
+            self.assertEqual(ConfiguracionProduccion.desde_archivo(path).ambiente, 'PRODUCCION')
+
     def test_v4_uses_lowercase_docId_and_preserves_documented_identity_fields(self):
         metadata={'names':'SYNTHETIC','lastNames':'ONLY','docId':'SYNTHETIC-ID','secureKey':'SYNTHETIC-EVIDENCE',
             'identityValidation':'OTP','identityValidationId':'SYNTHETIC-NOT-REAL',

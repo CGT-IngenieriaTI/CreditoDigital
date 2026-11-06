@@ -3,10 +3,6 @@
 
 
 
-
-
-
-
 import hashlib
 import json
 from uuid import UUID,uuid4
@@ -276,64 +272,6 @@ def _exigir_cuota_ofertable(q):
         raise ValueError('OFERTA_REQUIERE_CUOTA_LINIX_VIGENTE_DEL_EXPEDIENTE')
 
 
-def _exigir_decision_ofertable(s, detail):
-    """Reuse the durable policy decision, not the legacy decision_final label.
-
-    This is not LINIX approval. The latest registered decision must approve the
-    current study; an older approval cannot override a later pending decision.
-    """
-    from apps.xcore_consumo.models import EvaluacionConsumo
-    from .funcional import KEY as study_key
-    from .condiciones_producto import politica_digital
-    try:
-        history = detail.orchestration_data.get('credihoy_decisiones_digitales_v1')
-        automatic = getattr(s, 'metadatos', {}).get('modo') == 'AUTOGESTION_ENVIADA'
-        if automatic:
-            from apps.utils.models import AuditLog
-            records = list(AuditLog.objects.filter(solicitud=s, event='CREDIHOY_DECISION_DIGITAL_LOCAL').order_by('-created_at', '-pk')[:101])
-            if len(records) > 100:
-                raise ValueError()
-            history = {str(record.request_id): record.payload for record in records}
-        if type(history) is not dict or not history:
-            raise ValueError()
-        entries = []
-        now = timezone.now()
-        for key, entry in history.items():
-            body = {k: v for k, v in entry.items() if k != 'sha256'}
-            when = datetime.fromisoformat(entry['registradoEn'])
-            if str(UUID(key)) != key or entry['operacionId'] != key or entry['solicitudId'] != str(s.pk) or (not entry['actorTecnicoId']) or (when.utcoffset() is None) or (when > now) or (entry['sha256'] != hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()):
-                raise ValueError()
-            entries.append((when, entry))
-        latest = max((when for when, _ in entries))
-        current = [entry for when, entry in entries if when == latest]
-        if len(current) != 1:
-            raise ValueError()
-        entry = current[0]
-        decision = entry['resultado']
-        policy = politica_digital()
-        if automatic:
-            from .funcional import leer_estado_funcional
-            from .elegibilidad import contexto_desde_estudio, evaluar_decision_digital
-            state = leer_estado_funcional(s)
-            snapshot = state['resultado']
-            if entry.get('revisionReferencia') != state.get('revisionEstudio', {}).get('versionReferencia'):
-                raise ValueError()
-            current = evaluar_decision_digital(contexto_desde_estudio(s, snapshot, ahora=now), ahora=now)
-            if json.loads(json.dumps(current, default=str)) != decision:
-                raise ValueError()
-        else:
-            evaluations = list(EvaluacionConsumo.objects.filter(solicitud=s).values_list('resultados', flat=True))
-            snapshots = [e[study_key] for e in evaluations if type(e) is dict and study_key in e]
-            if len(snapshots) != 1:
-                raise ValueError()
-            snapshot = snapshots[0]
-        if type(snapshot) is not dict or snapshot.get('solicitudId') != str(s.pk) or entry['evaluacionSha256'] != hashlib.sha256(json.dumps(snapshot, sort_keys=True, default=str).encode()).hexdigest() or (decision['estado'] != 'APROBADO') or (decision['solicitudId'] != str(s.pk)) or (decision['versionPolitica'] != policy['version']) or (decision['referencia'] != policy['referencia']) or (decision['reglasOriginales'] != snapshot['reglas']) or (decision['decisionLinixRegistrada'] is not False) or (decision['autorizaDesembolso'] is not False):
-            raise ValueError()
-        return {'operacionId': entry['operacionId'], 'sha256': entry['sha256'], 'evaluacionSha256': entry['evaluacionSha256'], 'versionPolitica': decision['versionPolitica']}
-    except (KeyError, TypeError, ValueError, AttributeError):
-        raise ValueError('OFERTA_REQUIERE_DECISION_DIGITAL_APROBADA_DEL_ESTUDIO_VIGENTE') from None
-
-
 def preparar_oferta_linix(solicitud_id,operador,*,tasa_ea=None,primer_vencimiento=None,titular=None):
     """Reuse the persisted scalar; LINIX owns the later amortization/payment plan.
 
@@ -349,7 +287,6 @@ def preparar_oferta_linix(solicitud_id,operador,*,tasa_ea=None,primer_vencimient
         detail,payload=_contexto(s)
         q=leer_cotizacion_guardada(s,str(uuid4()))
         _exigir_cuota_ofertable(q)
-        decision=_exigir_decision_ofertable(s,detail)
         values={};now=timezone.now()
         selected=SeleccionTarifaCredihoy.objects.filter(solicitud=s).order_by('-creado_at','-pk').first()
         current=resolver_condicion(pagaduria_seleccion(selected))
@@ -380,7 +317,7 @@ def preparar_oferta_linix(solicitud_id,operador,*,tasa_ea=None,primer_vencimient
         body={'versionContrato':'credihoy-oferta-cuota-nativa-v1','solicitudId':str(s.pk),
             'titularReferencia':hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest(),
             'versionCondiciones':payload['versionCondiciones'],'calculoRequestId':q['calculoRequestId'],
-            'evaluacionSha256':_evaluacion_huella(s),'decisionDigital':decision,
+            'evaluacionSha256':_evaluacion_huella(s),
             'condiciones':payload['condiciones'],'cuotaContractual':q['cuotaInstitucional'],
             'fuente':q['fuente'],'desde':q['fechaConsulta'],'hasta':q['vigenteHasta'],
             'condicionesAdicionales':values,'planPagos':'GESTION_NATIVA_LINIX_POSTERIOR',
@@ -418,7 +355,6 @@ def leer_oferta_linix(s):
         q=_resultado_guardado(detail,payload,offer['calculoRequestId'],ejecutar=False)
         validar_respuesta(q,payload,offer['calculoRequestId'])
         _exigir_cuota_ofertable(q)
-        if offer.get('decisionDigital')!=_exigir_decision_ofertable(s,detail):raise ValueError()
         if (offer['sha256']!=hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':')).encode()).hexdigest()
                 or offer['solicitudId']!=str(s.pk) or offer['condiciones']!=payload['condiciones']
                 or offer['versionCondiciones']!=payload['versionCondiciones'] or q['disponible'] is not True
@@ -468,17 +404,10 @@ def aplicar_oferta_aceptada_a_contexto(contexto,s):
     from dataclasses import replace
     offer=leer_oferta_linix(s);accepted=leer_aceptacion_oferta(s)
     if accepted is None:raise ValueError('ACEPTACION_PROPIA_REQUERIDA')
-    # Each reader revalidates independently; never relabel a newer acceptance
-    # with an offer snapshot read before a concurrent offer change.
-    if (accepted['ofertaSha256']!=offer['sha256']
-            or accepted['versionCondiciones']!=offer['versionCondiciones']
-            or accepted['evaluacionSha256']!=offer['evaluacionSha256']
-            or accepted['titularReferencia']!=offer['titularReferencia']):
-        raise ValueError('ACEPTACION_NO_CORRESPONDE_A_OFERTA')
     if not offer.get('calendarioPago'):raise ValueError('CALENDARIO_DE_OFERTA_REQUERIDO')
     linked=aplicar_oferta_a_contexto(contexto,offer)
     return replace(linked,aceptacion_referencia=accepted['requestId'],
-        aceptacion_oferta_huella=accepted['ofertaSha256'],aceptacion_fecha=datetime.fromisoformat(accepted['fecha']))
+        aceptacion_oferta_huella=offer['sha256'],aceptacion_fecha=datetime.fromisoformat(accepted['fecha']))
 
 
 def _validar_enlace_oferta(oferta):
@@ -590,10 +519,6 @@ def cotizacion(solicitud_id, operador, request_id, *, ejecutar=False, cliente=No
         except (ValueError, KeyError, AttributeError):
             return _empty(s.pk, rid, 'DESACTUALIZADA')
         if result.get('disponible') is True and result.get('fuente')=='LINIX_CALCULO_CUOTA':
-            try:_exigir_decision_ofertable(s,detail)
-            except ValueError:
-                # Keep the actual quote durable, but do not turn it into an offer.
-                return result
             preparar_oferta_linix(s.pk,operador,titular=titular)
         return result
 
@@ -1013,3 +938,59 @@ def incorporar_prueba_manual(solicitud_id, operador, resultado, *, revision_id, 
                 'cuota':checked['cuotaInstitucional'],'capacidadPreliminar':preliminary['capacidad'],
                 'aceptacionAsociado':False,'ejecucionAutomaticaHabilitada':False,'HDC':0,'OTP':0,'Oracle':False,'START':0})
         return entry
+
+
+def _exigir_decision_ofertable(s, detail):
+    """Reuse the durable policy decision, not the legacy decision_final label.
+
+    This is not LINIX approval. The latest registered decision must approve the
+    current study; an older approval cannot override a later pending decision.
+    """
+    from apps.xcore_consumo.models import EvaluacionConsumo
+    from .funcional import KEY as study_key
+    from .condiciones_producto import politica_digital
+    try:
+        history = detail.orchestration_data.get('credihoy_decisiones_digitales_v1')
+        automatic = getattr(s, 'metadatos', {}).get('modo') == 'AUTOGESTION_ENVIADA'
+        if automatic:
+            from .elegibilidad import leer_decision_estudio
+            verified = leer_decision_estudio(s)
+            if verified is None:
+                raise ValueError()
+            history = {verified['operacionId']: verified}
+        if type(history) is not dict or not history:
+            raise ValueError()
+        entries = []
+        now = timezone.now()
+        for key, entry in history.items():
+            body = {k: v for k, v in entry.items() if k != 'sha256'}
+            when = datetime.fromisoformat(entry['registradoEn'])
+            if str(UUID(key)) != key or entry['operacionId'] != key or entry['solicitudId'] != str(s.pk) or (not entry['actorTecnicoId']) or (when.utcoffset() is None) or (when > now) or (entry['sha256'] != hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()):
+                raise ValueError()
+            entries.append((when, entry))
+        latest = max((when for when, _ in entries))
+        current = [entry for when, entry in entries if when == latest]
+        if len(current) != 1:
+            raise ValueError()
+        entry = current[0]
+        decision = entry['resultado']
+        policy = politica_digital()
+        if automatic:
+            from .funcional import leer_estado_funcional
+            state = leer_estado_funcional(s)
+            snapshot = state['resultado']
+            if entry.get('revisionReferencia') != state.get('revisionEstudio', {}).get('versionReferencia'):
+                raise ValueError()
+            if entry != verified:
+                raise ValueError()
+        else:
+            evaluations = list(EvaluacionConsumo.objects.filter(solicitud=s).values_list('resultados', flat=True))
+            snapshots = [e[study_key] for e in evaluations if type(e) is dict and study_key in e]
+            if len(snapshots) != 1:
+                raise ValueError()
+            snapshot = snapshots[0]
+        if type(snapshot) is not dict or snapshot.get('solicitudId') != str(s.pk) or entry['evaluacionSha256'] != hashlib.sha256(json.dumps(snapshot, sort_keys=True, default=str).encode()).hexdigest() or (decision['estado'] != 'APROBADO') or (decision['solicitudId'] != str(s.pk)) or (decision['versionPolitica'] != policy['version']) or (decision['referencia'] != policy['referencia']) or (decision['reglasOriginales'] != snapshot['reglas']) or (decision['decisionLinixRegistrada'] is not False) or (decision['autorizaDesembolso'] is not False):
+            raise ValueError()
+        return {'operacionId': entry['operacionId'], 'sha256': entry['sha256'], 'evaluacionSha256': entry['evaluacionSha256'], 'versionPolitica': decision['versionPolitica']}
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise ValueError('OFERTA_REQUIERE_DECISION_DIGITAL_APROBADA_DEL_ESTUDIO_VIGENTE') from None

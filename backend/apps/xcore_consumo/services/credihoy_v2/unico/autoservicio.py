@@ -1,4 +1,6 @@
 """Existing owner contract: temporary progress, then explicit durable submission."""
+
+
 from datetime import datetime
 from decimal import Decimal
 import hmac
@@ -322,3 +324,50 @@ def validar_procedencia_formulario(s, raw):
 FORMULARIO_EVALUACION = 'credihoy_formulario_evaluacion_v1'
 
 COMPLEMENTO_PERSONAL = 'credihoy_complemento_personal_v1'
+
+
+def _estudio_publico_personal(s, identity):
+    import base64, hashlib, json
+    from django.db import transaction
+    from apps.xcore_consumo.models import EvaluacionConsumo, ConsentimientoConsumo, SolicitudConsumo
+    from cryptography.exceptions import InvalidSignature
+
+    def canonical(value):
+        return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, default=str).encode()
+
+    def digest(value):
+        return hashlib.sha256(canonical(value)).hexdigest()
+    alias = getattr(settings, 'CREDIHOY_AUTORIZACION_DB_ALIAS', '')
+    if not alias:
+        return None
+    with transaction.atomic(using=alias):
+        with connections[alias].cursor() as cursor:
+            cursor.execute('SET TRANSACTION READ ONLY')
+        with connections[alias].cursor() as cursor:
+            cursor.execute('SELECT resumen_tecnico FROM public.credihoy_estudio_publico WHERE solicitud_id=%s ORDER BY registrado_en DESC,registro_id DESC LIMIT 1', [str(s.pk)])
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        from . import centrales_personal as central
+        try:
+            envelope = row[0]
+            if type(envelope) is str:
+                envelope = json.loads(envelope)
+            if type(envelope) is not dict or set(envelope) != {'algoritmo', 'payload', 'firmaBase64'} or envelope['algoritmo'] != 'Ed25519':
+                raise ValueError
+            body = envelope['payload']
+            if type(body) is not dict or set(body) != {'version', 'proposito', 'solicitudId', 'titularSha256', 'evaluacionBaseSha256', 'consentimientoSha256', 'consumoSha256', 'estudio'}:
+                raise ValueError
+            central._clave_publica(owner=True).verify(base64.b64decode(envelope['firmaBase64'], validate=True), 'credihoy-estudio-publico-tecnico-v1\x00'.encode() + canonical(body))
+            if body['version'] not in ('credihoy-estudio-tecnico-firmado-v1', 'credihoy-estudio-tecnico-firmado-v2') or body['proposito'] != 'LECTURA_ESTUDIO_NO_DECISION' or body['solicitudId'] != str(s.pk) or (body['titularSha256'] != hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()):
+                raise ValueError
+            study = wire.project_study(body['estudio'], str(s.pk))
+            evaluation = EvaluacionConsumo.objects.using(alias).values().get(pk=study['evaluacionBaseId'], solicitud_id=s.pk)
+            consent = ConsentimientoConsumo.objects.using(alias).values().get(solicitud_id=s.pk)
+            detail = SolicitudConsumo.objects.using(alias).values().get(solicitud_id=s.pk)
+            from .funcional import huella_consumo_estudio
+            if digest(evaluation) != body['evaluacionBaseSha256'] or digest(consent) != body['consentimientoSha256'] or huella_consumo_estudio(detail, version=body['version']) != body['consumoSha256']:
+                raise ValueError
+            return study
+        except (ValueError, TypeError, KeyError, AttributeError, InvalidSignature, EvaluacionConsumo.DoesNotExist, ConsentimientoConsumo.DoesNotExist, SolicitudConsumo.DoesNotExist):
+            raise wire.NoDisponible from None

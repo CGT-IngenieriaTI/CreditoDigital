@@ -1,6 +1,8 @@
 """Restricted 9A window, network boundary and temporary-identity lifecycle."""
 
 
+
+
 import hmac
 import re
 from ipaddress import ip_address, ip_network
@@ -160,13 +162,12 @@ def identidad_permitida(identity):
 def ip_cliente(request):
     try:
         peer = ip_address(request.META.get('REMOTE_ADDR', ''))
-        trusted = any(peer in ip_network(n) for n in settings.CREDIHOY_PUBLICO_PROXIES)
+        trusted = any((peer in ip_network(n) for n in settings.CREDIHOY_PUBLICO_PROXIES))
         forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
         protocol = request.META.get('HTTP_X_FORWARDED_PROTO')
         if request.META.get('HTTP_X_REAL_IP'):
             raise ValueError
         if trusted:
-            # The institutional last hop must replace, not append, these headers.
             if not forwarded or ',' in forwarded or protocol != 'https':
                 raise ValueError
             client = ip_address(forwarded)
@@ -174,18 +175,15 @@ def ip_cliente(request):
             if forwarded is not None or protocol is not None:
                 raise ValueError
             client = peer
-        if getattr(settings,'CREDIHOY_PUBLICO_RESTRINGIDO',None) is False:
-            if (not trusted or client.is_unspecified or client.is_multicast
-                    or request.META.get('HTTP_FORWARDED')
-                    or 'https://'+request.get_host() not in settings.CSRF_TRUSTED_ORIGINS
-                    or request.META.get('HTTP_X_FORWARDED_PREFIX','')!=(getattr(settings,'FORCE_SCRIPT_NAME',None) or '')):
+        if getattr(settings, 'CREDIHOY_PERFIL_DISPONIBILIDAD', 'PILOT_WINDOW') == 'PERMANENT_PRIVATE_V1':
+            origins = settings.CSRF_TRUSTED_ORIGINS
+            if getattr(settings, 'CREDIHOY_PUBLICO_RESTRINGIDO', None) is not True or not trusted or (not request.is_secure()) or ('https://' + request.get_host() not in origins) or (request.META.get('HTTP_ORIGIN') is not None and request.META['HTTP_ORIGIN'] not in origins) or ('HTTP_FORWARDED' in request.META) or request.META.get('HTTP_X_FORWARDED_HOST') or request.META.get('HTTP_X_FORWARDED_PORT') or (request.META.get('HTTP_X_FORWARDED_PREFIX', '') != (getattr(settings, 'FORCE_SCRIPT_NAME', None) or '')):
                 raise ValueError
-        elif not any(client in ip_network(n) for n in settings.CREDIHOY_PUBLICO_REDES):
-            if (not _borde_basic_externo() or not trusted or not request.is_secure()
-                    or client.is_unspecified or client.is_multicast
-                    or 'HTTP_FORWARDED' in request.META
-                    or 'https://'+request.get_host() not in settings.CSRF_TRUSTED_ORIGINS
-                    or request.META.get('HTTP_X_FORWARDED_PREFIX','')!=(getattr(settings,'FORCE_SCRIPT_NAME',None) or '')):
+        if getattr(settings, 'CREDIHOY_PUBLICO_RESTRINGIDO', None) is False:
+            if not trusted or client.is_unspecified or client.is_multicast or request.META.get('HTTP_FORWARDED') or ('https://' + request.get_host() not in settings.CSRF_TRUSTED_ORIGINS) or (request.META.get('HTTP_X_FORWARDED_PREFIX', '') != (getattr(settings, 'FORCE_SCRIPT_NAME', None) or '')):
+                raise ValueError
+        elif not any((client in ip_network(n) for n in settings.CREDIHOY_PUBLICO_REDES)):
+            if not _borde_basic_externo() or not trusted or (not request.is_secure()) or client.is_unspecified or client.is_multicast or ('HTTP_FORWARDED' in request.META) or ('https://' + request.get_host() not in settings.CSRF_TRUSTED_ORIGINS) or (request.META.get('HTTP_X_FORWARDED_PREFIX', '') != (getattr(settings, 'FORCE_SCRIPT_NAME', None) or '')):
                 raise ValueError
             from .publico_restringido import autorizar_edge
             autorizar_edge(request)

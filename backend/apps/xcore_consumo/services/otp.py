@@ -1,4 +1,6 @@
 
+
+
 from apps.xcore_consumo.services.consentimiento_integridad import build_consent_hash
 import hashlib
 import random

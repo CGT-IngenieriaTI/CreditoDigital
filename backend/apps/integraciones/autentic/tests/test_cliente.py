@@ -77,6 +77,22 @@ class Session:
 
 
 class AutenticTests(unittest.TestCase):
+    def test_production_cannot_reuse_staging_receipt_or_uncertain_journal(self):
+        request=solicitud()
+        for state in ('FIRMA_REPORTADA_NO_VERIFICADA','INDETERMINADA'):
+            with self.subTest(state=state):
+                self.db.execute('DELETE FROM autentic_operaciones');self.db.commit()
+                self.registro.preparar('SHARED-KEY',request.fingerprint)
+                self.registro.iniciar('SHARED-KEY');self.registro.terminar('SHARED-KEY',state,'DEV-ONLY')
+                session=Session()
+                client=AutenticDEVClient(ConfiguracionProduccion('SYNTHETIC','SECRET',
+                    permitir_documentos=True),session=session)
+                self.addCleanup(client.close)
+                with self.assertRaisesRegex(AutenticError,'IDEMPOTENCIA_CONFLICTO'):
+                    client.firmar(request,clave='SHARED-KEY',registro=self.registro,
+                        referencia_autorizacion='SYNTHETIC-NOT-A-REAL-SIGNATURE')
+                self.assertEqual(session.calls,[])
+
     def test_production_is_explicit_and_disabled_for_documents_by_default(self):
         config = ConfiguracionProduccion('SYNTHETIC', 'SYNTHETIC-SECRET')
         self.assertFalse(config.permitir_documentos)

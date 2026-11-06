@@ -203,6 +203,12 @@ class AutenticDEVClient:
         if self.config.permitir_documentos is not True or not texto(referencia):
             raise AutenticError("DOCUMENTOS_DEV_NO_AUTORIZADOS")
 
+    def _huella_ambiente(self, fingerprint):
+        if self.config.ambiente == 'DEV':
+            return fingerprint
+        from hashlib import sha256
+        return sha256((self.config.audience+'\x00'+fingerprint).encode('ascii')).hexdigest()
+
     def firmar(self, solicitud, *, clave, registro, referencia_autorizacion):
         self._documentos_autorizados(referencia_autorizacion)
         if type(solicitud) is not SolicitudFirma:
@@ -217,7 +223,7 @@ class AutenticDEVClient:
                 raise ValueError
         except (KeyError, TypeError, ValueError):
             raise AutenticError("SOLICITUD_FIRMA_INVALIDA") from None
-        state = registro.preparar(clave, solicitud.fingerprint)
+        state = registro.preparar(clave, self._huella_ambiente(solicitud.fingerprint))
         if state.estado == "FIRMA_REPORTADA_NO_VERIFICADA":
             return state
         if state.estado != "PREPARADA":
@@ -276,7 +282,7 @@ class AutenticDEVClient:
         from .operaciones import RegistroFirmas
         if not isinstance(registro, RegistroFirmas):
             raise AutenticError("JOURNAL_CERTIFICACION_REQUERIDO")
-        state = registro.preparar(clave, request.fingerprint)
+        state = registro.preparar(clave, self._huella_ambiente(request.fingerprint))
         if state.estado == 'CERTIFICACION_RECUPERADA_NO_VERIFICADA':
             return state
         if state.estado != 'PREPARADA':

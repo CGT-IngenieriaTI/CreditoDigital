@@ -1,8 +1,9 @@
-"""Solo DEV. Una llamada por envio, TLS verificado, sin redirects ni retries."""
+"""Explicit DEV/STAGING/production profiles; no redirects or automatic retries."""
 
 import base64
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import http.client
+import hmac
 import ipaddress
 import json
 import logging
@@ -14,9 +15,14 @@ from urllib.parse import urlsplit
 
 import requests
 
-from .contratos import (AutenticError, ConfiguracionDEV, DEV_URL, SolicitudFirma,
+from .contratos import (AutenticError, ConfiguracionDEV, ConfiguracionSTAGING, ConfiguracionProduccion, SolicitudFirma,
                         TOKEN_URL, preparar_certificacion, texto, validar_pdf)
 from .evidencia import EvidenciaPDF, MAX_ZIP, verificar_zip
+
+
+def _texto_url(value):
+    return (type(value) is str and 0 < len(value) <= 8192
+            and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value))
 
 
 @dataclass(frozen=True)
@@ -31,11 +37,45 @@ class ReciboFirma:
     respuesta_original: dict = field(default_factory=dict,repr=False)
     ambiente: str = "DEV"
 
+    @classmethod
+    def desde_respuesta(cls, respuesta, ambiente):
+        try:
+            if (type(respuesta) is not dict or type(respuesta.get('operationCode')) is not int
+                    or respuesta['operationCode'] != 1000
+                    or not all(texto(respuesta.get(k)) for k in ('transactionId', 'processedDate'))
+                    or not _texto_url(respuesta.get('urlDocuments'))
+                    or any(ord(c) < 32 or ord(c) == 127 for k in ('transactionId', 'urlDocuments') for c in respuesta[k])
+                    or respuesta['transactionId'] != respuesta['transactionId'].strip()
+                    or ('operationMsg' in respuesta and respuesta['operationMsg'] != 'DOCS_SIGNED')
+                    or ('type' in respuesta and respuesta['type'] != 'reply_signature')):
+                raise ValueError
+            date = respuesta['processedDate']
+            if not ('T' in date or ' ' in date):
+                raise ValueError
+            datetime.fromisoformat(date)
+            url = urlsplit(respuesta['urlDocuments'])
+            if (url.scheme != 'https' or not url.hostname or url.username or url.password
+                    or url.fragment or url.port not in (None, 443)):
+                raise ValueError
+            # Keep only documented reply fields, never an echoed token/account/PII.
+            original = {k: respuesta[k] for k in ('transactionId', 'operationCode', 'processedDate',
+                        'urlDocuments', 'operationMsg', 'type') if k in respuesta}
+            receipt = cls(original['transactionId'], original['processedDate'], original['urlDocuments'],
+                mensaje_operacion=original.get('operationMsg', ''), tipo_respuesta=original.get('type', ''),
+                respuesta_original=original, ambiente=ambiente)
+            receipt.validar_recuperacion(ambiente)
+            return receipt
+        except (KeyError, ValueError, TypeError, AttributeError, AutenticError):
+            raise AutenticError('FIRMA_RESPUESTA_NO_CERTIFICADA') from None
+
     def validar_recuperacion(self, ambiente):
         if (self.ambiente != ambiente or ambiente not in {'DEV', 'PRODUCCION'}
                 or self.estado != 'FIRMA_REPORTADA_NO_VERIFICADA'
                 or type(self.codigo_operacion) is not int or self.codigo_operacion != 1000
-                or not all(texto(v) for v in (self.transaccion, self.fecha_proveedor, self.url_documentos))):
+                or not all(texto(v) for v in (self.transaccion, self.fecha_proveedor))
+                or not _texto_url(self.url_documentos)):
+            raise AutenticError('RECIBO_RECUPERACION_NO_ACREDITADO')
+        if type(self.respuesta_original) is not dict:
             raise AutenticError('RECIBO_RECUPERACION_NO_ACREDITADO')
         if self.respuesta_original:
             expected = {'transactionId': self.transaccion, 'operationCode': self.codigo_operacion,
@@ -75,10 +115,12 @@ class AutenticDEVClient:
         self._diagnosticos_http=[]
         self._evento_http=None
         self._excluir_diagnostico=()
+        self._url_recuperacion_en_curso = None
 
     def close(self):
         self._token = None
         self._vence = 0
+        self._url_recuperacion_en_curso = None
         self.session.close()
         self._diagnosticos_http.clear()
         self._excluir_diagnostico=()
@@ -98,6 +140,10 @@ class AutenticDEVClient:
 
     def _request(self, method, url, *, payload=None, bearer=False, limite=1_000_000,
                  mime="application/json", estados=(200,)):
+        if self.config.solo_recuperacion and (method != 'GET' or bearer or payload is not None):
+            raise AutenticError('SOLO_RECUPERACION_POST_BLOQUEADO')
+        if self.config.solo_recuperacion and url != self._url_recuperacion_en_curso:
+            raise AutenticError('DESCARGA_SIN_RECIBO_CUSTODIADO')
         if (http.client.HTTPConnection.debuglevel
                 or http.client.HTTPSConnection.debuglevel
                 or any(logging.getLogger(name).isEnabledFor(logging.DEBUG)
@@ -198,6 +244,8 @@ class AutenticDEVClient:
             raise AutenticError("RESPUESTA_INVALIDA") from None
 
     def autenticar(self):
+        if self.config.solo_recuperacion:
+            raise AutenticError('SOLO_RECUPERACION_POST_BLOQUEADO')
         if self._token is not None and self.reloj() < self._vence:
             return {"autenticado": True, "token_en_cache": True}
         self._token = None
@@ -225,6 +273,8 @@ class AutenticDEVClient:
         return sha256((self.config.audience+'\x00'+fingerprint).encode('ascii')).hexdigest()
 
     def firmar(self, solicitud, *, clave, registro, referencia_autorizacion):
+        if self.config.solo_recuperacion:
+            raise AutenticError('SOLO_RECUPERACION_POST_BLOQUEADO')
         self._documentos_autorizados(referencia_autorizacion)
         if type(solicitud) is not SolicitudFirma:
             raise AutenticError("SOLICITUD_FIRMA_INVALIDA")
@@ -240,26 +290,32 @@ class AutenticDEVClient:
             raise AutenticError("SOLICITUD_FIRMA_INVALIDA") from None
         state = registro.preparar(clave, self._huella_ambiente(solicitud.fingerprint))
         if state.estado == "FIRMA_REPORTADA_NO_VERIFICADA":
+            if getattr(registro, 'custodia_recibos', False):
+                receipt = registro.recuperar_recibo(clave)
+                if receipt is not None:
+                    receipt.validar_recuperacion(self.config.ambiente)
+                    return receipt
             return state
         if state.estado != "PREPARADA":
             raise AutenticError("REENVIO_BLOQUEADO_REQUIERE_CONCILIACION")
         self.autenticar()
         registro.iniciar(clave)
+        receipt = None
         try:
-            p = self._json(self.config.base_url + "/v2/signature/", checked.payload, bearer=True, estados=(201,))
-            if (type(p.get('operationCode')) is not int or p['operationCode'] != 1000
-                    or not all(texto(p.get(k)) for k in ('transactionId', 'processedDate', 'urlDocuments'))):
-                raise AutenticError("FIRMA_RESPUESTA_NO_CERTIFICADA")
-            if any(k in p and (type(p[k]) is not str or len(p[k])>1000) for k in ('operationMsg','type')):
-                raise AutenticError('FIRMA_RESPUESTA_NO_CERTIFICADA')
-            receipt = ReciboFirma(p['transactionId'], p['processedDate'], p['urlDocuments'],
-                codigo_operacion=p['operationCode'],mensaje_operacion=p.get('operationMsg',''),tipo_respuesta=p.get('type',''),
-                respuesta_original=p,ambiente=self.config.ambiente)
+            p = self._json(self.config.base_url + "/v2/signature/", checked.payload, bearer=True, estados=(200, 201))
+            receipt = ReciboFirma.desde_respuesta(p, self.config.ambiente)
+            if getattr(registro, 'custodia_recibos', False):
+                registro.terminar(clave, 'FIRMA_REPORTADA_NO_VERIFICADA', receipt.transaccion, recibo=receipt)
+            else:
+                registro.terminar(clave, 'FIRMA_REPORTADA_NO_VERIFICADA', receipt.transaccion)
         except Exception as exc:
             self.auditoria_firma['codigo'] = exc.codigo if isinstance(exc, AutenticError) else 'FALLO_INTERNO_DESPUES_DE_RESERVA'
-            registro.terminar(clave, "INDETERMINADA")
+            try:
+                registro.terminar(clave, "INDETERMINADA", receipt.transaccion if receipt else '')
+            except Exception:
+                # A failed commit is uncertain too; never reopen ENVIANDO.
+                pass
             raise AutenticError("ENVIO_INDETERMINADO_NO_REPETIR") from None
-        registro.terminar(clave, "FIRMA_REPORTADA_NO_VERIFICADA", receipt.transaccion)
         return receipt
 
     def consultar_estado(self, transaccion):
@@ -268,6 +324,9 @@ class AutenticDEVClient:
     def recuperar_documentos(self, recibo, nombres_esperados, *, referencia_autorizacion):
         self.auditoria_descarga = {}
         self._documentos_autorizados(referencia_autorizacion)
+        if (self.config.solo_recuperacion and not hmac.compare_digest(
+                referencia_autorizacion.encode(), self.config.referencia_recuperacion.encode())):
+            raise AutenticError('REFERENCIA_RECUPERACION_NO_COINCIDE')
         if type(recibo) is not ReciboFirma:
             raise AutenticError('RECIBO_RECUPERACION_NO_ACREDITADO')
         recibo.validar_recuperacion(self.config.ambiente)
@@ -293,13 +352,18 @@ class AutenticDEVClient:
                 raise AutenticError('DESTINO_DESCARGA_NO_PUBLICO') from None
         # La URL firmada no recibe el Bearer de la API y no sigue redirects.
         try:
+            self._url_recuperacion_en_curso = recibo.url_documentos
             raw = self._request('GET', recibo.url_documentos, limite=MAX_ZIP, mime='application/zip')
             return verificar_zip(raw, nombres_esperados)
         except Exception:
             self.auditoria_descarga = {}
             raise
+        finally:
+            self._url_recuperacion_en_curso = None
 
     def certificar(self, transaccion, documento, *, clave=None, registro=None, referencia_autorizacion):
+        if self.config.solo_recuperacion:
+            raise AutenticError('SOLO_RECUPERACION_POST_BLOQUEADO')
         self._documentos_autorizados(referencia_autorizacion)
         request = preparar_certificacion(transaccion, documento)
         from .operaciones import RegistroFirmas
@@ -323,3 +387,24 @@ class AutenticDEVClient:
             raise AutenticError("CERTIFICACION_INDETERMINADA_NO_REPETIR") from None
         registro.terminar(clave, 'CERTIFICACION_RECUPERADA_NO_VERIFICADA', transaccion)
         return evidence
+
+
+# Neutral public name; retain the existing import for legacy callers.
+AutenticClient = AutenticDEVClient
+
+
+def cargar_cliente_recuperacion(perfil, archivo_config, *, referencia_recuperacion, session=None):
+    """GET-only capability. Caller must obtain the reference from existing custody.
+
+    Loading a profile never authenticates, signs, downloads or changes a journal.
+    The secret references must point to rotated private files, not exposed DEV data.
+    """
+    profiles = {'DEV': ConfiguracionDEV, 'STAGING': ConfiguracionSTAGING, 'PRODUCCION': ConfiguracionProduccion}
+    if type(perfil) is not str or perfil not in profiles or not texto(referencia_recuperacion):
+        raise AutenticError('PERFIL_RECUPERACION_INVALIDO')
+    config = profiles[perfil].desde_archivo(archivo_config)
+    if not config.hosts_descarga:
+        raise AutenticError('HOSTS_RECUPERACION_REQUERIDOS')
+    config = replace(config, permitir_documentos=True, solo_recuperacion=True,
+                     referencia_recuperacion=referencia_recuperacion)
+    return AutenticClient(config, session=session)

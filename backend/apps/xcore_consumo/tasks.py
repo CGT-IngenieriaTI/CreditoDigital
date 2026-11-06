@@ -1,5 +1,7 @@
 """Worker Celery de observacion, sin autoridad sobre el flujo productivo."""
 
+
+
 from datetime import datetime
 
 from celery import shared_task
@@ -169,3 +171,24 @@ def evaluar_credihoy_shadow(self, *, solicitud_id, request_id, fecha_evaluacion,
         logger.error("credihoy_shadow.error_sin_auditoria solicitud_id=%s request_id=%s intentos=%s",
                      solicitud_id, request_id, intentos)
         return "ERROR_SIN_AUDITORIA"
+
+
+@shared_task(name='credihoy.recuperar_firmas_contractuales', ignore_result=True, acks_late=True, reject_on_worker_lost=True, autoretry_for=(), max_retries=0)
+def recuperar_firmas_contractuales():
+    if getattr(settings, 'CREDIHOY_AUTENTIC_RECUPERACION_ENABLED', False) is not True:
+        return {'estado': 'RECUPERACION_NO_HABILITADA', 'procesadas': 0}
+    from django.contrib.auth import get_user_model
+    from apps.documentos.formularios_credihoy import recuperar_firmas_contractuales as recuperar
+    from apps.integraciones.autentic.cliente import cargar_cliente_recuperacion
+    profile = getattr(settings, 'CREDIHOY_AUTENTIC_AMBIENTE', '')
+    if profile not in {'STAGING', 'PRODUCCION'}:
+        raise ValueError('PERFIL_AUTENTIC_EXPLICITO_REQUERIDO')
+    actor = get_user_model().objects.get(username=settings.CREDIHOY_AUTENTIC_OPERADOR, is_active=True, is_staff=True, is_superuser=False)
+    client = cargar_cliente_recuperacion(profile, settings.CREDIHOY_AUTENTIC_CONFIG_FILE, referencia_recuperacion=settings.CREDIHOY_AUTENTIC_REFERENCIA)
+    try:
+        expected = getattr(settings, 'CREDIHOY_AUTENTIC_HOSTS_DESCARGA', ())
+        if not expected or set(client.config.hosts_descarga) != set(expected):
+            raise ValueError('HOSTS_RECUPERACION_NO_COINCIDEN_CON_PERFIL')
+        return recuperar(actor=actor, cliente=client, referencia_autorizacion=settings.CREDIHOY_AUTENTIC_REFERENCIA, limite=getattr(settings, 'CREDIHOY_AUTENTIC_RECUPERACION_LOTE', 10))
+    finally:
+        client.close()

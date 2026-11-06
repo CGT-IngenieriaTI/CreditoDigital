@@ -20,7 +20,7 @@ MAX_ZIP = 20_000_000
 
 
 def _procedencia_descarga_integra(procedencia, ambiente, url_sha256=None):
-    return (type(procedencia) is dict and ambiente in ('DEV', 'PRODUCCION')
+    return (type(procedencia) is dict and ambiente in ('DEV', 'STAGING', 'PRODUCCION')
         and procedencia.get('version') == 'AUTENTIC_DESCARGA_V1'
         and procedencia.get('ambiente') == ambiente
         and type(procedencia.get('http')) is int and procedencia['http'] == 200
@@ -44,7 +44,7 @@ class FirmaAutenticVerificada:
 
 
 def analizar_firma_documental(*,original,firmado,transaccion,documento_identidad,
-        document_number=None,contexto=None,raices=(),crls=(),ocsps=(),momento=None):
+        document_number=None,contexto=None,raices=(),crls=(),ocsps=(),momento=None,politicas_titular=()):
     """Partial, auditable results. A provider certificate is not inferred from a ZIP."""
     result={'version':'AUTENTIC_VERIFICACION_DOCUMENTAL_V1','estado':'PENDIENTE_VERIFICACION',
         'integridadPDF':False,'correlacionExpediente':False,'reciboProveedor':False,
@@ -101,13 +101,24 @@ def analizar_firma_documental(*,original,firmado,transaccion,documento_identidad
         except (TypeError,ValueError,AttributeError):
             result.update(estado='INVALIDA',pendientes=['VINCULO_O_RECIBO_NO_INTEGRO']);return result
     from .pdf_criptografia import verificar_pdf
-    crypto=verificar_pdf(original,firmado,documento_identidad,raices=raices,crls=crls,ocsps=ocsps,momento=momento)
+    crypto=verificar_pdf(original,firmado,documento_identidad,raices=raices,crls=crls,ocsps=ocsps,
+        momento=momento,politicas_titular=politicas_titular)
     result['criptografia']=crypto
     result['firmaCriptografica']=crypto['firmaIntegra'] and crypto['cadenaConfiable']
     # The PDF can be sealed by Autentic or another trusted entity. A certificate
     # subject match is an observation, not the client's personal signing act.
     result['coincidenciaTitularCertificado']=bool(crypto['identidadCertificado'])
     result['rolCertificado']=crypto.get('rolCertificado','NO_DETERMINADO')
+    personal=(crypto.get('rolCertificado')=='FIRMANTE_TITULAR'
+        and crypto.get('participacionElectronicaAcreditada') is True and crypto['identidadCertificado'])
+    result['identidadFirmante']=bool(personal and result['firmaCriptografica'])
+    result['participacionFirmante']=result['identidadFirmante']
+    if personal and crypto['fechaConfiable']:
+        try:
+            signed_at=datetime.fromisoformat(crypto['firmadoEn'])
+            if not prepared<=signed_at<=recovered:raise ValueError()
+        except (KeyError,TypeError,ValueError,UnboundLocalError):
+            result['pendientes'].append('FECHA_FIRMA_FUERA_DEL_ENVIO')
     for field in ('correlacionExpediente','reciboProveedor','procedenciaDescarga','fechaProveedorConZona',
             'firmaCriptografica','identidadFirmante','participacionFirmante'):
         if not result[field]:result['pendientes'].append(field)
@@ -117,8 +128,11 @@ def analizar_firma_documental(*,original,firmado,transaccion,documento_identidad
     # Do not accept a caller-supplied identifier as that missing provider evidence.
     result['documentNumberRecibido']=type(document_number) is str and bool(document_number.strip())
     if result['documentNumberRecibido']:result['certificacionPosterior']='IDENTIFICADOR_RECIBIDO_NO_VERIFICADO'
-    result['pendientes'].append('EVIDENCIA_IDENTIDAD_Y_PARTICIPACION_PROVEEDOR_PENDIENTE')
-    canonical=json.dumps(result,sort_keys=True,separators=(',',':')).encode()
+    if not personal:result['pendientes'].append('EVIDENCIA_IDENTIDAD_Y_PARTICIPACION_PROVEEDOR_PENDIENTE')
+    if not result['pendientes']:
+        result.update(estado='FIRMA_CONTRACTUAL_VERIFICADA',firmaAcreditada=True,firmadoEn=crypto['firmadoEn'])
+    canonical=json.dumps({k:v for k,v in result.items() if k!='verificadoEn'},
+        sort_keys=True,separators=(',',':')).encode()
     result['sha256']=sha256(canonical).hexdigest()
     return result
 
@@ -130,6 +144,28 @@ def verificar_firma_documental(*,original,firmado,transaccion,documento_identida
         'CONTRATO_VERIFICACION_FIRMANTE_Y_DOCUMENTO_AUTENTIC_PENDIENTE')
     error.resultado=result
     raise error
+
+
+@dataclass(frozen=True)
+class FirmaContractualVerificada:
+    solicitud_id: str
+    envio_id: str
+    original_sha256: str
+    firmado_sha256: str
+    transaccion_sha256: str
+    firmado_en: datetime
+    verificacion_sha256: str
+
+
+def verificar_firma_contractual(*,original,firmado,transaccion,documento_identidad,**kwargs):
+    """Contract evidence only; never rewrites a credit consent or its validity."""
+    report=analizar_firma_documental(original=original,firmado=firmado,transaccion=transaccion,
+        documento_identidad=documento_identidad,**kwargs)
+    if report.get('firmaAcreditada') is not True:
+        error=AutenticError('FIRMA_CONTRACTUAL_EVIDENCIA_PENDIENTE');error.resultado=report;raise error
+    return FirmaContractualVerificada(report['solicitudId'],report['envioId'],report['originalSha256'],
+        report['firmadoSha256'],sha256(transaccion.encode()).hexdigest(),
+        datetime.fromisoformat(report['firmadoEn']),report['sha256'])
 
 
 @dataclass(frozen=True)
@@ -155,7 +191,7 @@ def _vinculo_custodia(vinculo):
     for key in ('originalSha256', 'transaccionReferencia'):
         if type(vinculo[key]) is not str or not re.fullmatch('[a-f0-9]{64}', vinculo[key]):
             raise ValueError
-    if vinculo['ambiente'] not in ('DEV', 'PRODUCCION'):
+    if vinculo['ambiente'] not in ('DEV', 'STAGING', 'PRODUCCION'):
         raise ValueError
 
 

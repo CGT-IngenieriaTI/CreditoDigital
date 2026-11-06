@@ -172,3 +172,154 @@ class PostgreSQLJournalTests(TransactionTestCase):
         self.assertEqual(fresh.preparar(self.key,'a'*64).estado,'INDETERMINADA')
         with self.assertRaises(AutenticError):fresh.iniciar(self.key)
         with self.assertRaises(AutenticError):fresh.preparar(str(uuid4()),'a'*64)
+
+
+@override_settings(OTP_AES_KEY_B64=base64.b64encode(b's'*32).decode())
+class ContractRecoveryTests(TransactionTestCase):
+    setUp=CustodyTests.setUp
+
+    def contract(self):
+        self.entry['vinculo']['codigo']='COLO-FO.001'
+        native={'solicitudId':str(self.case.pk),'SC':'90002','K_FLUJO':'90001','intencionId':str(uuid4()),
+            'ofertaSha256':'a'*64,'aceptacionSha256':'b'*64,'calendarioSha256':'c'*64}
+        native['sha256']=sha256(json.dumps(native,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        self.entry['formalizacion']=native
+        self.detail.orchestration_data['credihoy_autentic_envios_v1'][self.key]=self.entry
+        self.detail.save(update_fields=['orchestration_data'])
+
+    def provider_client(self):
+        from ..cliente import AutenticDEVClient
+        from ..contratos import ConfiguracionDEV
+        return AutenticDEVClient(ConfiguracionDEV('SYNTHETIC','SYNTHETIC_SECRET',permitir_documentos=True,
+            hosts_descarga=('synthetic.example.invalid',)))
+
+    def recover(self):
+        from apps.documentos.formularios_credihoy import continuar_formalizacion_autentic
+        client=self.provider_client()
+        try:
+            with patch('requests.sessions.Session.request',side_effect=AssertionError('NO_PROVIDER')):
+                return continuar_formalizacion_autentic(self.case.pk,actor=self.actor,envio_id=self.key,
+                    cliente=client,referencia_autorizacion='SYNTHETIC_ONLY')
+        finally:client.close()
+
+    def test_indeterminate_delivery_is_persisted_once_without_get_or_resend(self):
+        self.entry.update(estado='INDETERMINADA',reciboCifrado=None)
+        self.contract()
+        first=self.recover();second=self.recover()
+        self.assertEqual(first,second)
+        self.assertEqual(first['estado'],'PENDIENTE_CONCILIACION_PROVEEDOR')
+        self.assertFalse(first['firmaAcreditada'])
+        self.assertEqual(AuditLog.objects.filter(event='CREDIHOY_FORMALIZACION_PENDIENTE').count(),1)
+        self.assertFalse(ConsentimientoConsumo.objects.get(solicitud=self.case).firmado)
+
+    def test_unsigned_download_is_recoverable_pending_not_contractual_success(self):
+        self.contract()
+        result=self.recover()
+        self.assertEqual(result['estado'],'PENDIENTE_VERIFICACION')
+        self.assertFalse(result['firmaAcreditada'])
+        self.assertEqual(result['START'],0)
+
+    def test_existing_contract_delivery_replays_without_requoting_after_its_original_window(self):
+        import sqlite3
+        from apps.documentos import formularios_credihoy as forms
+        from ..contratos import preparar_firma
+        from ..operaciones import RegistroFirmas
+        metadata={'names':'SYNTHETIC','lastNames':'ONLY','docId':'SYNTHETIC-ID','secureKey':'SYNTHETIC_ONLY'}
+        request=preparar_firma(metadata,{'COLO-FO.001.pdf':self.pdf})
+        self.entry['vinculo'].update(codigo='COLO-FO.001',fingerprint=request.fingerprint,
+            referenciaAutorizacion='SYNTHETIC_ONLY')
+        self.detail.orchestration_data['credihoy_autentic_envios_v1'][self.key]=self.entry
+        self.detail.save(update_fields=['orchestration_data'])
+        client=self.provider_client()
+        document={**self.entry['vinculo'],'identidadDocumentalReferencia':sha256(b'SYNTHETIC-ID').hexdigest()}
+        journal=sqlite3.connect(':memory:')
+        try:
+            with patch.object(forms,'recuperar_formato',return_value=(self.pdf,document)),\
+                    patch.object(forms,'_exigir_condiciones_definitivas',side_effect=AssertionError('NO_NEW_QUOTE')),\
+                    patch.object(client,'firmar',side_effect=AssertionError('NO_NEW_SIGNATURE')):
+                result=forms.enviar_formato_custodiado(self.case.pk,actor=self.actor,
+                    operacion_id=self.context['documentoOperacionId'],metadata=metadata,clave_idempotencia=self.key,
+                    cliente=client,registro=RegistroFirmas(journal),referencia_autorizacion='SYNTHETIC_ONLY')
+            self.assertEqual(result['estado'],'FIRMA_REPORTADA_NO_VERIFICADA')
+            self.assertFalse(result['reenvioPermitido'])
+        finally:journal.close();client.close()
+
+    def signed_contract(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from .test_verificacion_documental import CryptographyTests
+        CryptographyTests.setUpClass();fixture=CryptographyTests()
+        original=fixture.original;signed=fixture.timestamped();now=datetime.now(timezone.utc)
+        ctx=context(original,signed,now)
+        for value in (ctx,ctx['vinculo'],ctx['descarga']):value['solicitudId']=str(self.case.pk)
+        doc=ctx['documentoOperacionId'];self.key=ctx['envioId']
+        meta={'codigo':'COLO-FO.001','solicitudId':str(self.case.pk),'pdfSha256':sha256(original).hexdigest(),
+            'identidadDocumentalReferencia':sha256(b'SYNTHETIC-ID').hexdigest()}
+        envelope={'solicitudId':str(self.case.pk),'operacionId':doc,'metadata':meta,
+            'pdfBase64':base64.b64encode(original).decode()}
+        self.entry={'vinculo':ctx['vinculo'],'estado':ctx['estado'],'preparadoEn':ctx['preparadoEn'],
+            'reciboCifrado':encrypt_text(json.dumps(ctx['recibo'])),
+            'descargaCifrada':encrypt_text(json.dumps({**ctx['descarga'],'pdfBase64':base64.b64encode(signed).decode()}))}
+        self.detail.orchestration_data={'credihoy_pdf_oficiales_v1':{doc:{'metadata':meta,
+            'contenidoCifrado':encrypt_text(json.dumps(envelope))}},'credihoy_autentic_envios_v1':{}}
+        self.contract()
+        temp=TemporaryDirectory();self.addCleanup(temp.cleanup)
+        root=Path(temp.name)
+        paths=[]
+        for name,raw in [('root.der',fixture.roots[0]),('revocation.crl',fixture.crls[0])]:
+            path=root/name;path.write_bytes(raw);paths.append({'ruta':str(path),'sha256':sha256(raw).hexdigest()})
+        opts=override_settings(CREDIHOY_AUTENTIC_PDF_TRUST_ROOTS=[paths[0]],CREDIHOY_AUTENTIC_PDF_CRLS=[paths[1]],
+            CREDIHOY_AUTENTIC_PDF_POLITICAS_TITULAR=[{'raizSha256':paths[0]['sha256'],
+                'politicaOid':'1.3.6.1.4.1.55555.9','referencia':'SYNTHETIC_CPS_NOT_INSTITUTIONAL'}])
+        opts.enable();self.addCleanup(opts.disable)
+        return signed
+
+    def test_signed_document_is_cryptographically_verified_custodied_and_recovered_after_restart(self):
+        self.signed_contract()
+        first=self.recover();second=self.recover()
+        self.assertEqual(first,second)
+        self.assertTrue(first['firmaAcreditada'],first)
+        self.assertEqual(first['estado'],'FIRMA_CONTRACTUAL_VERIFICADA')
+        self.assertEqual(AuditLog.objects.filter(event='CREDIHOY_FORMALIZACION_FIRMA_VERIFICADA').count(),1)
+        from apps.documentos.formularios_credihoy import presentar_formalizacion_autentic
+        public=presentar_formalizacion_autentic(self.case)
+        self.assertEqual(public['estado'],'DOCUMENTO_VERIFICADO')
+        self.assertTrue(public['continuacionInstitucionalPendiente'])
+        self.assertNotIn('urlDocuments',json.dumps(public))
+        self.assertFalse(ConsentimientoConsumo.objects.get(solicitud=self.case).firmado)
+        self.assertEqual(EvaluacionConsumo.objects.count(),0)
+
+    def test_supervised_technical_recovery_is_scoped_and_cannot_be_reused_as_document_access(self):
+        from django.db import connection
+        from django.contrib.auth.models import Permission
+        from apps.documentos.formularios_credihoy import recuperar_firmas_contractuales,recuperar_formato
+        if connection.vendor!='postgresql':self.skipTest('PostgreSQL required for JSONB and durable recovery')
+        self.signed_contract()
+        operator=get_user_model().objects.create(username='synthetic-autentic-recovery',is_staff=True)
+        operator.set_unusable_password();operator.save()
+        operator.user_permissions.add(*Permission.objects.filter(codename__in=[
+            'view_solicitud','add_eventodocumental','view_versiondocumental']))
+        client=self.provider_client()
+        try:
+            with override_settings(CREDIHOY_AUTENTIC_RECUPERACION_ENABLED=True,
+                    CREDIHOY_AUTENTIC_OPERADOR=operator.username,CREDIHOY_AUTENTIC_AMBIENTE='STAGING',
+                    CREDIHOY_AUTENTIC_CONFIG_FILE='SYNTHETIC_SECRET_REFERENCES_ONLY',
+                    CREDIHOY_AUTENTIC_HOSTS_DESCARGA=('synthetic.example.invalid',),
+                    CREDIHOY_AUTENTIC_REFERENCIA='SYNTHETIC_ONLY'),\
+                    patch('requests.sessions.Session.request',side_effect=AssertionError('NO_PROVIDER')),\
+                    patch('apps.integraciones.autentic.cliente.cargar_cliente_recuperacion',return_value=client):
+                from apps.xcore_consumo.tasks import recuperar_firmas_contractuales as task
+                result=task.run();repeat=task.run()
+            self.assertEqual(result['estados'],['FIRMA_CONTRACTUAL_VERIFICADA'],result)
+            self.assertEqual(repeat['procesadas'],0)
+            with self.assertRaises(PermissionDenied):
+                recuperar_formato(self.case.pk,actor=operator,operacion_id=self.context['documentoOperacionId'])
+        finally:client.close()
+
+    def test_closed_task_neither_loads_credentials_nor_creates_a_delivery(self):
+        from apps.xcore_consumo.tasks import recuperar_firmas_contractuales as task
+        with override_settings(CREDIHOY_AUTENTIC_RECUPERACION_ENABLED=False),\
+                patch('apps.integraciones.autentic.cliente.cargar_cliente_recuperacion',
+                    side_effect=AssertionError('NO_CREDENTIAL_LOAD')):
+            self.assertEqual(task.run(),{'estado':'RECUPERACION_NO_HABILITADA','procesadas':0})
+        self.assertEqual(AuditLog.objects.count(),0)

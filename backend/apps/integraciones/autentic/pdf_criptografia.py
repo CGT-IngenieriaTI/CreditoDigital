@@ -6,7 +6,8 @@ from io import BytesIO
 import logging
 
 
-def verificar_pdf(original,firmado,documento_identidad,*,raices=(),crls=(),ocsps=(),momento=None):
+def verificar_pdf(original,firmado,documento_identidad,*,raices=(),crls=(),ocsps=(),momento=None,
+        politicas_titular=()):
     result={'correspondenciaOriginal':False,'firmaIntegra':False,'cadenaConfiable':False,
         'identidadCertificado':False,'fechaConfiable':False,'certificadosSha256':[],
         'rolCertificado':'NO_DETERMINADO','participacionElectronicaAcreditada':False,
@@ -74,6 +75,27 @@ def verificar_pdf(original,firmado,documento_identidad,*,raices=(),crls=(),ocsps
         result['fechaConfiable']=bool(statuses) and all(s.timestamp_validity is not None
             and s.timestamp_validity.intact and s.timestamp_validity.valid and s.timestamp_validity.trusted
             for s in statuses)
+        trusted_roots={sha256(der(v)).hexdigest() for v in raices}
+        authorized=[]
+        for item in politicas_titular:
+            if (type(item) is not dict or set(item)!={'raizSha256','politicaOid','referencia'}
+                    or item['raizSha256'] not in trusted_roots
+                    or type(item['referencia']) is not str or not item['referencia'].strip()):
+                raise ValueError('POLITICA_CERTIFICADO_PERSONAL_INVALIDA')
+            from asn1crypto.core import ObjectIdentifier
+            ObjectIdentifier(item['politicaOid']).dump()
+            authorized.append(item)
+        for status in identity_matches:
+            cert=status.signing_cert
+            usages=cert.key_usage_value.native if cert.key_usage_value is not None else set()
+            policies={v['policy_identifier'].dotted for v in cert.certificate_policies_value or ()}
+            chain={sha256(v.dump()).hexdigest() for v in status.validation_path or ()}
+            if (not cert.ca and {'digital_signature','non_repudiation'}<=usages
+                    and any(v['raizSha256'] in chain and v['politicaOid'] in policies for v in authorized)):
+                result['rolCertificado']='FIRMANTE_TITULAR'
+                result['participacionElectronicaAcreditada']=bool(status.trusted and status.intact and status.valid)
+        if result['fechaConfiable']:
+            result['firmadoEn']=max(s.timestamp_validity.timestamp for s in statuses).isoformat()
         result['codigo']='PDF_CRIPTOGRAFIA_ANALIZADA' if raices else 'RAICES_DE_CONFIANZA_NO_CONFIGURADAS'
     except Exception as error:
         result['codigo']='PDF_CRIPTOGRAFIA_NO_ACREDITADA'

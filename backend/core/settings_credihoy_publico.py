@@ -191,3 +191,29 @@ RISK_GATEWAY_ORCHESTRATION_ENABLED = RISK_GATEWAY_CONSUMO_ENABLED = False
 RISK_GATEWAY_ENABLED = 'N'
 XCORE_CONSUMO_ORACLE_ENABLED = CREDIT_PIPELINE_ASYNC = CREDIT_USE_MOCK_SERVICES = False
 EMAIL_BACKEND = 'django.core.mail.backends.dummy.EmailBackend'
+
+# Deployment metadata only. Credential contents are loaded by the existing task.
+_recuperacion = os.environ.get('CREDIHOY_AUTENTIC_RECUPERACION_ENABLED', '0')
+if _recuperacion not in ('0', '1'):
+    raise ImproperlyConfigured('Habilitacion de recuperacion Autentic invalida')
+CREDIHOY_AUTENTIC_RECUPERACION_ENABLED = _recuperacion == '1'
+if CREDIHOY_AUTENTIC_RECUPERACION_ENABLED:
+    try:
+        CREDIHOY_AUTENTIC_AMBIENTE = requerido('CREDIHOY_AUTENTIC_AMBIENTE')
+        CREDIHOY_AUTENTIC_CONFIG_FILE = requerido('CREDIHOY_AUTENTIC_CONFIG_FILE')
+        _hosts_recuperacion = json.loads(requerido('CREDIHOY_AUTENTIC_HOSTS_DESCARGA'))
+        if type(_hosts_recuperacion) is not list or any(type(host) is not str for host in _hosts_recuperacion):
+            raise ValueError
+        CREDIHOY_AUTENTIC_HOSTS_DESCARGA = tuple(_hosts_recuperacion)
+        CREDIHOY_AUTENTIC_OPERADOR = requerido('CREDIHOY_AUTENTIC_OPERADOR')
+        CREDIHOY_AUTENTIC_REFERENCIA = requerido('CREDIHOY_AUTENTIC_REFERENCIA')
+        CREDIHOY_AUTENTIC_RECUPERACION_LOTE = int(os.environ.get('CREDIHOY_AUTENTIC_RECUPERACION_LOTE', '10'))
+        CREDIHOY_AUTENTIC_RECUPERACION_INTERVALO = int(os.environ.get('CREDIHOY_AUTENTIC_RECUPERACION_INTERVALO', '60'))
+        if (CREDIHOY_AUTENTIC_AMBIENTE not in ('STAGING', 'PRODUCCION')
+                or not Path(CREDIHOY_AUTENTIC_CONFIG_FILE).is_absolute()
+                or not CREDIHOY_AUTENTIC_HOSTS_DESCARGA
+                or not 1 <= CREDIHOY_AUTENTIC_RECUPERACION_LOTE <= 20
+                or not 30 <= CREDIHOY_AUTENTIC_RECUPERACION_INTERVALO <= 3600):
+            raise ValueError
+    except (ValueError, TypeError):
+        raise ImproperlyConfigured('Metadatos de recuperacion Autentic invalidos') from None

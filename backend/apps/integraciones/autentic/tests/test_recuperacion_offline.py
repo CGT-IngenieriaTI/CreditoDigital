@@ -8,18 +8,24 @@ from io import BytesIO
 import json
 import os
 import sqlite3
+import sys
+from contextlib import closing, nullcontext
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 from zipfile import ZipFile
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.fernet import Fernet
 
 from ..cliente import AutenticDEVClient, ReciboFirma
 from ..contratos import AutenticError, ConfiguracionDEV, ConfiguracionProduccion
 from ..evidencia import EvidenciaPDF, custodiar_descarga, leer_descarga_custodiada
-from ..operaciones import RegistroFirmas
-from .test_cliente import Response, Session, pdf, solicitud
+from ..operaciones import RegistroFirmas, RegistroFirmasExpediente
+from .test_cliente import Response, Session, pdf, recibo, solicitud, token
 
 
 class RecuperacionTests(unittest.TestCase):
@@ -207,3 +213,162 @@ class CustodiaTests(unittest.TestCase):
         for args in (('b'*64, self.body), (self.evidence.sha256, self.body, True)):
             with self.assertRaises(AutenticError):EvidenciaPDF(*args)
         self.assertNotIn('%PDF', repr(self.evidence))
+
+
+class JournalRecibosTests(unittest.TestCase):
+    """Real local cipher/SQLite; PostgreSQL adapter mocked, never a real dossier."""
+
+    def setUp(self):
+        network = patch('requests.sessions.Session.request', side_effect=AssertionError('RED_PROHIBIDA'))
+        network.start(); self.addCleanup(network.stop)
+        self.cipher = Fernet(Fernet.generate_key())
+        self.encrypt = lambda text:self.cipher.encrypt(text.encode()).decode()
+        self.decrypt = lambda text:self.cipher.decrypt(text.encode()).decode()
+        self.body = {**recibo(), 'operationMsg':'DOCS_SIGNED', 'type':'reply_signature'}
+        self.request = solicitud()
+
+    def client(self, *responses):
+        session = Session(*responses)
+        client = AutenticDEVClient(ConfiguracionDEV('SYNTHETIC-CLIENT','SYNTHETIC-SECRET', permitir_documentos=True), session=session)
+        self.addCleanup(client.close)
+        return client, session
+
+    def sign(self, client, journal, key='original'):
+        return client.firmar(self.request, clave=key, registro=journal, referencia_autorizacion='SYNTHETIC-MOCK-ONLY')
+
+    def test_sqlite_receipt_reopens_without_token_post_or_new_key_and_is_encrypted_on_disk(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder)/'journal.sqlite'
+            with closing(sqlite3.connect(path)) as db:
+                journal = RegistroFirmas(db, cifrar=self.encrypt, descifrar=self.decrypt)
+                client, session = self.client(Response(token()), Response(self.body, 200))
+                original = self.sign(client, journal)
+                self.assertEqual(len(session.calls), 2)
+                encrypted = db.execute('SELECT cifrado FROM autentic_recibos').fetchone()[0]
+                self.assertNotIn(self.body['urlDocuments'], encrypted)
+                self.assertNotIn('DOCS_SIGNED', encrypted)
+            self.assertNotIn(self.body['urlDocuments'].encode(), path.read_bytes())
+            self.assertNotIn(b'SYNTHETIC-SECRET', path.read_bytes())
+            self.assertNotIn(b'TOKEN-SINTETICO', path.read_bytes())
+            with closing(sqlite3.connect(path)) as db:
+                journal = RegistroFirmas(db, cifrar=self.encrypt, descifrar=self.decrypt)
+                replay_client, replay_session = self.client()
+                replay = self.sign(replay_client, journal)
+                self.assertEqual(replay, original)
+                self.assertIsInstance(replay, ReciboFirma)
+                self.assertEqual(replay_session.calls, [])
+                with self.assertRaisesRegex(AutenticError, 'ENVIO_DUPLICADO_OTRA_CLAVE'):
+                    self.sign(replay_client, journal, 'different')
+
+    def test_corrupt_cipher_or_binding_cannot_trigger_replay_or_recovery(self):
+        for alteration in ('cipher', 'fingerprint', 'transaction'):
+            with self.subTest(alteration=alteration), closing(sqlite3.connect(':memory:')) as db:
+                journal = RegistroFirmas(db, cifrar=self.encrypt, descifrar=self.decrypt)
+                client, _ = self.client(Response(token()), Response(self.body, 200))
+                self.sign(client, journal)
+                if alteration == 'cipher':db.execute("UPDATE autentic_recibos SET cifrado='CORRUPT'")
+                if alteration == 'fingerprint':db.execute('UPDATE autentic_operaciones SET fingerprint=?', ('b'*64,))
+                if alteration == 'transaction':db.execute("UPDATE autentic_operaciones SET transaccion='FOREIGN'")
+                db.commit()
+                with self.assertRaisesRegex(AutenticError, 'RECIBO_JOURNAL_NO_INTEGRO'):
+                    journal.recuperar_recibo('original')
+                replay, session = self.client()
+                with self.assertRaises(AutenticError):self.sign(replay, journal)
+                self.assertEqual(session.calls, [])
+
+    def test_failed_cipher_preserves_known_transaction_and_never_reopens_signature(self):
+        with closing(sqlite3.connect(':memory:')) as db:
+            journal = RegistroFirmas(db, cifrar=lambda text:(_ for _ in ()).throw(ValueError('PRIVATE_FAILURE')),
+                                     descifrar=self.decrypt)
+            client, session = self.client(Response(token()), Response(self.body, 200))
+            with self.assertRaisesRegex(AutenticError, '^ENVIO_INDETERMINADO_NO_REPETIR$'):
+                self.sign(client, journal)
+            row = db.execute('SELECT estado, transaccion FROM autentic_operaciones').fetchone()
+            self.assertEqual(row, ('INDETERMINADA', self.body['transactionId']))
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM autentic_recibos').fetchone()[0], 0)
+            for key in ('original', 'different'):
+                with self.assertRaises(AutenticError):self.sign(client, journal, key)
+            self.assertEqual(len(session.calls), 2)
+            self.assertNotIn('PRIVATE_FAILURE', json.dumps(client.auditoria_firma))
+
+    def test_legacy_terminal_receipt_is_not_fabricated_or_reposted(self):
+        with closing(sqlite3.connect(':memory:')) as db:
+            old = RegistroFirmas(db)
+            old.preparar('original', self.request.fingerprint); old.iniciar('original')
+            old.terminar('original', 'FIRMA_REPORTADA_NO_VERIFICADA', 'LEGACY-TX')
+            journal = RegistroFirmas(db, cifrar=self.encrypt, descifrar=self.decrypt)
+            client, session = self.client()
+            result = self.sign(client, journal)
+            self.assertEqual(result.transaccion, 'LEGACY-TX')
+            self.assertNotIsInstance(result, ReciboFirma)
+            self.assertIsNone(journal.recuperar_recibo('original'))
+            self.assertEqual(session.calls, [])
+
+    def postgres_mock(self):
+        case, send = str(uuid4()), str(uuid4())
+        detail = SimpleNamespace(orchestration_data={'credihoy_autentic_envios_v1':{
+            send:{'vinculo':{'solicitudId':case}}}}, save=Mock())
+        model = Mock()
+        model.objects.using.return_value.select_for_update.return_value.get.return_value = detail
+        models = SimpleNamespace(SolicitudConsumo=model)
+        self.enterContext(patch.dict(sys.modules, {'apps.xcore_consumo.models':models}))
+        connections = self.enterContext(patch('django.db.connections', {'default':SimpleNamespace(
+            in_atomic_block=False, vendor='postgresql')}))
+        atomic = self.enterContext(patch('django.db.transaction.atomic', side_effect=lambda **kw:nullcontext()))
+        registry = RegistroFirmasExpediente(case, send, cifrar=self.encrypt, descifrar=self.decrypt)
+        return registry, detail, send, connections, atomic
+
+    def test_postgresql_adapter_custodies_receipt_atomically_and_replays_across_instances(self):
+        registry, detail, send, _, atomic = self.postgres_mock()
+        client, _ = self.client(Response(token()), Response(self.body, 200))
+        original = self.sign(client, registry, send)
+        row = detail.orchestration_data['credihoy_autentic_envios_v1'][send]['journalFirma']
+        self.assertEqual(row['estado'], 'FIRMA_REPORTADA_NO_VERIFICADA')
+        self.assertEqual(row['transaccion'], self.body['transactionId'])
+        self.assertNotIn(self.body['urlDocuments'], json.dumps(detail.orchestration_data))
+        self.assertNotIn('SYNTHETIC-SECRET', json.dumps(detail.orchestration_data))
+        self.assertNotIn('TOKEN-SINTETICO', json.dumps(detail.orchestration_data))
+        writes = detail.save.call_count
+        reopened = RegistroFirmasExpediente(registry.solicitud_id, send, cifrar=self.encrypt, descifrar=self.decrypt)
+        replay, session = self.client()
+        self.assertEqual(self.sign(replay, reopened, send), original)
+        self.assertEqual(detail.save.call_count, writes)
+        self.assertEqual(session.calls, [])
+        self.assertTrue(all(call.kwargs == {'using':'default','durable':True} for call in atomic.call_args_list))
+
+    def test_postgresql_failed_custody_preserves_indeterminate_transaction_without_post_replay(self):
+        registry, detail, send, _, _ = self.postgres_mock()
+        registry._cifrar = lambda text:text
+        client, session = self.client(Response(token()), Response(self.body, 200))
+        with self.assertRaisesRegex(AutenticError, 'ENVIO_INDETERMINADO_NO_REPETIR'):
+            self.sign(client, registry, send)
+        row = detail.orchestration_data['credihoy_autentic_envios_v1'][send]['journalFirma']
+        self.assertEqual(row['estado'], 'INDETERMINADA')
+        self.assertEqual(row['transaccion'], self.body['transactionId'])
+        self.assertNotIn('reciboCifrado', row)
+        for key in (send, 'different'):
+            with self.assertRaises(AutenticError):self.sign(client, registry, key)
+        self.assertEqual(len(session.calls), 2)
+
+    def test_postgresql_adapter_rejects_wrong_vendor_outer_transaction_and_foreign_custody(self):
+        registry, detail, send, connections, _ = self.postgres_mock()
+        connections['default'].vendor = 'sqlite'
+        with self.assertRaisesRegex(AutenticError, 'JOURNAL_POSTGRESQL_REQUERIDO'):
+            registry.preparar(send, self.request.fingerprint)
+        connections['default'].vendor = 'postgresql'; connections['default'].in_atomic_block = True
+        with self.assertRaisesRegex(AutenticError, 'JOURNAL_REQUIERE_COMMIT_DURABLE'):
+            registry.preparar(send, self.request.fingerprint)
+        connections['default'].in_atomic_block = False
+        client, _ = self.client(Response(token()), Response(self.body, 201))
+        self.sign(client, registry, send)
+        row = detail.orchestration_data['credihoy_autentic_envios_v1'][send]['journalFirma']
+        envelope = json.loads(self.decrypt(row['reciboCifrado']))
+        envelope['contexto']['solicitudId'] = str(uuid4())
+        row['reciboCifrado'] = self.encrypt(json.dumps(envelope))
+        with self.assertRaisesRegex(AutenticError, 'RECIBO_JOURNAL_NO_INTEGRO'):
+            registry.recuperar_recibo(send)
+
+    def test_journal_never_accepts_partial_cipher_configuration(self):
+        with closing(sqlite3.connect(':memory:')) as db:
+            with self.assertRaisesRegex(AutenticError, 'CIFRADOR_JOURNAL_REQUERIDO'):
+                RegistroFirmas(db, cifrar=self.encrypt)

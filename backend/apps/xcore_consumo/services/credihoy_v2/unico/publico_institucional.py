@@ -9,6 +9,8 @@
 
 
 
+
+
 import hashlib
 import hmac
 import json
@@ -377,98 +379,70 @@ def project_draft(row):
 
 def project_row(row):
     from datetime import datetime
-    titles = {'Actualiza tus datos','Tu solicitud esta en revision','Estamos verificando tu solicitud'}
-    pending = {'Debes actualizar tus datos para continuar con tu solicitud.',
-        'Necesitamos completar algunas validaciones antes de tomar una decision.',
-        'Hay requisitos pendientes que requieren revision con Congente.',
-        'Comunicate con Congente para revisar el estado.'}
+    titles = {'Actualiza tus datos', 'Tu solicitud esta en revision', 'Estamos verificando tu solicitud'}
+    pending = {'Debes actualizar tus datos para continuar con tu solicitud.', 'Necesitamos completar algunas validaciones antes de tomar una decision.', 'Hay requisitos pendientes que requieren revision con Congente.', 'Comunicate con Congente para revisar el estado.'}
     try:
-        if (type(row) is not dict or str(UUID(row['referencia'])) != row['referencia']
-                or row['titulo'] not in titles or not re.fullmatch(r'[0-9]{1,10}(\.[0-9]{1,2})?',row['monto'])
-                or type(row['plazoMeses']) is not int or not 1 <= row['plazoMeses'] <= 48
-                or row['periodicidad'] != 'Mensual' or not datetime.fromisoformat(row['fechaCreacion']).tzinfo
-                or (row['requisitosCumplidos'] is not None and (type(row['requisitosCumplidos']) is not int
-                    or not 0 <= row['requisitosCumplidos'] <= 16))
-                or type(row['pendientes']) is not list or any(v not in pending for v in row['pendientes'])
-                or row['siguientePaso'] not in {'Actualiza tus datos con Congente.','Espera la revision de Congente.'}
-                or row['ofertaDisponible'] is not False or row['acciones'] != {'radicar':False,'firmar':False}):
+        if type(row) is not dict or str(UUID(row['referencia'])) != row['referencia'] or row['titulo'] not in titles or (not re.fullmatch('[0-9]{1,10}(\\.[0-9]{1,2})?', row['monto'])) or (type(row['plazoMeses']) is not int) or (not 1 <= row['plazoMeses'] <= 48) or (row['periodicidad'] != 'Mensual') or (not datetime.fromisoformat(row['fechaCreacion']).tzinfo) or (row['requisitosCumplidos'] is not None and (type(row['requisitosCumplidos']) is not int or not 0 <= row['requisitosCumplidos'] <= 16)) or (type(row['pendientes']) is not list) or any((v not in pending for v in row['pendientes'])) or (row['siguientePaso'] not in {'Actualiza tus datos con Congente.', 'Espera la revision de Congente.'}) or (row['ofertaDisponible'] is not False) or (row['acciones'] != {'radicar': False, 'firmar': False}):
             raise ValueError
-        clean = {k: row[k] for k in ('referencia','titulo','monto','plazoMeses','periodicidad','fechaCreacion',
-            'requisitosCumplidos','pendientes','siguientePaso')}
-        clean.update(ofertaDisponible=False, acciones={'radicar':False,'firmar':False}, simulacion=None,
-                     institucional=None)
-        if row.get('progreso') is not None:
-            from .progreso_estudio import project
-            if row.get('procedencia',{}).get('origen')!='FUENTE_OPERATIVA':raise ValueError
-            clean['progreso']=project(row['progreso'])
-        institution=row.get('institucional')
+        clean = {k: row[k] for k in ('referencia', 'titulo', 'monto', 'plazoMeses', 'periodicidad', 'fechaCreacion', 'requisitosCumplidos', 'pendientes', 'siguientePaso')}
+        clean.update(ofertaDisponible=False, acciones={'radicar': False, 'firmar': False}, simulacion=None, institucional=None)
+        institution = row.get('institucional')
         if institution is not None:
             from datetime import timezone
-            fields={'estado','fechaDecision','actualizadoAt','documentos','firma','incidencias'}
-            if type(institution) is not dict or set(institution)!=fields:
+            fields = {'estado', 'fechaDecision', 'actualizadoAt', 'documentos', 'firma', 'incidencias'}
+            if type(institution) is not dict or set(institution) != fields:
                 raise ValueError
-            decision=datetime.strptime(institution['fechaDecision'],'%Y-%m-%d').date()
-            observed=datetime.fromisoformat(institution['actualizadoAt'])
-            if (decision.isoformat()!=institution['fechaDecision'] or observed.utcoffset() is None
-                    or observed>datetime.now(timezone.utc) or decision>observed.date()
-                    or institution['estado']!='APROBADA_PENDIENTE_FIRMA'
-                    or institution['documentos']!='NO_ACREDITADOS' or institution['firma']!='PENDIENTE'
-                    or institution['incidencias'] not in {'NO_DISPONIBLE','EN_REVISION',
-                        'ANTECEDENTES_SIN_PENDIENTE_ACTIVO','SIN_INCIDENCIAS_REGISTRADAS'}):
+            decision = datetime.strptime(institution['fechaDecision'], '%Y-%m-%d').date()
+            observed = datetime.fromisoformat(institution['actualizadoAt'])
+            if decision.isoformat() != institution['fechaDecision'] or observed.utcoffset() is None or observed > datetime.now(timezone.utc) or (decision > observed.date()) or (institution['estado'] != 'APROBADA_PENDIENTE_FIRMA') or (institution['documentos'] != 'NO_ACREDITADOS') or (institution['firma'] != 'PENDIENTE') or (institution['incidencias'] not in {'NO_DISPONIBLE', 'EN_REVISION', 'ANTECEDENTES_SIN_PENDIENTE_ACTIVO', 'SIN_INCIDENCIAS_REGISTRADAS'}):
                 raise ValueError
-            clean['institucional']={k:institution[k] for k in fields}
+            clean['institucional'] = {k: institution[k] for k in fields}
         q = row.get('simulacion')
         if q is not None:
-            if (type(q) is not dict or not re.fullmatch(r'[0-9]{1,10}(\.[0-9]{1,7})?',q['cuota'])
-                    or float(q['cuota']) <= 0 or not re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,7})?',q['tasaNominalNamv'])
-                    or q['origen'] not in {'REFERENCIA_INSTITUCIONAL_REGISTRADA','CALCULO_INSTITUCIONAL'}
-                    or any(q[k] is not False for k in ('ofertaContractual','seguroDisponible','calendarioDisponible'))):
+            if type(q) is not dict or not re.fullmatch('[0-9]{1,10}(\\.[0-9]{1,7})?', q['cuota']) or float(q['cuota']) <= 0 or (not re.fullmatch('[0-9]{1,3}(\\.[0-9]{1,7})?', q['tasaNominalNamv'])) or (q['origen'] not in {'REFERENCIA_INSTITUCIONAL_REGISTRADA', 'CALCULO_INSTITUCIONAL'}) or any((q[k] is not False for k in ('ofertaContractual', 'seguroDisponible', 'calendarioDisponible'))):
                 raise ValueError
-            clean['simulacion'] = {k:q[k] for k in ('cuota','tasaNominalNamv','origen',
-                'ofertaContractual','seguroDisponible','calendarioDisponible')}
-        provenance=row.get('procedencia')
+            clean['simulacion'] = {k: q[k] for k in ('cuota', 'tasaNominalNamv', 'origen', 'ofertaContractual', 'seguroDisponible', 'calendarioDisponible')}
+        provenance = row.get('procedencia')
         if provenance is not None:
             from datetime import timezone
             from apps.solicitudes.models import EstadoSolicitud
-            if (type(provenance) is not dict or set(provenance)!=
-                    {'origen','estadoRegistrado','actualizadoAt','consultadoAt'}
-                    or provenance['origen'] not in {'HISTORICO_PILOTO','FUENTE_OPERATIVA'}
-                    or provenance['estadoRegistrado'] not in EstadoSolicitud.labels):raise ValueError
-            updated=datetime.fromisoformat(provenance['actualizadoAt'])
-            consulted=datetime.fromisoformat(provenance['consultadoAt'])
-            if (updated.utcoffset() is None or consulted.utcoffset() is None
-                    or not updated<=consulted<=datetime.now(timezone.utc)
-                    or (provenance['origen']=='HISTORICO_PILOTO' and
-                        (clean['institucional'] is not None or clean['simulacion'] is not None
-                         or clean['requisitosCumplidos'] is not None))):raise ValueError
-            clean['procedencia']=dict(provenance)
+            if type(provenance) is not dict or set(provenance) != {'origen', 'estadoRegistrado', 'actualizadoAt', 'consultadoAt'} or provenance['origen'] not in {'HISTORICO_PILOTO', 'FUENTE_OPERATIVA'} or (provenance['estadoRegistrado'] not in EstadoSolicitud.labels):
+                raise ValueError
+            updated = datetime.fromisoformat(provenance['actualizadoAt'])
+            consulted = datetime.fromisoformat(provenance['consultadoAt'])
+            if updated.utcoffset() is None or consulted.utcoffset() is None or (not updated <= consulted <= datetime.now(timezone.utc)) or (provenance['origen'] == 'HISTORICO_PILOTO' and (clean['institucional'] is not None or clean['simulacion'] is not None or clean['requisitosCumplidos'] is not None)):
+                raise ValueError
+            clean['procedencia'] = dict(provenance)
         if row.get('estudio') is not None:
-            if row.get('procedencia',{}).get('origen')!='FUENTE_OPERATIVA':raise ValueError
-            clean['estudio']=project_study(row['estudio'],row['referencia'])
-            if clean['requisitosCumplidos']!=sum(r['resultado']=='CUMPLE' for r in clean['estudio']['reglas']):raise ValueError
+            if row.get('procedencia', {}).get('origen') != 'FUENTE_OPERATIVA':
+                raise ValueError
+            clean['estudio'] = project_study(row['estudio'], row['referencia'])
+            if clean['requisitosCumplidos'] != sum((r['resultado'] == 'CUMPLE' for r in clean['estudio']['reglas'])):
+                raise ValueError
+        if row.get('formalizacionDocumental') is not None:
+            p = row['formalizacionDocumental']
+            if type(p) is not dict or set(p) != {'versionContrato', 'documento', 'estado', 'firmaAcreditada', 'actualizadoAt', 'continuacionInstitucionalPendiente'} or p['versionContrato'] != 'credihoy-formalizacion-publica-v1' or (p['documento'] != 'COLO-FO.001') or (type(p['firmaAcreditada']) is not bool) or (p['continuacionInstitucionalPendiente'] is not True) or (p['estado'] != ('DOCUMENTO_VERIFICADO' if p['firmaAcreditada'] else 'VALIDACION_PENDIENTE')) or (datetime.fromisoformat(p['actualizadoAt']).utcoffset() is None):
+                raise ValueError
+            clean['formalizacionDocumental'] = dict(p)
         if row.get('envio') is not None:
             from datetime import timezone
             from decimal import Decimal
-            submitted=row['envio']
-            if (type(submitted) is not dict or set(submitted)!={'operacionId','confirmadoEn','solicitud'}
-                    or str(UUID(submitted['operacionId']))!=submitted['operacionId']
-                    or row.get('procedencia',{}).get('origen')!='FUENTE_OPERATIVA'):raise ValueError
-            confirmed=datetime.fromisoformat(submitted['confirmadoEn'])
-            draft=project_draft(submitted['solicitud'])
-            if (confirmed.utcoffset() is None or confirmed>datetime.now(timezone.utc)
-                    or draft is None or draft['fase']!='ENVIADA' or draft['referencia']!=row['referencia']
-                    or Decimal(draft['datos']['monto'])!=Decimal(row['monto'])
-                    or draft['datos']['plazo']!=row['plazoMeses']):raise ValueError
-            clean['envio']={**submitted,'solicitud':draft}
+            submitted = row['envio']
+            if type(submitted) is not dict or set(submitted) != {'operacionId', 'confirmadoEn', 'solicitud'} or str(UUID(submitted['operacionId'])) != submitted['operacionId'] or (row.get('procedencia', {}).get('origen') != 'FUENTE_OPERATIVA'):
+                raise ValueError
+            confirmed = datetime.fromisoformat(submitted['confirmadoEn'])
+            draft = project_draft(submitted['solicitud'])
+            if confirmed.utcoffset() is None or confirmed > datetime.now(timezone.utc) or draft is None or (draft['fase'] != 'ENVIADA') or (draft['referencia'] != row['referencia']) or (Decimal(draft['datos']['monto']) != Decimal(row['monto'])) or (draft['datos']['plazo'] != row['plazoMeses']):
+                raise ValueError
+            clean['envio'] = {**submitted, 'solicitud': draft}
         if row.get('simulacionLocal') is not None:
             from decimal import Decimal
-            estimate=project_simulation(row['simulacionLocal'])
-            if (estimate.get('solicitudId')!=row['referencia'] or estimate['resultado'] is None
-                    or Decimal(estimate['resultado']['monto'])!=Decimal(row['monto'])
-                    or estimate['resultado']['plazoMeses']!=row['plazoMeses']):raise ValueError
-            clean['simulacionLocal']=estimate
+            estimate = project_simulation(row['simulacionLocal'])
+            if estimate.get('solicitudId') != row['referencia'] or estimate['resultado'] is None or Decimal(estimate['resultado']['monto']) != Decimal(row['monto']) or (estimate['resultado']['plazoMeses'] != row['plazoMeses']):
+                raise ValueError
+            clean['simulacionLocal'] = estimate
         return clean
-    except (TypeError,KeyError,ValueError,AttributeError):
+    except (TypeError, KeyError, ValueError, AttributeError):
         raise NoDisponible from None
 
 def project_study(value, solicitud_id):

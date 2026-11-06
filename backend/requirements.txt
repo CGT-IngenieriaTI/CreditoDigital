@@ -10,9 +10,10 @@ celery>=5.4,<5.5
 redis>=5.2,<5.3
 python-dotenv>=1.0,<1.1
 oracledb>=2.5,<2.6
-lxml>=5.3,<5.4
+lxml>=5.4,<7.0
 zeep>=4.3,<4.4
 numpy-financial>=1.0,<1.1
 scipy>=1.14,<1.15
 twilio>=9.0,<9.1
-cryptography>=42.0,<43.0
+cryptography>=48.0,<51.0
+pyHanko==0.38.0

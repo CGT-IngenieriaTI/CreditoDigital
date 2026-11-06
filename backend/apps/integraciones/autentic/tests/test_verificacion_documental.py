@@ -160,6 +160,8 @@ class CryptographyTests(unittest.TestCase):
                     data_encipherment=False,key_agreement=False,key_cert_sign=ca,crl_sign=ca,encipher_only=False,decipher_only=False),True)
                 .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()),False)
                 .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_key.public_key()),False)
+                .add_extension(x509.CertificatePolicies([x509.PolicyInformation(
+                    x509.ObjectIdentifier('1.3.6.1.4.1.55555.9'),None)]),False)
                 .sign(issuer_key,hashes.SHA256()))
         root=certificate(root_name,root_name,root_key,root_key,True)
         leaf=certificate(leaf_name,root_name,leaf_key,root_key,False)
@@ -180,6 +182,7 @@ class CryptographyTests(unittest.TestCase):
             signing_key=keys.PrivateKeyInfo.load(leaf_key.private_bytes(serialization.Encoding.DER,
                 serialization.PrivateFormat.PKCS8,serialization.NoEncryption())),cert_registry=store)
         cls.signer=signer
+        cls.root_key=root_key;cls.root_name=root_name
         cls.signed=signers.sign_pdf(IncrementalPdfFileWriter(BytesIO(cls.original)),
             signature_meta=signers.PdfSignatureMetadata(field_name='SyntheticSignature'),signer=signer).getvalue()
 
@@ -202,6 +205,54 @@ class CryptographyTests(unittest.TestCase):
         self.assertTrue(report['cadenaConfiable'],report)
         self.assertTrue(report['identidadCertificado'],report)
         self.assertFalse(report['fechaConfiable'])
+
+    def test_personal_certificate_requires_explicit_issuer_policy_not_a_matching_subject_alone(self):
+        policy={'raizSha256':sha256(self.roots[0]).hexdigest(),
+            'politicaOid':'1.3.6.1.4.1.55555.9','referencia':'SYNTHETIC_CPS_NOT_INSTITUTIONAL'}
+        report=self.verify(politicas_titular=[policy])
+        self.assertEqual(report['rolCertificado'],'FIRMANTE_TITULAR',report)
+        self.assertTrue(report['participacionElectronicaAcreditada'],report)
+        self.assertFalse(report['fechaConfiable'])
+        for change in ({'politicaOid':'1.3.6.1.4.1.55555.10'},{'raizSha256':'f'*64}):
+            self.assertFalse(self.verify(politicas_titular=[{**policy,**change}])['participacionElectronicaAcreditada'])
+
+    def timestamped(self):
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes,serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID,ExtendedKeyUsageOID
+        from asn1crypto import x509 as ax509,keys
+        from pyhanko.sign import signers,timestamps
+        from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
+        key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+        cert=(x509.CertificateBuilder().subject_name(x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME,'SYNTHETIC TSA ONLY')]))
+            .issuer_name(self.root_name).public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(self.now-timedelta(days=1)).not_valid_after(self.now+timedelta(days=1))
+            .add_extension(x509.BasicConstraints(ca=False,path_length=None),True)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.TIME_STAMPING]),True)
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(self.root_key.public_key()),False)
+            .sign(self.root_key,hashes.SHA256()))
+        tsa=timestamps.DummyTimeStamper(ax509.Certificate.load(cert.public_bytes(serialization.Encoding.DER)),
+            keys.PrivateKeyInfo.load(key.private_bytes(serialization.Encoding.DER,
+                serialization.PrivateFormat.PKCS8,serialization.NoEncryption())))
+        return signers.sign_pdf(IncrementalPdfFileWriter(BytesIO(self.original)),
+            signature_meta=signers.PdfSignatureMetadata(field_name='SyntheticSignature'),
+            signer=self.signer,timestamper=tsa).getvalue()
+
+    def test_contract_signature_verifies_full_synthetic_chain_timestamp_and_dossier_binding(self):
+        from ..evidencia import verificar_firma_contractual,FirmaContractualVerificada
+        signed=self.timestamped()
+        when=datetime.now(timezone.utc)+timedelta(seconds=2)
+        policy={'raizSha256':sha256(self.roots[0]).hexdigest(),'politicaOid':'1.3.6.1.4.1.55555.9',
+            'referencia':'SYNTHETIC_CPS_NOT_INSTITUTIONAL'}
+        ctx=context(self.original,signed,when)
+        proof=verificar_firma_contractual(original=self.original,firmado=signed,transaccion='SYNTHETIC-TX',
+            documento_identidad='SYNTHETIC-ID',contexto=ctx,raices=self.roots,crls=self.crls,
+            politicas_titular=[policy],momento=when)
+        self.assertIs(type(proof),FirmaContractualVerificada)
+        self.assertEqual(proof.solicitud_id,ctx['solicitudId'])
+        self.assertEqual(proof.firmado_sha256,sha256(signed).hexdigest())
 
     def test_embedded_certificate_does_not_become_trust_root(self):
         report=self.verify(raices=())

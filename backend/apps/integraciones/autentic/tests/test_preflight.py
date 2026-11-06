@@ -321,11 +321,13 @@ class PreflightTests(unittest.TestCase):
         with TemporaryDirectory() as d:
             p = Path(d)/'config.json'
             payload = {'audience': 'stag-api.autenticsign.com', 'grant_type': 'client_credentials',
-                       'client_id': ' CLIENTE-FICTICIO ', 'client_secret': 'SINTETICO+/%='}
+                       'client_id_file': 'client.txt', 'client_secret_file': 'secret.txt'}
+            (Path(d)/'client.txt').write_text(' CLIENTE-FICTICIO ', encoding='utf-8-sig')
+            (Path(d)/'secret.txt').write_text('SINTETICO+/%=', encoding='utf-8-sig')
             p.write_text(json.dumps(payload), encoding='utf-8-sig')
             config = ConfiguracionDEV.desde_archivo(p)
-            self.assertEqual(config.client_id, payload['client_id'])
-            self.assertEqual(config.client_secret, payload['client_secret'])
+            self.assertEqual(config.client_id, ' CLIENTE-FICTICIO ')
+            self.assertEqual(config.client_secret, 'SINTETICO+/%=')
             p.write_text('{"audience":"a","audience":"b"}', encoding='utf-8')
             with self.assertRaisesRegex(AutenticError, 'CONFIGURACION_DEV_INVALIDA'):
                 ConfiguracionDEV.desde_archivo(p)

@@ -15,15 +15,6 @@ type Vista='estado'|'simulador'|'solicitud'|'autorizaciones'|'evaluacion'|'firma
 const ESTADOS_ESTUDIO={CUMPLE:'Cumple',NO_CUMPLE:'No cumple',NO_EVALUABLE:'Datos pendientes',
   NO_APLICA:'No aplica',PENDIENTE_POLITICA:'Politica pendiente'};
 const MOTIVOS_ESTUDIO:Record<string,string>={
-  'Debes actualizar tus datos para continuar con tu solicitud.':'Debes actualizar tus datos con Congente para continuar. Tu autorizacion esta conservada.',
-  HECHO_NO_CERTIFICADO:'La fuente disponible no acredita este dato. Congente debe comprobarlo.',
-  COMPARACION_DOCUMENTADA:'La informacion fue comparada con la condicion indicada en este resultado.',
-  REGLA_INACTIVA_NO_APLICADA:'Esta validacion no se aplica a tu solicitud.',
-  SOLO_RENOVACION_GER_PO_068_6_2_3_7:'Esta validacion corresponde a renovaciones, no a esta solicitud.',
-  AUSENCIA_CREDIHOY_111_CERTIFICADA_SIN_RECOGIDA:'No se identifico otro CrediHoy que debas recoger en esta solicitud.',
-  cuentas_embargadas:'confirmacion sobre cuentas embargadas',edad_anios:'edad con evidencia',
-  saldo_aportes_utilizable:'saldo de aportes utilizable',capacidadDisponible:'capacidad con todas las obligaciones conciliadas',
-  cuotaNuevaEstimada:'cuota estimada de la nueva solicitud',
   CAPACIDAD_PRELIMINAR_NO_DECISORIA_DEUDA_INCOMPLETA:'Falta conciliar el endeudamiento completo. La capacidad preliminar no permite decidir.',
   ACTUALIZACION_DATOS_FUERA_VIGENCIA:'Debes actualizar tus datos institucionales con Congente.',
   CAPACIDAD_PAGO_NO_DISPONIBLE:'La capacidad definitiva requiere informacion adicional.'};
@@ -115,7 +106,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
   const inicioPersonal=useRef(false);
   const heading=useRef<HTMLHeadingElement>(null),navigation=useRef<HTMLElement>(null);
   const s=solicitudes?.find(v=>v.referencia===seleccion)??solicitudes?.[0];
-const refreshStudy=useRef(actualizar),readingStudy=useRef(busy);
+  const refreshStudy=useRef(actualizar),readingStudy=useRef(busy);
   refreshStudy.current=actualizar;readingStudy.current=busy;
   const reviewReads=useRef({sid:'',count:0,last:0});
   const esperaRevision=Boolean(s?.estudio&&(s.estudio.decision==='REQUIERE_SUBSANACION'
@@ -132,7 +123,6 @@ const refreshStudy=useRef(actualizar),readingStudy=useRef(busy);
     document.addEventListener('visibilitychange',read);window.addEventListener('focus',read);
     return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',read);window.removeEventListener('focus',read);};
   },[s?.referencia,esperaRevision,seguimientoHabilitado,vista]);
-  
   const [acto,setActo]=useState<{sid:string;data:AutorizacionTitular|null}|null>(null);
   const [consultandoActo,setConsultandoActo]=useState(false);
   const leerActo=useRef(autorizar);leerActo.current=autorizar;
@@ -141,7 +131,7 @@ const refreshStudy=useRef(actualizar),readingStudy=useRef(busy);
     let vigente=true;
     setActo(null);
     const consultar=leerActo.current;
-    if(!s||s.estudio||s.institucional||s.progreso||!consultar||!puedeLeerActo){setConsultandoActo(false);return;}
+    if(!s||s.estudio||s.institucional||!consultar||!puedeLeerActo){setConsultandoActo(false);return;}
     setConsultandoActo(true);
     void consultar({operacion:'autorizacion',accion:'consultar',solicitudId:s.referencia}).then(async data=>{
       if(!vigente)return;
@@ -152,21 +142,9 @@ const refreshStudy=useRef(actualizar),readingStudy=useRef(busy);
     }).catch(()=>{if(vigente)setActo({sid:s.referencia,data:null});})
       .finally(()=>{if(vigente)setConsultandoActo(false);});
     return()=>{vigente=false;};
-  },[s?.referencia,s?.estudio?.referenciaVersion,s?.progreso?.estado,puedeLeerActo,centralesHabilitadas]);
+  },[s?.referencia,s?.estudio?.referenciaVersion,puedeLeerActo,centralesHabilitadas]);
   const siguiente=s?resolverSiguienteAccion(s,acto?.sid===s.referencia?acto.data:null,consultandoActo):null;
   const quote=s?.simulacion,institucion=s?.institucional;
-  const refreshProgress=useRef(actualizar);refreshProgress.current=actualizar;
-  const [esperaEstudioAgotada,setEsperaEstudioAgotada]=useState(false);
-  useEffect(()=>{
-    setEsperaEstudioAgotada(false);
-    if(s?.progreso?.estado!=='AUTORIZACION_CONFIRMADA')return;
-    let reads=0;
-    const timer=setInterval(()=>{
-      if(++reads>12){clearInterval(timer);setEsperaEstudioAgotada(true);return;}
-      if(document.visibilityState==='visible')refreshProgress.current();
-    },5000);
-    return()=>clearInterval(timer);
-  },[s?.referencia,s?.progreso?.estado]);
   const editando=edicionBorrador&&!s?.envio;
   useEffect(()=>{if(s?.envio)setEdicionBorrador(false);},[s?.envio]);
   useEffect(()=>{
@@ -226,23 +204,7 @@ const refreshStudy=useRef(actualizar),readingStudy=useRef(busy);
           No pudimos confirmar tu informacion. Tus datos guardados no han cambiado.</EstadoVacio>}
         {solicitudes?.length===0&&vista!=='solicitud'&&<EstadoVacio titulo="Inicia tu solicitud CrediHoy" icono={Files}>
           {formularioBorrador?'Selecciona Solicitar mi CrediHoy para completar y guardar tu solicitud.':'Tu identidad esta verificada, pero el inicio de solicitudes no esta disponible en esta sesion. Actualiza el estado o contacta a Congente.'}</EstadoVacio>}
-        {s&&vista==='estado'&&s.progreso&&<section aria-label="Progreso de tu estudio" aria-live="polite">
-          <h3>{s.estudio?'Tu estudio esta disponible.':'Estamos estudiando tu CrediHoy.'}</h3>
-          <ol className="ca-study-progress">
-            <li className="ca-study-progress--done"><CheckCircle2 size={22} aria-hidden="true"/><div><strong>Solicitud registrada</strong><span>Completada</span></div></li>
-            <li className="ca-study-progress--done"><CheckCircle2 size={22} aria-hidden="true"/><div><strong>Autorizacion confirmada</strong><span>Completada</span></div></li>
-            {(['Preparacion del estudio','Consulta crediticia','Evaluacion','Resultado del estudio'] as const).map(label=><li key={label} className={s.estudio?'ca-study-progress--done':undefined}>
-              {s.estudio?<CheckCircle2 size={22} aria-hidden="true"/>:<Clock3 size={22} aria-hidden="true"/>}
-              <div><strong>{label}</strong><span>{s.estudio?(label==='Resultado del estudio'?'Disponible':'Completada'):
-                label==='Preparacion del estudio'&&s.progreso?.estado==='VALIDACION_ADICIONAL'?'Validacion pendiente':'Pendiente'}</span></div></li>)}
-            <li><Clock3 size={22} aria-hidden="true"/><div><strong>Decision institucional</strong><span>{institucion?'Registrada':'Pendiente'}</span></div></li>
-          </ol>
-          {s.progreso.estado==='VALIDACION_ADICIONAL'?<Aviso tono="warning">Tu estudio necesita una validacion adicional. Congente debe revisar las condiciones pendientes para continuar. Tu autorizacion esta conservada; no solicites otro codigo ni envies otra solicitud.</Aviso>:
-            s.progreso.estado==='RESULTADO_DISPONIBLE'?<Aviso tono="success">El resultado de tu estudio esta disponible en Resultado. No sustituye una decision institucional de credito.</Aviso>:
-              <Aviso>{esperaEstudioAgotada?'La preparacion requiere seguimiento de Congente. Tu autorizacion esta conservada.':'Tu autorizacion esta confirmada. La preparacion del estudio sigue pendiente.'}</Aviso>}
-          {s.estudio&&<button type="button" className="btn btn-primary" onClick={()=>setVista('evaluacion')}><BadgeCheck size={17} aria-hidden="true"/>Ver resultado de mi estudio</button>}
-        </section>}
-        {s&&vista==='estado'&&!s.progreso&&<div className="ca-dashboard">
+        {s&&vista==='estado'&&<div className="ca-dashboard">
           {s.envio&&<section className="ca-document-band" aria-label="Confirmacion de envio"><h3>Recibimos tu solicitud de CrediHoy.</h3>
             <p>Recibida el {fechaPublica(s.envio.confirmadoEn)}. Esta confirmacion no es una aprobacion de credito.</p>
             <p className="ca-muted">Referencia de seguimiento: <strong>{s.referencia.slice(-8).toUpperCase()}</strong></p>
@@ -325,7 +287,7 @@ const refreshStudy=useRef(actualizar),readingStudy=useRef(busy);
           {s.envio?.solicitud.datos.periodicidadPago&&typeof s.envio.solicitud.datos.recogerCredihoy==='boolean'&&<dl className="ca-authorizations">
             <div><dt>Condiciones enviadas</dt><dd>Pago mensual. {s.envio.solicitud.datos.recogerCredihoy?'Solicitaste pagar un credito vigente; su referencia debe verificarse.':'No solicitaste pagar otro credito con esta solicitud.'}</dd></div>
           </dl>}
-          {(!s.envio?.solicitud.datos.periodicidadPago||typeof s.envio.solicitud.datos.recogerCredihoy!=='boolean')&&!centralesHabilitadas&&s?.procedencia?.origen==='FUENTE_OPERATIVA'&&autorizacionHabilitada&&autorizar&&
+          {!s.envio?.solicitud.datos.periodicidadPago&&s?.procedencia?.origen==='FUENTE_OPERATIVA'&&autorizacionHabilitada&&autorizar&&
             <ComplementoPersonal key={s.referencia} sid={s.referencia} operar={autorizar}/>}
         </>}
         {(vista==='autorizaciones'||autorizacionesVisitadas)&&<div hidden={vista!=='autorizaciones'}>
@@ -338,10 +300,15 @@ const refreshStudy=useRef(actualizar),readingStudy=useRef(busy);
           {s&&s.procedencia?.origen==='FUENTE_OPERATIVA'&&autorizacionHabilitada&&!centralesHabilitadas&&autorizar&&
             <AutorizacionPersonal key={s.referencia} sid={s.referencia} operar={autorizar} centralesHabilitadas={centralesHabilitadas}/>}
           {s&&s.procedencia?.origen==='FUENTE_OPERATIVA'&&autorizacionHabilitada&&centralesHabilitadas&&autorizar&&
-            <AutorizacionesPersonales key={'centrales:'+s.referencia} sid={s.referencia} operar={autorizar} horaServidor={horaServidor} onConfirmada={()=>{setVista('estado');actualizar();}}
-              requiereElecciones={!s.envio?.solicitud.datos.periodicidadPago||typeof s.envio.solicitud.datos.recogerCredihoy!=='boolean'}/>}
+            <AutorizacionesPersonales key={'centrales:'+s.referencia} sid={s.referencia} operar={autorizar} horaServidor={horaServidor} onConfirmada={actualizar}/>}
         </div>}
         {s&&vista==='evaluacion'&&<>
+          {s.formalizacionDocumental&&<Aviso tono={s.formalizacionDocumental.firmaAcreditada?'success':'warning'}
+            titulo={s.formalizacionDocumental.firmaAcreditada?'Documento contractual verificado':'Validacion documental pendiente'}>
+            <p>{s.formalizacionDocumental.firmaAcreditada?
+              'Tu documento firmado esta conservado. La continuacion institucional sigue pendiente.':
+              'Congente esta conciliando la evidencia documental. No necesitas repetir la firma.'}</p>
+          </Aviso>}
           <div className={'ca-result'+(institucion?' ca-result--approved':'')}>
             <span className="ca-icon-tile">{institucion?<BadgeCheck size={27} aria-hidden="true"/>:<Clock3 size={27} aria-hidden="true"/>}</span>
             <h3>{institucion?'Aprobacion institucional registrada':'Resultado institucional por confirmar'}</h3>
@@ -375,7 +342,7 @@ const refreshStudy=useRef(actualizar),readingStudy=useRef(busy);
                 {s.estudio.capacidad.capacidadResidualPostCuota==null?'Por determinar':moneda(s.estudio.capacidad.capacidadResidualPostCuota)}</dd></div>
             </dl>:<dl className="ca-metrics"><div><dt>{s.estudio.version===7?'Residual del estudio':'Capacidad del estudio'}</dt><dd className="ca-metric-text">
               {s.estudio.capacidad.estado==='EVALUABLE'?moneda(s.estudio.capacidad.valor):'Por determinar'}</dd></div>
-              <div><dt>{s.estudio.version===1?'Capacidad disponible preliminar':s.estudio.version===7?'Residual preliminar, no decisorio':'Calculo preliminar, no decisorio'}</dt><dd>{s.estudio.capacidad.preliminarNoDecisoria===null?'No disponible':moneda(s.estudio.capacidad.preliminarNoDecisoria)}</dd></div></dl>}
+              <div><dt>{s.estudio.version===7?'Residual preliminar, no decisorio':'Calculo preliminar, no decisorio'}</dt><dd>{s.estudio.capacidad.preliminarNoDecisoria===null?'No disponible':moneda(s.estudio.capacidad.preliminarNoDecisoria)}</dd></div></dl>}
             <p className="ca-notice">La capacidad preliminar no acredita aprobacion ni una cuota contractual.</p>
             <ol className="ca-study-rules" aria-label="Las 16 reglas del estudio">
               {s.estudio.reglas.map(regla=><li key={regla.codigo}>
@@ -393,9 +360,7 @@ const refreshStudy=useRef(actualizar),readingStudy=useRef(busy);
               </li>)}
             </ol>
           </div>}
-          {!s.estudio&&<Pendientes items={s.pendientes}/>}<Aviso titulo="Para continuar">{
-            s.estudio?.reglas.some(r=>r.codigo==='UNICO_FILA_9'&&r.estadoEvaluacion==='NO_CUMPLE')?
-              'Actualiza tus datos con Congente. Tu solicitud y tu autorizacion estan conservadas; no envies otra solicitud ni solicites otro codigo.':s.siguientePaso}</Aviso>
+          <Pendientes items={s.pendientes}/><Aviso titulo="Para continuar">{s.siguientePaso}</Aviso>
           {s.estudio?.reglas.some(r=>r.codigo==='UNICO_FILA_9'&&r.estadoEvaluacion==='NO_CUMPLE')&&
             <div className="ca-bottom-actions"><a className="btn btn-outline-primary"
               href="https://consulta.congente.coop:8030/home/verificacion_view/."
@@ -424,7 +389,7 @@ const refreshStudy=useRef(actualizar),readingStudy=useRef(busy);
   </div>;
 }
 
-export function ComplementoPersonal({sid,operar,onConfirmada}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>;onConfirmada?:(confirmada:boolean)=>void}){
+export function ComplementoPersonal({sid,operar}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>}){
   const [data,setData]=useState<AutorizacionTitular['complemento']>(),[periodicidad,setPeriodicidad]=useState('');
   const [recoger,setRecoger]=useState(''),[obligacion,setObligacion]=useState(''),[confirma,setConfirma]=useState(false);
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[incierta,setIncierta]=useState(false);
@@ -434,7 +399,6 @@ export function ComplementoPersonal({sid,operar,onConfirmada}:{sid:string;operar
     if(!value.complemento)throw new Error('COMPLEMENTO_NO_DISPONIBLE');
     if(!alive.current)return;
     setData(value.complemento);setPeriodicidad('MENSUAL');
-    onConfirmada?.(value.complemento.version>0&&value.complemento.datos!==null);
     setRecoger(value.complemento.datos?(value.complemento.datos.recogerCredihoy?'SI':'NO'):'');setObligacion(value.complemento.datos?.obligacionRecoger??'');setConfirma(false);setIncierta(false);
   }
   async function consultar(){
@@ -470,11 +434,10 @@ export function ComplementoPersonal({sid,operar,onConfirmada}:{sid:string;operar
   </section>;
 }
 
-export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada,requiereElecciones=false}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>;horaServidor?:()=>number;onConfirmada?:()=>void;requiereElecciones?:boolean}){
+export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>;horaServidor?:()=>number;onConfirmada?:()=>void}){
   const [data,setData]=useState<AutorizacionTitular|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const [acepta,setAcepta]=useState(false),[visto,setVisto]=useState(false),[codigo,setCodigo]=useState('');
   const [incierta,setIncierta]=useState(false),[url,setUrl]=useState('');
-  const [eleccionesListas,setEleccionesListas]=useState(!requiereElecciones);
   const [now,setNow]=useState(horaServidor);
   const guard=useRef(false),alive=useRef(true),operation=useRef<string>(crypto.randomUUID());
   const pendiente=useRef<Extract<PeticionAutorizacion,{accion:'centrales_comprobar'}>|null>(null);
@@ -492,7 +455,7 @@ export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada
     return()=>clearInterval(timer);
   },[c?.estado]);
   useEffect(()=>{
-    if(!c?.presentacion||c.estado!=='PENDIENTE_OTP'||incierta)return;
+    if(!c?.presentacion||!['PENDIENTE_OTP','ENVIADO'].includes(c.estado)||incierta)return;
     let remaining=12;
     const timer=setInterval(()=>{
       if(--remaining<=0){clearInterval(timer);return;}
@@ -507,7 +470,6 @@ export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada
     return()=>URL.revokeObjectURL(next);
   },[data?.documento]);
   async function run(action:'consultar'|'presentar'|'enviar'|'comprobar'|'recuperar'|'secuencia'){
-    if(['secuencia','presentar','enviar'].includes(action)&&!eleccionesListas)return;
     if(guard.current||action!=='consultar'&&action!=='recuperar'&&(incierta||terminal))return;
     if(action==='recuperar'&&(!pendiente.current||!incierta||terminal))return;
     if(action==='enviar'&&(!acepta||!visto||!presentacionCentralesVigente(data,horaServidor())))return;
@@ -539,17 +501,16 @@ export function CentralesPersonal({sid,operar,horaServidor=Date.now,onConfirmada
         if(action==='presentar')setVisto(false);
       }
     }catch{if(alive.current){if(action!=='consultar')setIncierta(true);setError('No pudimos confirmar este paso. Consulta el estado antes de continuar; no solicitaremos otro codigo automaticamente.');}}
-    finally{guard.current=false;if(alive.current){setBusy(false);if(action==='comprobar'||action==='recuperar')setCodigo('');}}
+    finally{guard.current=false;if(alive.current){setBusy(false);setCodigo('');}}
   }
   return <section aria-label="Autorizacion especifica de consulta a centrales" aria-busy={busy}>
-    {requiereElecciones&&!eleccionesListas&&!terminal&&<ComplementoPersonal sid={sid} operar={operar} onConfirmada={setEleccionesListas}/>}
     <h3>Autorizar centrales</h3>
     {c?.estado==='OTP_CONFIRMADA'?<Aviso tono="success">Tu autorizacion de consulta quedo confirmada. El estado de tu solicitud se actualiza automaticamente. Esto no significa que tu credito este aprobado.</Aviso>:
       c?.estado==='RECHAZADA'?<Aviso tono="warning">La autorizacion no fue confirmada. No se habilito la consulta de centrales.</Aviso>:
       c?.estado==='INDETERMINADA'?<Aviso tono="warning">El resultado requiere conciliacion de Congente. No solicites otro codigo para esta autorizacion.</Aviso>:<>
         {(!data?.documento&&c?.estado==='SIN_ACEPTACION')&&<>
           <p>La aceptacion del documento quedo registrada. Confirma la autorizacion de consulta con un codigo personal, distinto del codigo de ingreso.</p>
-          <button className="btn btn-primary" type="button" disabled={busy||incierta||!eleccionesListas} onClick={()=>void run('secuencia')}><ShieldCheck size={17} aria-hidden="true"/>Verificar autorizacion con codigo</button></>}
+          <button className="btn btn-primary" type="button" disabled={busy||incierta} onClick={()=>void run('secuencia')}><ShieldCheck size={17} aria-hidden="true"/>Verificar autorizacion con codigo</button></>}
         {!c&&!busy&&!error&&<p role="status">Consulta el estado guardado antes de solicitar un codigo.</p>}
         {data?.documento&&c?.estado==='PENDIENTE_ACEPTACION'&&<>
           <p>COLO-FO.023, version {data.documento.version}. Autorizacion para consultar tu informacion crediticia.</p>
@@ -583,7 +544,7 @@ export function presentacionCentralesVigente(data:AutorizacionTitular|null,now=D
     &&c.presentacion&&c.vigenteHasta&&Date.parse(c.vigenteHasta)>now);
 }
 
-export function AutorizacionesPersonales({sid,operar,horaServidor,onConfirmada,requiereElecciones=false}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>;horaServidor?:()=>number;onConfirmada?:()=>void;requiereElecciones?:boolean}){
+export function AutorizacionesPersonales({sid,operar,horaServidor,onConfirmada}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>;horaServidor?:()=>number;onConfirmada?:()=>void}){
   const [estado,setEstado]=useState<'cargando'|'documento'|'centrales'|'error'>('cargando');
   const alive=useRef(true),guard=useRef(false);
   useEffect(()=>{alive.current=true;void consultar();return()=>{alive.current=false;};},[]);
@@ -600,7 +561,7 @@ export function AutorizacionesPersonales({sid,operar,horaServidor,onConfirmada,r
   if(estado==='error')return <section><p role="alert">No pudimos consultar tu autorizacion. No solicitamos otro codigo.</p>
     <button className="btn btn-outline-secondary" type="button" onClick={()=>void consultar()}><RefreshCw size={17} aria-hidden="true"/>Consultar estado</button></section>;
   if(estado==='documento')return <AutorizacionPersonal sid={sid} operar={operar} centralesHabilitadas onAceptacion={()=>setEstado('centrales')}/>;
-  return <CentralesPersonal sid={sid} operar={operar} horaServidor={horaServidor} onConfirmada={onConfirmada} requiereElecciones={requiereElecciones}/>;
+  return <CentralesPersonal sid={sid} operar={operar} horaServidor={horaServidor} onConfirmada={onConfirmada}/>;
 }
 
 export function AutorizacionPersonal({sid,operar,centralesHabilitadas=false,onAceptacion}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['autorizar']>;centralesHabilitadas?:boolean;onAceptacion?:()=>void}){

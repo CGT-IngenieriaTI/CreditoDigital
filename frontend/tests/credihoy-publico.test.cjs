@@ -42,6 +42,18 @@ function solicitud(){return {referencia:id,titulo:'Actualiza tus datos',monto:'4
   pendientes:['Debes actualizar tus datos para continuar con tu solicitud.'],
   siguientePaso:'Actualiza tus datos con Congente.',ofertaDisponible:false,acciones:{radicar:false,firmar:false}};}
 
+test('formalizacion proyecta un documento verificado sin declarar aprobacion o desembolso',()=>{
+  const f={versionContrato:'credihoy-formalizacion-publica-v1',documento:'COLO-FO.001',
+    estado:'DOCUMENTO_VERIFICADO',firmaAcreditada:true,actualizadoAt:'2026-11-06T10:00:00Z',
+    continuacionInstitucionalPendiente:true};
+  const now=Date.parse('2026-11-06T11:00:00Z');
+  assert.deepEqual(validarSolicitudPublica({...solicitud(),formalizacionDocumental:f},now).formalizacionDocumental,f);
+  for(const change of [{estado:'VALIDACION_PENDIENTE'},{firmaAcreditada:'true'},
+    {continuacionInstitucionalPendiente:false},{urlDocuments:'https://private.invalid'},
+    {actualizadoAt:'2026-11-07T00:00:00Z'}])
+    assert.throws(()=>validarSolicitudPublica({...solicitud(),formalizacionDocumental:{...f,...change}},now));
+});
+
 test('seguimiento usa Date HTTP aunque el reloj del asociado difiera, sin admitir fechas posteriores',async()=>{
   const original=global.fetch,server=Math.floor(Date.now()/1000)*1000+47000;
   const row={...solicitud(),requisitosCumplidos:null,procedencia:{origen:'HISTORICO_PILOTO',

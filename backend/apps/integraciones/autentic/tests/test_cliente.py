@@ -14,8 +14,8 @@ from zipfile import ZipFile
 from pypdf import PdfWriter
 import requests
 
-from ..cliente import AutenticDEVClient, ReciboFirma
-from ..contratos import (AutenticError, ConfiguracionDEV, ConfiguracionProduccion,
+from ..cliente import AutenticClient, AutenticDEVClient, ReciboFirma, cargar_cliente_recuperacion
+from ..contratos import (AutenticError, ConfiguracionDEV, ConfiguracionSTAGING, ConfiguracionProduccion,
                         DEV_URL, PRODUCTION_URL, TOKEN_URL, preparar_firma)
 from ..evidencia import verificar_zip
 from ..operaciones import RegistroFirmas
@@ -122,14 +122,218 @@ class AutenticTests(unittest.TestCase):
     def test_production_loader_never_accepts_staging_profile(self):
         with TemporaryDirectory() as folder:
             path = Path(folder) / 'profile.json'
+            (Path(folder)/'client.txt').write_text('SYNTHETIC')
+            (Path(folder)/'secret.txt').write_text('SECRET')
             data = dict(audience='stag-api.autenticsign.com', grant_type='client_credentials',
-                        client_id='SYNTHETIC', client_secret='SECRET')
+                        client_id_file='client.txt', client_secret_file='secret.txt')
             path.write_text(json.dumps(data))
             with self.assertRaises(AutenticError):
                 ConfiguracionProduccion.desde_archivo(path)
             data['audience'] = 'api.autenticsign.com'
             path.write_text(json.dumps(data))
             self.assertEqual(ConfiguracionProduccion.desde_archivo(path).ambiente, 'PRODUCCION')
+
+    def test_profiles_are_coherent_and_staging_cannot_bypass_legacy_dev_journal(self):
+        for cls, perfil, url, audience in (
+                (ConfiguracionDEV, 'DEV', DEV_URL, 'stag-api.autenticsign.com'),
+                (ConfiguracionSTAGING, 'STAGING', DEV_URL, 'stag-api.autenticsign.com'),
+                (ConfiguracionProduccion, 'PRODUCCION', PRODUCTION_URL, 'api.autenticsign.com')):
+            config = cls('SYNTHETIC-CLIENT', 'SYNTHETIC-SECRET')
+            self.assertEqual((config.perfil, config.base_url, config.audience), (perfil, url, audience))
+            self.assertFalse(config.permitir_documentos)
+            self.assertNotIn('SYNTHETIC-CLIENT', repr(config))
+            self.assertNotIn('SYNTHETIC-SECRET', repr(config))
+        request = solicitud()
+        self.registro.preparar('original', request.fingerprint)
+        self.registro.iniciar('original'); self.registro.terminar('original', 'INDETERMINADA')
+        session = Session()
+        client = AutenticDEVClient(ConfiguracionSTAGING('SYNTHETIC', 'SECRET', permitir_documentos=True), session=session)
+        for key in ('original', 'different'):
+            with self.assertRaises(AutenticError):
+                client.firmar(request, clave=key, registro=self.registro, referencia_autorizacion='SYNTHETIC')
+        self.assertEqual(session.calls, [])
+
+    def test_recovery_factory_is_neutral_get_only_and_cannot_authorize_any_post(self):
+        for perfil, audience in (('DEV', 'stag-api.autenticsign.com'), ('STAGING', 'stag-api.autenticsign.com'),
+                ('PRODUCCION', 'api.autenticsign.com')):
+            with self.subTest(perfil=perfil), TemporaryDirectory() as folder:
+                root = Path(folder)
+                (root/'client.txt').write_text('SYNTHETIC-CLIENT')
+                (root/'secret.txt').write_text('SYNTHETIC-ROTATED-TEST-ONLY')
+                metadata = dict(audience=audience, grant_type='client_credentials', client_id_file='client.txt',
+                    client_secret_file='secret.txt', hosts_descarga=['descarga.example.test'], timeout=[5, 20])
+                path = root/'profile.json'; path.write_text(json.dumps(metadata))
+                session = Session()
+                client = cargar_cliente_recuperacion(perfil, path, referencia_recuperacion='CUSTODIED-TEST-REF', session=session)
+                self.assertIsInstance(client, AutenticClient)
+                self.assertTrue(client.config.solo_recuperacion)
+                self.assertTrue(client.config.permitir_documentos)
+                self.assertEqual(client.config.perfil, perfil)
+                actions = (client.autenticar,
+                    lambda:client.firmar(solicitud(), clave='factory', registro=self.registro, referencia_autorizacion='CUSTODIED-TEST-REF'),
+                    lambda:client.certificar('TX', 'DOC', referencia_autorizacion='CUSTODIED-TEST-REF'),
+                    lambda:client._request('POST', TOKEN_URL),
+                    lambda:client._request('POST', client.config.base_url+'/v2/signature/'),
+                    lambda:client._request('GET', 'https://descarga.example.test/a.zip', bearer=True),
+                    lambda:AutenticClient(client.config, session=session).autenticar())
+                for action in actions:
+                    with self.assertRaisesRegex(AutenticError, 'SOLO_RECUPERACION_POST_BLOQUEADO'):action()
+                with self.assertRaisesRegex(AutenticError, 'DESCARGA_SIN_RECIBO_CUSTODIADO'):
+                    client._request('GET', 'https://descarga.example.test/arbitrary.zip')
+                self.assertEqual(session.calls, [])
+                self.assertEqual(self.db.execute('SELECT COUNT(*) FROM autentic_operaciones').fetchone()[0], 0)
+                stream = BytesIO()
+                with ZipFile(stream, 'w') as archive:archive.writestr('prueba.pdf', pdf())
+                session.responses.append(Response(stream.getvalue(), mime='application/zip'))
+                receipt = ReciboFirma('TX', 'FECHA', recibo()['urlDocuments'], ambiente=client.config.ambiente)
+                with self.assertRaisesRegex(AutenticError, 'REFERENCIA_RECUPERACION_NO_COINCIDE'):
+                    client.recuperar_documentos(receipt, ['prueba.pdf'], referencia_autorizacion='OTHER')
+                self.assertEqual(session.calls, [])
+                result = client.recuperar_documentos(receipt, ['prueba.pdf'], referencia_autorizacion='CUSTODIED-TEST-REF')
+                self.assertFalse(result['prueba.pdf'].firma_criptografica_validada)
+                self.assertEqual([call[0] for call in session.calls], ['GET'])
+                self.assertIsNone(client._url_recuperacion_en_curso)
+                self.assertNotIn('Authorization', session.calls[0][2]['headers'])
+                self.assertNotIn('SYNTHETIC-ROTATED-TEST-ONLY', path.read_text())
+
+    def test_recovery_factory_requires_explicit_profile_reference_and_allowlisted_hosts(self):
+        from unittest.mock import patch
+        for profile, reference in (('INVALID','EXISTING'), ('STAGING',''), (None,'EXISTING')):
+            with patch.object(ConfiguracionSTAGING, 'desde_archivo') as load:
+                with self.assertRaisesRegex(AutenticError, 'PERFIL_RECUPERACION_INVALIDO'):
+                    cargar_cliente_recuperacion(profile, 'UNREAD', referencia_recuperacion=reference)
+                load.assert_not_called()
+        with patch.object(ConfiguracionSTAGING, 'desde_archivo', return_value=ConfiguracionSTAGING('SYNTHETIC','SECRET')):
+            with self.assertRaisesRegex(AutenticError, 'HOSTS_RECUPERACION_REQUERIDOS'):
+                cargar_cliente_recuperacion('STAGING', 'UNREAD', referencia_recuperacion='EXISTING')
+
+    def test_inline_credentials_and_arbitrary_endpoint_are_not_accepted_in_profile_json(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder)/'profile.json'
+            for cls in (ConfiguracionDEV, ConfiguracionSTAGING, ConfiguracionProduccion):
+                data = dict(audience=cls.AUDIENCE, grant_type='client_credentials',
+                            client_id='SYNTHETIC-CLIENT', client_secret='SYNTHETIC-SECRET')
+                path.write_text(json.dumps(data))
+                with self.assertRaises(AutenticError) as error:cls.desde_archivo(path)
+                self.assertNotIn('SYNTHETIC', str(error.exception))
+            path.write_text(json.dumps(dict(audience='stag-api.autenticsign.com', grant_type='client_credentials',
+                client_id_file='client.txt', client_secret_file='secret.txt', base_url='https://other.invalid')))
+            with self.assertRaises(AutenticError):ConfiguracionSTAGING.desde_archivo(path)
+
+    def test_credential_files_are_literal_bounded_and_do_not_decode_or_log_secrets(self):
+        with TemporaryDirectory() as folder:
+            client, secret = Path(folder)/'client', Path(folder)/'secret'
+            client.write_text('SYNTHETIC-CLIENT\n', encoding='utf-8-sig')
+            secret.write_text('SYNTHETIC+/%=\r\n', encoding='utf-8-sig')
+            config = ConfiguracionSTAGING.desde_archivos(client, secret)
+            self.assertEqual(config.client_id, 'SYNTHETIC-CLIENT')
+            self.assertEqual(config.client_secret, 'SYNTHETIC+/%=')
+            for body in ('', 'x'*4097, 'MULTI\nLINE', 'SECRET\x00VALUE'):
+                secret.write_text(body)
+                with self.assertRaises(AutenticError):ConfiguracionSTAGING.desde_archivos(client, secret)
+            with self.assertRaises(AutenticError):ConfiguracionSTAGING.desde_archivos(client, client)
+
+    def test_http200_and_201_accept_only_a_consistent_successful_reply(self):
+        from unittest.mock import patch
+        for status in (200, 201):
+            for cls in (ConfiguracionDEV, ConfiguracionSTAGING, ConfiguracionProduccion):
+                with self.subTest(status=status, profile=cls.__name__), closing(sqlite3.connect(':memory:')) as db:
+                    body = {**recibo(), 'operationMsg':'DOCS_SIGNED', 'type':'reply_signature'}
+                    session = Session(Response(token()), Response(body, status))
+                    client = AutenticDEVClient(cls('SYNTHETIC', 'SECRET', permitir_documentos=True), session=session)
+                    with patch('requests.sessions.Session.request', side_effect=AssertionError('NO_NETWORK')):
+                        receipt = client.firmar(solicitud(), clave='http-success', registro=RegistroFirmas(db),
+                                               referencia_autorizacion='SYNTHETIC')
+                    self.assertEqual(receipt.estado, 'FIRMA_REPORTADA_NO_VERIFICADA')
+                    self.assertEqual(client.auditoria_firma['http'], status)
+                    self.assertEqual(receipt.ambiente, client.config.ambiente)
+                    self.assertEqual(len(session.calls), 2)
+
+    def test_success_http_does_not_override_bad_code_url_date_or_conflicting_message(self):
+        cases = ({'operationCode':True}, {'operationCode':'1000'}, {'operationCode':2000},
+            {'transactionId':''}, {'transactionId':' PRIVATE\nVALUE'}, {'processedDate':'invalid'},
+            {'processedDate':'2026-11-06'}, {'urlDocuments':'http://download.example.invalid/a.zip'},
+            {'urlDocuments':'https://user:password@download.example.invalid/a.zip'},
+            {'urlDocuments':'https://download.example.invalid/a.zip#fragment'},
+            {'operationMsg':'ERROR'}, {'type':'reply'}, {'type':True})
+        for status in (200, 201):
+            for change in cases:
+                with self.subTest(status=status, change=change), closing(sqlite3.connect(':memory:')) as db:
+                    client, session = self.client(Response(token()), Response({**recibo(), **change}, status), enabled=True)
+                    journal = RegistroFirmas(db)
+                    with self.assertRaisesRegex(AutenticError, '^ENVIO_INDETERMINADO_NO_REPETIR$'):
+                        client.firmar(solicitud(), clave='bad-reply', registro=journal, referencia_autorizacion='SYNTHETIC')
+                    self.assertEqual(journal.preparar('bad-reply', solicitud().fingerprint).estado, 'INDETERMINADA')
+                    self.assertEqual(len(session.calls), 2)
+
+    def test_signed_url_is_bounded_without_truncating_private_query_or_retaining_extra_fields(self):
+        body = {**recibo(), 'urlDocuments':'https://descarga.example.test/a.zip?signature='+'a'*2000,
+                'access_token':'PRIVATE_ECHO', 'client_secret':'PRIVATE_ECHO', 'account':'PRIVATE_ECHO'}
+        receipt = ReciboFirma.desde_respuesta(body, 'DEV')
+        self.assertEqual(receipt.url_documentos, body['urlDocuments'])
+        self.assertNotIn('PRIVATE_ECHO', json.dumps(receipt.respuesta_original))
+        self.assertNotIn(body['urlDocuments'], repr(receipt))
+        for url in ('https://descarga.example.test/a.zip?x='+'a'*8192,
+                'https://descarga.example.test/a.zip?x=bad value'):
+            with self.assertRaises(AutenticError):ReciboFirma.desde_respuesta({**body, 'urlDocuments':url}, 'DEV')
+
+    def test_http200_does_not_require_or_invent_type_or_requesttype(self):
+        for extra in ({}, {'requesttype':'UNSPECIFIED_PROVIDER_VALUE'}):
+            with self.subTest(extra=extra), closing(sqlite3.connect(':memory:')) as db:
+                body = {**recibo(), 'operationMsg':'DOCS_SIGNED', **extra}
+                client, session = self.client(Response(token()), Response(body, 200), enabled=True)
+                receipt = client.firmar(solicitud(), clave='no-type', registro=RegistroFirmas(db),
+                    referencia_autorizacion='SYNTHETIC-MOCK-ONLY')
+                self.assertEqual(receipt.tipo_respuesta, '')
+                self.assertNotIn('type', receipt.respuesta_original)
+                self.assertNotIn('requesttype', receipt.respuesta_original)
+                self.assertEqual(receipt.estado, 'FIRMA_REPORTADA_NO_VERIFICADA')
+                self.assertEqual(len(session.calls), 2)
+                client.close()
+                self.assertIsNone(client._token)
+
+    def test_http200_without_provider_type_or_zoned_date_never_promotes_contractual_signature(self):
+        from dataclasses import asdict
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import patch
+        from ..evidencia import verificar_firma_contractual
+        from .test_verificacion_documental import context
+        now = datetime.now(timezone.utc)
+        original = pdf()
+        # Isolate receipt/time gates even when all independent crypto checks pass.
+        crypto = dict(correspondenciaOriginal=True, firmaIntegra=True, cadenaConfiable=True,
+            identidadCertificado=True, fechaConfiable=True, rolCertificado='FIRMANTE_TITULAR',
+            participacionElectronicaAcreditada=True, firmadoEn=(now-timedelta(seconds=30)).isoformat())
+        for missing_type, missing_zone in ((True, False), (False, True), (True, True)):
+            with self.subTest(missing_type=missing_type, missing_zone=missing_zone), closing(sqlite3.connect(':memory:')) as db:
+                candidate = context(original, original, now)
+                body = {**candidate['recibo']['respuesta_original'], 'operationMsg':'DOCS_SIGNED'}
+                if missing_type:
+                    body.pop('type')
+                if missing_zone:
+                    body['processedDate'] = datetime.fromisoformat(body['processedDate']).replace(tzinfo=None).isoformat()
+                client, session = self.client(Response(token()), Response(body, 200), enabled=True)
+                self.addCleanup(client.close)
+                with patch('requests.sessions.Session.request', side_effect=AssertionError('RED_PROHIBIDA')):
+                    receipt = client.firmar(solicitud(), clave='transport-only', registro=RegistroFirmas(db),
+                        referencia_autorizacion='SYNTHETIC-MOCK-ONLY')
+                self.assertEqual(receipt.estado, 'FIRMA_REPORTADA_NO_VERIFICADA')
+                self.assertEqual(client.auditoria_firma['http'], 200)
+                self.assertEqual(len(session.calls), 2)
+                candidate['recibo'] = asdict(receipt)
+                with patch('apps.integraciones.autentic.pdf_criptografia.verificar_pdf', return_value=crypto):
+                    with self.assertRaisesRegex(AutenticError, '^FIRMA_CONTRACTUAL_EVIDENCIA_PENDIENTE$') as error:
+                        verificar_firma_contractual(original=original, firmado=original,
+                            transaccion='SYNTHETIC-TX', documento_identidad='SYNTHETIC-ID',
+                            contexto=candidate, momento=now)
+                report = error.exception.resultado
+                self.assertTrue(report['firmaCriptografica'])
+                self.assertFalse(report['firmaAcreditada'])
+                self.assertEqual(report['estado'], 'PENDIENTE_VERIFICACION')
+                self.assertEqual(report['reciboProveedor'], not missing_type)
+                self.assertEqual(report['fechaProveedorConZona'], not missing_zone)
+                if missing_type:self.assertIn('reciboProveedor', report['pendientes'])
+                if missing_zone:self.assertIn('fechaProveedorConZona', report['pendientes'])
 
     def test_v4_uses_lowercase_docId_and_preserves_documented_identity_fields(self):
         metadata={'names':'SYNTHETIC','lastNames':'ONLY','docId':'SYNTHETIC-ID','secureKey':'SYNTHETIC-EVIDENCE',

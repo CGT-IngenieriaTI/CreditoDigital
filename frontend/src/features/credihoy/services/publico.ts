@@ -87,16 +87,15 @@ export type GuardarBorrador={operacion:'borrador';accion:'guardar'|'enviar';clav
   version:number;datos:BorradorPublico['datos'];promotor:string|null;
   aceptacion:{version:string;sha256:string;presentacion:string;acepta:true}};
 export interface SolicitudPublica { referencia:string; titulo:string; monto:string; plazoMeses:number;
-  progreso?:ProgresoEstudio;
   periodicidad:'Mensual'; fechaCreacion:string; requisitosCumplidos:number|null; pendientes:string[];
   siguientePaso:string; ofertaDisponible:false; acciones:{ radicar:false; firmar:false };simulacion?:SimulacionPublica|null;
   institucional?:InstitucionalPublica|null; estudio?:EstudioPublico|null;
+  formalizacionDocumental?:{versionContrato:'credihoy-formalizacion-publica-v1';documento:'COLO-FO.001';
+    estado:'DOCUMENTO_VERIFICADO'|'VALIDACION_PENDIENTE';firmaAcreditada:boolean;actualizadoAt:string;
+    continuacionInstitucionalPendiente:true};
   envio?:{operacionId:string;confirmadoEn:string;solicitud:BorradorPublico};
   simulacionLocal?:SimulacionLocal;
   procedencia?:{origen:'HISTORICO_PILOTO'|'FUENTE_OPERATIVA';estadoRegistrado:string;actualizadoAt:string;consultadoAt:string} }
-export interface ProgresoEstudio {version:'credihoy-progreso-estudio-v1';estado:'AUTORIZACION_CONFIRMADA'|'VALIDACION_ADICIONAL'|'RESULTADO_DISPONIBLE';
-  confirmadoEn:string;observadoEn:string;autorizacionVigente:boolean;etapaActiva:null;
-  etapasCompletadas:('SOLICITUD'|'AUTORIZACION'|'PREPARACION'|'CONSULTA'|'EVALUACION'|'RESULTADO')[]}
 export interface InstitucionalPublica {estado:'APROBADA_PENDIENTE_FIRMA';fechaDecision:string;actualizadoAt:string;
   documentos:'NO_ACREDITADOS';firma:'PENDIENTE';
   incidencias:'NO_DISPONIBLE'|'EN_REVISION'|'ANTECEDENTES_SIN_PENDIENTE_ACTIVO'|'SIN_INCIDENCIAS_REGISTRADAS'}
@@ -113,8 +112,7 @@ export interface EstudioPublico {
       disponibleAntesGastosFamiliares:string|null;gastosFamiliaresAplicados:string|null;
       capacidadDisponible:string|null;cuotaNuevaEstimada:string|null;residualPosteriorEstimado:string|null}};
   decision:'PENDIENTE_REVISION'|'REQUIERE_SUBSANACION';autorizadoDecisionCrediticia:false;
-
-decisionPolitica?:{version:'credihoy-decision-publica-v1';versionPolitica:string;estado:'APROBADO'|'RECHAZADO'|'EN_REVISION';
+  decisionPolitica?:{version:'credihoy-decision-publica-v1';versionPolitica:string;estado:'APROBADO'|'RECHAZADO'|'EN_REVISION';
     motivos:{codigo:string;regla:string|null}[];decisionLinixRegistrada:false;autorizaDesembolso:false};
 }
 export interface SimulacionPublica {cuota:string;tasaNominalNamv:string;
@@ -247,7 +245,7 @@ export function validarEstudioPublico(raw:unknown,sid:string,now=Date.now()):Est
   const p=obj(raw),c=obj(p.capacidad);
   const fields=['versionContrato','solicitudId','evaluacionBaseId','version','referenciaVersion',
     'fechaEvaluacion','reglas','capacidad','decision','autorizadoDecisionCrediticia'];
-if(p.decisionPolitica!==undefined){
+  if(p.decisionPolitica!==undefined){
     fields.push('decisionPolitica');const d=obj(p.decisionPolitica);
     if(Object.keys(d).sort().join(',')!==['version','versionPolitica','estado','motivos','decisionLinixRegistrada','autorizaDesembolso'].sort().join(',')
       ||d.version!=='credihoy-decision-publica-v1'||!text(d.versionPolitica)||text(d.versionPolitica).length>120
@@ -353,24 +351,22 @@ export function validarSolicitudPublica(raw:unknown,now=Date.now()):SolicitudPub
     simulacionLocal=validarSimulacionLocal(q,p.referencia as string,q.requestId as string,
       {monto:p.monto as string,plazoMeses:p.plazoMeses as number,linea:rate.linea as 'VENTANILLA'|'LIBRANZA'});
   }
-  let progreso:ProgresoEstudio|undefined;
-  if(p.progreso!==undefined&&p.progreso!==null){
-    const g=obj(p.progreso);
-    const stages=JSON.stringify(g.etapasCompletadas);
-    const complete=stages==='["SOLICITUD","AUTORIZACION","PREPARACION","CONSULTA","EVALUACION","RESULTADO"]';
-    if(procedencia?.origen!=='FUENTE_OPERATIVA'||Object.keys(g).sort().join(',')!=='autorizacionVigente,confirmadoEn,estado,etapaActiva,etapasCompletadas,observadoEn,version'
-      ||g.version!=='credihoy-progreso-estudio-v1'||!['AUTORIZACION_CONFIRMADA','VALIDACION_ADICIONAL','RESULTADO_DISPONIBLE'].includes(text(g.estado))
-      ||typeof g.autorizacionVigente!=='boolean'||g.etapaActiva!==null
-      ||!['["AUTORIZACION"]','["SOLICITUD","AUTORIZACION"]','["SOLICITUD","AUTORIZACION","PREPARACION","CONSULTA","EVALUACION","RESULTADO"]'].includes(stages)
-      ||complete&&(g.estado!=='RESULTADO_DISPONIBLE'||!estudio)
-      ||!Number.isFinite(Date.parse(text(g.confirmadoEn)))||!Number.isFinite(Date.parse(text(g.observadoEn)))
-      ||Date.parse(text(g.confirmadoEn))>Date.parse(text(g.observadoEn))||Date.parse(text(g.observadoEn))>now+5000)fail();
-    progreso=g as unknown as ProgresoEstudio;
+  let formalizacionDocumental:SolicitudPublica['formalizacionDocumental'];
+  if(p.formalizacionDocumental!=null){
+    const f=obj(p.formalizacionDocumental);
+    const fields=['versionContrato','documento','estado','firmaAcreditada','actualizadoAt','continuacionInstitucionalPendiente'];
+    if(Object.keys(f).length!==fields.length||fields.some(k=>!(k in f))
+      ||f.versionContrato!=='credihoy-formalizacion-publica-v1'||f.documento!=='COLO-FO.001'
+      ||typeof f.firmaAcreditada!=='boolean'||f.continuacionInstitucionalPendiente!==true
+      ||f.estado!==(f.firmaAcreditada?'DOCUMENTO_VERIFICADO':'VALIDACION_PENDIENTE')
+      ||typeof f.actualizadoAt!=='string'||!Number.isFinite(Date.parse(f.actualizadoAt))||Date.parse(f.actualizadoAt)>now)fail();
+    formalizacionDocumental=f as unknown as NonNullable<SolicitudPublica['formalizacionDocumental']>;
   }
   return {referencia:p.referencia as string,titulo:p.titulo as string,monto:p.monto as string,plazoMeses:p.plazoMeses as number,
     periodicidad:'Mensual',fechaCreacion:p.fechaCreacion as string,requisitosCumplidos:p.requisitosCumplidos as number|null,
     pendientes:[...p.pendientes as string[]],siguientePaso:p.siguientePaso as string,ofertaDisponible:false,acciones:{radicar:false,firmar:false},simulacion,institucional,
-    ...(progreso?{progreso}:{}),...(procedencia?{procedencia}:{}),...(estudio?{estudio}:{}),...(envio?{envio}:{}),...(simulacionLocal?{simulacionLocal}:{})};
+    ...(procedencia?{procedencia}:{}),...(estudio?{estudio}:{}),...(envio?{envio}:{}),...(simulacionLocal?{simulacionLocal}:{}),
+    ...(formalizacionDocumental?{formalizacionDocumental}:{})};
 }
 
 export class AccesoAsociadoClient {

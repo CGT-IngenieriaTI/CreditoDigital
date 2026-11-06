@@ -3,6 +3,8 @@
 
 
 
+
+
 from datetime import datetime
 from decimal import Decimal
 import hmac
@@ -129,28 +131,22 @@ def leer_enviadas(identity, payload):
     """Owner-filtered durable submissions, independent of historical views/rules."""
     from django.db import transaction
     from .progreso_temporal import alias_operativo, proteger_conexion
-    # Historical-only profiles may not have an operational submission alias.
-    if not getattr(settings,'CREDIHOY_AUTOSERVICIO_DB_ALIAS',''):return []
+    if not getattr(settings, 'CREDIHOY_AUTOSERVICIO_DB_ALIAS', ''):
+        return []
     alias = alias_operativo(lectura=identity)
     with transaction.atomic(using=alias):
         with connections[alias].cursor() as cursor:
             cursor.execute('SET TRANSACTION READ ONLY')
         proteger_conexion(alias)
-        query = Solicitud.objects.using(alias).filter(producto=PRODUCTO,
-            metadatos__origen=ORIGEN,metadatos__modo=MODO,
-            solicitante__tipo_identificacion='CC',
-            solicitante__numero_identificacion=identity['numeroDocumento'])
-        if 'solicitudId' in payload:query=query.filter(pk=UUID(payload['solicitudId']))
-        rows=[]
-        for s in query.order_by('-created_at','pk')[:20]:
-            rows.append(wire.project_row({'referencia':str(s.pk),'titulo':'Tu solicitud esta en revision',
-                'monto':str(s.monto_solicitado),'plazoMeses':s.plazo_solicitado,'periodicidad':'Mensual',
-                'fechaCreacion':s.created_at.isoformat(),'requisitosCumplidos':None,
-                'pendientes':['Necesitamos completar algunas validaciones antes de tomar una decision.'],
-                'siguientePaso':'Espera la revision de Congente.','ofertaDisponible':False,
-                'acciones':{'radicar':False,'firmar':False},'institucional':None,'simulacion':None,
-                'procedencia':{'origen':'FUENTE_OPERATIVA','estadoRegistrado':s.get_estado_display(),
-                    'actualizadoAt':s.updated_at.isoformat(),'consultadoAt':timezone.now().isoformat()}}))
+        query = Solicitud.objects.using(alias).filter(producto=PRODUCTO, metadatos__origen=ORIGEN, metadatos__modo=MODO, solicitante__tipo_identificacion='CC', solicitante__numero_identificacion=identity['numeroDocumento'])
+        if 'solicitudId' in payload:
+            query = query.filter(pk=UUID(payload['solicitudId']))
+        rows = []
+        for s in query.order_by('-created_at', 'pk')[:20]:
+            estudio = _estudio_publico_personal(s, identity)
+            from apps.documentos.formularios_credihoy import presentar_formalizacion_autentic
+            formalizacion = presentar_formalizacion_autentic(s, alias=alias)
+            rows.append(wire.project_row({'referencia': str(s.pk), 'titulo': 'Tu solicitud esta en revision', 'monto': str(s.monto_solicitado), 'plazoMeses': s.plazo_solicitado, 'periodicidad': 'Mensual', 'fechaCreacion': s.created_at.isoformat(), 'requisitosCumplidos': sum((r['resultado'] == 'CUMPLE' for r in estudio['reglas'])) if estudio else None, 'estudio': estudio, 'envio': envio_publico(s, alias), 'simulacionLocal': estimacion_de_envio(s, identity), 'formalizacionDocumental': formalizacion, 'pendientes': ['Necesitamos completar algunas validaciones antes de tomar una decision.'], 'siguientePaso': 'Espera la revision de Congente.', 'ofertaDisponible': False, 'acciones': {'radicar': False, 'firmar': False}, 'institucional': None, 'simulacion': None, 'procedencia': {'origen': 'FUENTE_OPERATIVA', 'estadoRegistrado': s.get_estado_display(), 'actualizadoAt': s.updated_at.isoformat(), 'consultadoAt': timezone.now().isoformat()}}))
     return rows
 
 

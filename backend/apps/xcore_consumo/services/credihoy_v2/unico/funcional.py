@@ -22,6 +22,8 @@
 
 
 
+
+
 from decimal import Decimal
 from dataclasses import replace
 import hashlib
@@ -79,7 +81,10 @@ def obtener_para_evaluacion(solicitud_id, operador, *, autogestion=False, lock=F
             raise ConflictoFuncional('REVISION_HISTORICA_NO_MODIFICABLE_POR_CONTINUIDAD')
         intent = AuditLog.objects.get(solicitud=case, event='credihoy_continuacion_solicitada_v1')
         AuditLog.objects.get(solicitud=case, event='credihoy_continuacion_evento_completado_v1', request_id=intent.request_id)
-        if not AuditLog.objects.filter(solicitud=case, event='credihoy_cupo_hdc_reservado_v1').exists():
+        reserved = AuditLog.objects.filter(solicitud=case, event='credihoy_cupo_hdc_reservado_v1').exists()
+        scope = getattr(settings, 'CREDIHOY_REVISION_CUSTODIADA_SOLICITUDES', ())
+        historical = type(scope) in (list, tuple) and len(scope) <= 20 and (str(case.pk) in scope) and (case.metadatos.get('consumoRealAutorizado') is True) and AuditLog.objects.filter(solicitud=case, event='credihoy_autorizacion_consumo', payload__autorizado=True).exists()
+        if not reserved and (not historical):
             raise ConflictoFuncional('REVISION_SIN_ALCANCE_INSTITUCIONAL')
         operation = OperacionGateway.objects.filter(pk=evaluation.input_snapshot[KEY_HDC]['operacionId'], solicitud=case, consentimiento=_firma(case), proveedor='HDC', estado='COMPLETADA').first()
         if operation is None:
@@ -737,7 +742,11 @@ def preparar_revision_estudio(solicitud_id, operador):
         previous = list(drafts.values_list('payload', flat=True)[:101])
         if len(previous) > 100:
             raise ValueError('REVISIONES_REQUIEREN_CONCILIACION')
-        number = max([v['version'] for v in previous] + [1]) + 1
+        published = AuditLog.objects.filter(solicitud=locked, event='CREDIHOY_ESTUDIO_PUBLICO_VERIFICADO').values_list('payload__payload__estudio__version', flat=True)[:101]
+        numbers = [v for v in published if type(v) is int and v > 0]
+        if len(numbers) > 100:
+            raise ValueError('REVISIONES_REQUIEREN_CONCILIACION')
+        number = max([v['version'] for v in previous] + numbers + [1]) + 1
         version = {'solicitudId': str(case.pk), 'evaluacionBaseId': evaluation.pk, 'version': number, 'versionReferencia': reference, 'resultado': evaluated, 'fuentes': {'huellaSolicitud': {'documentoSha256': hashlib.sha256(case.solicitante.numero_identificacion.encode()).hexdigest(), 'evaluacionSha256': base_hash}, 'semantica': sources}}
         raw = json.dumps(version, sort_keys=True, default=str)
         record = AuditLog.objects.create(solicitud=locked, event='CREDIHOY_ESTUDIO_REVISION_PREPARADA', request_id=reference, actor='user:' + str(operador.pk), payload={'version': number, 'resultadoCifrado': encrypt_text(raw), 'resultadoSha256': hashlib.sha256(raw.encode()).hexdigest(), 'recibo': {'operacionHdc': str(operation.operacion_id)}, 'HDCNuevas': 0})

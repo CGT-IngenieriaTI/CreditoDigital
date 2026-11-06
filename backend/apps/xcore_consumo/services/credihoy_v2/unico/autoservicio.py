@@ -1,6 +1,8 @@
 """Existing owner contract: temporary progress, then explicit durable submission."""
 
 
+
+
 from datetime import datetime
 from decimal import Decimal
 import hmac

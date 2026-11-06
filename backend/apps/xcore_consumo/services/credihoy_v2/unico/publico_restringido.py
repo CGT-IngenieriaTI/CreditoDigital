@@ -36,6 +36,7 @@ class CotizacionPropietariaRouter:
     READ={('solicitudes','solicitud'),('usuarios','solicitante'),('utils','auditlog'),
         ('risk_gateway_ops','operaciongateway'),*(('xcore_consumo',name) for name in (
             'solicitudconsumo','evaluacionconsumo','consentimientoconsumo','otpchallenge',
+            'consultaestamentooracle',
             'perfiltasascredihoy','tasacomercialcredihoy','asignaciontarifacredihoy',
             'eventotasascredihoy','selecciontarifacredihoy'))}
     WRITE={('xcore_consumo','solicitudconsumo'),('utils','auditlog')}

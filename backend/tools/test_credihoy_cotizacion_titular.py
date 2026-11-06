@@ -66,6 +66,26 @@ class QuoteAliasTests(TransactionTestCase):
                 router.db_for_write(TasaComercialCredihoy)
         self.assertEqual(alias_cotizacion(),'default')
 
+    def test_quote_reader_routes_existing_classification_without_permitting_its_mutation(self):
+        from django.db import router
+        from apps.xcore_consumo.models import ConsultaEstamentoOracle
+        from apps.xcore_consumo.services.credihoy_v2.unico.publico_restringido import fuente_cotizacion
+        with fuente_cotizacion():
+            self.assertEqual(router.db_for_read(ConsultaEstamentoOracle),'cotizacion')
+            with self.assertRaisesRegex(PermissionDenied,'ESCRITURA_FUERA_COTIZACION'):
+                router.db_for_write(ConsultaEstamentoOracle)
+
+    def test_custody_mode_rejects_nonapproved_decision_before_quote_request_or_claim(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import funcional
+        with patch.object(quotes,'_obtener',return_value=self.s),\
+                patch.object(funcional,'oferta_custodia_activa',return_value=True),\
+                patch.object(quotes,'_exigir_decision_ofertable',side_effect=ValueError('DECISION_NO_APROBADA')),\
+                patch.object(quotes,'_contexto',side_effect=AssertionError('NO_NEW_QUOTE_CONTEXT')):
+            with self.assertRaisesRegex(ValueError,'DECISION_NO_APROBADA'):
+                quotes.cotizacion(self.s.pk,self.user,str(uuid4()),ejecutar=True,cliente=self.motor)
+        self.motor.cotizar.assert_not_called()
+        self.assertFalse(AuditLog.objects.filter(event='CREDIHOY_COTIZACION_SOLICITADA').exists())
+
 
 @override_settings(ROOT_URLCONF='core.urls_credihoy_titular',DEBUG=False,
     CREDIHOY_COTIZACION_TITULAR_ENABLED=True,CREDIHOY_COTIZACION_ENABLED=True,

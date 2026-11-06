@@ -127,12 +127,14 @@ def configurar_propietario(config):
         if 'cotizacion' in config:
             quote=config['cotizacion'];source=config['fuente']
             required={'habilitada','conexion','solicitudes','referencia'}
-            if (type(quote) is not dict or not required<=set(quote) or set(quote)-required-{'apiData'}
+            if (type(quote) is not dict or not required<=set(quote) or set(quote)-required-{'apiData','custodiaEstudioHabilitada'}
                     or type(quote['habilitada']) is not bool or not isinstance(quote['referencia'],str)
                     or not quote['referencia'].strip() or type(quote['solicitudes']) is not list
                     or not (1 if quote['habilitada'] else 0)<=len(quote['solicitudes'])<=2
                     or len(set(quote['solicitudes']))!=len(quote['solicitudes'])
                     or any(type(v) is not str or str(UUID(v))!=v for v in quote['solicitudes'])):raise ValueError
+            custody=quote.get('custodiaEstudioHabilitada',False)
+            if type(custody) is not bool or custody and not quote['habilitada']:raise ValueError
             db=quote['conexion'];api=quote.get('apiData')
             if (set(db)!=set(source) or db['usuario']!='credihoy_titular_cotizacion'
                     or any(db[k]!=source[k] for k in ('host','puerto','nombre'))
@@ -212,6 +214,7 @@ if _quote:
     # Read prior gateway evidence only; no producer, queue or financial transport.
     INSTALLED_APPS=[*INSTALLED_APPS,'apps.integraciones.risk_gateway.operaciones']
 CREDIHOY_COTIZACION_TITULAR_ENABLED=CREDIHOY_COTIZACION_ENABLED=_quote.get('habilitada',False)
+CREDIHOY_OFERTA_CUSTODIA_ENABLED=_quote.get('custodiaEstudioHabilitada',False)
 CREDIHOY_COTIZACION_DB_ALIAS='cotizacion' if 'cotizacion' in DATABASES else ''
 CREDIHOY_COTIZACION_SOLICITUDES=_quote.get('solicitudes',[])
 CREDIHOY_COTIZACION_SOURCE_REFERENCE=_quote.get('referencia','')

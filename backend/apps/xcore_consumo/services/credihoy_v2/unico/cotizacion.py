@@ -3,6 +3,8 @@
 
 
 
+
+
 import hashlib
 import json
 from uuid import UUID,uuid4
@@ -460,16 +462,19 @@ def vincular_oferta_a_payload(payload,oferta,*,fecha_desembolso_efectiva=None,pr
     except (KeyError,TypeError,ValueError,ArithmeticError):raise ValueError('SOLICITUD_NO_CORRESPONDE_A_OFERTA_LINIX') from None
 
 
-def cotizacion(solicitud_id, operador, request_id, *, ejecutar=False, cliente=None, escenario=None, sesion=None, dinamica=False,titular=None):
+def cotizacion(solicitud_id, operador, request_id, *, ejecutar=False, cliente=None, escenario=None, sesion=None, dinamica=False, titular=None):
     if dinamica:
-        if titular is not None:raise ValueError('ESCENARIO_TITULAR_NO_PERSISTIDO')
-        return simulacion_dinamica(solicitud_id,operador,request_id,escenario=escenario,
-            sesion=sesion,ejecutar=ejecutar,cliente=cliente)
+        if titular is not None:
+            raise ValueError('ESCENARIO_TITULAR_NO_PERSISTIDO')
+        return simulacion_dinamica(solicitud_id, operador, request_id, escenario=escenario, sesion=sesion, ejecutar=ejecutar, cliente=cliente)
     if connections[alias_cotizacion()].in_atomic_block:
         raise ValueError('COTIZACION_REQUIERE_TRANSACCION_INDEPENDIENTE')
     rid = str(UUID(request_id))
     with transaction.atomic(using=alias_cotizacion()):
-        s = _obtener(solicitud_id, operador, lock=True,titular=titular)
+        s = _obtener(solicitud_id, operador, lock=True, titular=titular)
+        from .funcional import oferta_custodia_activa
+        if ejecutar and oferta_custodia_activa():
+            _exigir_decision_ofertable(s, SolicitudConsumo.objects.get(solicitud=s))
         try:
             detail, payload = _contexto(s)
         except (ValueError, KeyError, AttributeError) as exc:
@@ -491,35 +496,34 @@ def cotizacion(solicitud_id, operador, request_id, *, ejecutar=False, cliente=No
             r = _empty(s.pk, rid, 'NO_HABILITADA', payload)
             r['motivo'] = 'CONFIGURACION_API_DATA_INCOMPLETA'
             return r
-        # Commit the claim before HTTP; a crash cannot trigger an automatic retry.
-        detail.orchestration_data = {**detail.orchestration_data, KEY: {
-            **payload, 'requestId': rid, 'resultado': None}}
+        detail.orchestration_data = {**detail.orchestration_data, KEY: {**payload, 'requestId': rid, 'resultado': None}}
         detail.save(update_fields=['orchestration_data', 'updated_at'])
-        AuditLog.objects.create(solicitud=s, event='CREDIHOY_COTIZACION_SOLICITADA',
-            actor=_actor(operador,titular), request_id=rid, payload={'versionCondiciones': payload['versionCondiciones']})
+        AuditLog.objects.create(solicitud=s, event='CREDIHOY_COTIZACION_SOLICITADA', actor=_actor(operador, titular), request_id=rid, payload={'versionCondiciones': payload['versionCondiciones']})
     try:
         result = client.cotizar(payload, rid)
     except Exception:
         return _empty(s.pk, rid, 'REQUIERE_CONCILIACION', payload)
     with transaction.atomic(using=alias_cotizacion()):
-        s = _obtener(solicitud_id, operador, lock=True,titular=titular)
+        s = _obtener(solicitud_id, operador, lock=True, titular=titular)
         detail = SolicitudConsumo.objects.select_for_update().get(solicitud=s)
         entry = detail.orchestration_data.get(KEY, {})
         if entry.get('requestId') != rid:
             return _empty(s.pk, rid, 'REQUIERE_CONCILIACION', payload)
         detail.orchestration_data = {**detail.orchestration_data, KEY: {**entry, 'resultado': result}}
         detail.save(update_fields=['orchestration_data', 'updated_at'])
-        AuditLog.objects.create(solicitud=s, event='CREDIHOY_COTIZACION_RESPUESTA',
-            actor=_actor(operador,titular), request_id=rid,
-            payload={'versionCondiciones': payload['versionCondiciones'], 'estado': result['estado']})
+        AuditLog.objects.create(solicitud=s, event='CREDIHOY_COTIZACION_RESPUESTA', actor=_actor(operador, titular), request_id=rid, payload={'versionCondiciones': payload['versionCondiciones'], 'estado': result['estado']})
         try:
             _, current = _contexto(s)
             if current != payload:
                 return _empty(s.pk, rid, 'DESACTUALIZADA', current)
         except (ValueError, KeyError, AttributeError):
             return _empty(s.pk, rid, 'DESACTUALIZADA')
-        if result.get('disponible') is True and result.get('fuente')=='LINIX_CALCULO_CUOTA':
-            preparar_oferta_linix(s.pk,operador,titular=titular)
+        if result.get('disponible') is True and result.get('fuente') == 'LINIX_CALCULO_CUOTA':
+            try:
+                _exigir_decision_ofertable(s, detail)
+            except ValueError:
+                return result
+            preparar_oferta_linix(s.pk, operador, titular=titular)
         return result
 
 

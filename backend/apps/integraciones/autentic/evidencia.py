@@ -1,6 +1,7 @@
 """Independent integrity, cryptography and electronic participation evidence."""
 
 from dataclasses import dataclass, field
+import base64
 from datetime import datetime,timezone
 from hashlib import sha256
 import hmac
@@ -12,10 +13,21 @@ from io import BytesIO
 import stat
 from zipfile import BadZipFile, ZipFile
 
-from .contratos import AutenticError, validar_pdf
+from .contratos import AutenticError, validar_pdf, _config_unica
 
 
 MAX_ZIP = 20_000_000
+
+
+def _procedencia_descarga_integra(procedencia, ambiente, url_sha256=None):
+    return (type(procedencia) is dict and ambiente in ('DEV', 'PRODUCCION')
+        and procedencia.get('version') == 'AUTENTIC_DESCARGA_V1'
+        and procedencia.get('ambiente') == ambiente
+        and type(procedencia.get('http')) is int and procedencia['http'] == 200
+        and procedencia.get('TLSVerificado') is True and procedencia.get('sinRedirecciones') is True
+        and all(type(procedencia.get(k)) is str and re.fullmatch('[a-f0-9]{64}', procedencia[k])
+                for k in ('urlSha256', 'zipSha256'))
+        and (url_sha256 is None or procedencia['urlSha256'] == url_sha256))
 
 
 @dataclass(frozen=True)
@@ -78,11 +90,9 @@ def analizar_firma_documental(*,original,firmado,transaccion,documento_identidad
             except (KeyError,ValueError,TypeError):pass
             provenance=download.get('procedencia',{})
             url=urlsplit(receipt['url_documentos'])
-            result['procedenciaDescarga']=(provenance.get('version')=='AUTENTIC_DESCARGA_V1'
-                and provenance.get('ambiente')=='DEV' and provenance.get('http')==200
-                and provenance.get('TLSVerificado') is True and provenance.get('sinRedirecciones') is True
-                and provenance.get('urlSha256')==sha256(receipt['url_documentos'].encode()).hexdigest()
-                and bool(re.fullmatch('[a-f0-9]{64}',provenance.get('zipSha256','')))
+            environment = receipt.get('ambiente', 'DEV')
+            result['procedenciaDescarga']=(_procedencia_descarga_integra(provenance, environment,
+                    sha256(receipt['url_documentos'].encode()).hexdigest())
                 and url.scheme=='https' and bool(url.hostname) and not url.username and not url.password
                 and not url.fragment and url.port in (None,443))
             result['solicitudId']=reference;result['envioId']=send
@@ -127,6 +137,79 @@ class EvidenciaPDF:
     sha256: str
     contenido: bytes = field(repr=False)
     firma_criptografica_validada: bool = False
+
+    def __post_init__(self):
+        if (self.firma_criptografica_validada is not False
+                or self.sha256 != validar_pdf(self.contenido)):
+            raise AutenticError('EVIDENCIA_PDF_NO_INTEGRA')
+
+
+def _vinculo_custodia(vinculo):
+    if (type(vinculo) is not dict or set(vinculo) != {
+            'solicitudId', 'envioId', 'documentoOperacionId', 'originalSha256',
+            'transaccionReferencia', 'ambiente'}):
+        raise ValueError
+    for key in ('solicitudId', 'envioId', 'documentoOperacionId'):
+        if str(UUID(vinculo[key])) != vinculo[key]:
+            raise ValueError
+    for key in ('originalSha256', 'transaccionReferencia'):
+        if type(vinculo[key]) is not str or not re.fullmatch('[a-f0-9]{64}', vinculo[key]):
+            raise ValueError
+    if vinculo['ambiente'] not in ('DEV', 'PRODUCCION'):
+        raise ValueError
+
+
+def custodiar_descarga(*, original, evidencia, recibo, vinculo, procedencia, recuperado_en, cifrar):
+    """Local encrypted snapshot through the host's cipher; not a provider attestation.
+
+    The caller persists the returned ciphertext exclusively, without overwriting
+    the original attempt. This adapter never writes files, journals or APP state.
+    """
+    try:
+        from .cliente import ReciboFirma
+        _vinculo_custodia(vinculo)
+        if type(recibo) is not ReciboFirma or type(evidencia) is not EvidenciaPDF:
+            raise ValueError
+        recibo.validar_recuperacion(vinculo['ambiente'])
+        if (validar_pdf(original) != vinculo['originalSha256']
+                or sha256(recibo.transaccion.encode()).hexdigest() != vinculo['transaccionReferencia']
+                or datetime.fromisoformat(recuperado_en).utcoffset() is None
+                or not _procedencia_descarga_integra(procedencia, vinculo['ambiente'],
+                    sha256(recibo.url_documentos.encode()).hexdigest())):
+            raise ValueError
+        envelope = {**vinculo, 'version': 'AUTENTIC_CUSTODIA_DESCARGA_LOCAL_V1',
+            'pdfSha256': evidencia.sha256, 'pdfBase64': base64.b64encode(evidencia.contenido).decode('ascii'),
+            'recuperadoEn': recuperado_en, 'procedencia': dict(procedencia), 'firmaAcreditada': False}
+        canonical = json.dumps(envelope, sort_keys=True, separators=(',', ':'))
+        encrypted = cifrar(canonical)
+        if type(encrypted) is not str or not encrypted or encrypted == canonical:
+            raise ValueError
+        return encrypted
+    except Exception:
+        raise AutenticError('CUSTODIA_DESCARGA_NO_COMPLETADA') from None
+
+
+def leer_descarga_custodiada(cifrado, *, vinculo, descifrar):
+    """Validate the decrypted snapshot against the independently supplied binding."""
+    try:
+        _vinculo_custodia(vinculo)
+        plain = descifrar(cifrado)
+        if type(plain) is not str or len(plain) > 8_100_000:
+            raise ValueError
+        envelope = json.loads(plain, object_pairs_hook=_config_unica)
+        if (set(envelope) != set(vinculo) | {'version', 'pdfSha256', 'pdfBase64',
+                'recuperadoEn', 'procedencia', 'firmaAcreditada'}
+                or envelope['version'] != 'AUTENTIC_CUSTODIA_DESCARGA_LOCAL_V1'
+                or any(envelope[k] != v for k, v in vinculo.items())
+                or envelope['firmaAcreditada'] is not False
+                or not _procedencia_descarga_integra(envelope['procedencia'], vinculo['ambiente'])
+                or datetime.fromisoformat(envelope['recuperadoEn']).utcoffset() is None
+                or type(envelope['pdfBase64']) is not str or len(envelope['pdfBase64']) > 8_000_000):
+            raise ValueError
+        evidence = EvidenciaPDF(envelope['pdfSha256'], base64.b64decode(envelope['pdfBase64'], validate=True))
+        return evidence, {k: v for k, v in envelope.items() if k != 'pdfBase64'}
+    except Exception:
+        raise AutenticError('CUSTODIA_DESCARGA_NO_INTEGRA') from None
 
 
 def verificar_zip(contenido, nombres_esperados):

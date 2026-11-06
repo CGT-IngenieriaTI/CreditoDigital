@@ -21,7 +21,7 @@ from .evidencia import EvidenciaPDF, MAX_ZIP, verificar_zip
 
 @dataclass(frozen=True)
 class ReciboFirma:
-    transaccion: str
+    transaccion: str = field(repr=False)
     fecha_proveedor: str
     url_documentos: str = field(repr=False)
     estado: str = "FIRMA_REPORTADA_NO_VERIFICADA"
@@ -29,6 +29,21 @@ class ReciboFirma:
     mensaje_operacion: str = field(default="",repr=False)
     tipo_respuesta: str = field(default="",repr=False)
     respuesta_original: dict = field(default_factory=dict,repr=False)
+    ambiente: str = "DEV"
+
+    def validar_recuperacion(self, ambiente):
+        if (self.ambiente != ambiente or ambiente not in {'DEV', 'PRODUCCION'}
+                or self.estado != 'FIRMA_REPORTADA_NO_VERIFICADA'
+                or type(self.codigo_operacion) is not int or self.codigo_operacion != 1000
+                or not all(texto(v) for v in (self.transaccion, self.fecha_proveedor, self.url_documentos))):
+            raise AutenticError('RECIBO_RECUPERACION_NO_ACREDITADO')
+        if self.respuesta_original:
+            expected = {'transactionId': self.transaccion, 'operationCode': self.codigo_operacion,
+                        'processedDate': self.fecha_proveedor, 'urlDocuments': self.url_documentos}
+            if (type(self.respuesta_original) is not dict
+                    or type(self.respuesta_original.get('operationCode')) is not int
+                    or any(self.respuesta_original.get(k) != v for k, v in expected.items())):
+                raise AutenticError('RECIBO_RECUPERACION_NO_ACREDITADO')
 
 
 def _pares_unicos(pares):
@@ -239,7 +254,7 @@ class AutenticDEVClient:
                 raise AutenticError('FIRMA_RESPUESTA_NO_CERTIFICADA')
             receipt = ReciboFirma(p['transactionId'], p['processedDate'], p['urlDocuments'],
                 codigo_operacion=p['operationCode'],mensaje_operacion=p.get('operationMsg',''),tipo_respuesta=p.get('type',''),
-                respuesta_original=p)
+                respuesta_original=p,ambiente=self.config.ambiente)
         except Exception as exc:
             self.auditoria_firma['codigo'] = exc.codigo if isinstance(exc, AutenticError) else 'FALLO_INTERNO_DESPUES_DE_RESERVA'
             registro.terminar(clave, "INDETERMINADA")
@@ -251,7 +266,11 @@ class AutenticDEVClient:
         raise AutenticError("CONSULTA_ESTADO_NO_DOCUMENTADA")
 
     def recuperar_documentos(self, recibo, nombres_esperados, *, referencia_autorizacion):
+        self.auditoria_descarga = {}
         self._documentos_autorizados(referencia_autorizacion)
+        if type(recibo) is not ReciboFirma:
+            raise AutenticError('RECIBO_RECUPERACION_NO_ACREDITADO')
+        recibo.validar_recuperacion(self.config.ambiente)
         try:
             url = urlsplit(recibo.url_documentos)
             if (url.scheme != 'https' or url.username or url.password or url.fragment
@@ -273,8 +292,12 @@ class AutenticDEVClient:
             except (OSError,ValueError):
                 raise AutenticError('DESTINO_DESCARGA_NO_PUBLICO') from None
         # La URL firmada no recibe el Bearer de la API y no sigue redirects.
-        raw = self._request('GET', recibo.url_documentos, limite=MAX_ZIP, mime='application/zip')
-        return verificar_zip(raw, nombres_esperados)
+        try:
+            raw = self._request('GET', recibo.url_documentos, limite=MAX_ZIP, mime='application/zip')
+            return verificar_zip(raw, nombres_esperados)
+        except Exception:
+            self.auditoria_descarga = {}
+            raise
 
     def certificar(self, transaccion, documento, *, clave=None, registro=None, referencia_autorizacion):
         self._documentos_autorizados(referencia_autorizacion)

@@ -7,6 +7,8 @@
 
 
 
+
+
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -582,7 +584,9 @@ def leer_decision_estudio(s, *, ahora=None):
     from uuid import UUID
     from django.utils import timezone
     from apps.utils.models import AuditLog
-    from .funcional import leer_estado_funcional
+    from .funcional import leer_estado_funcional, oferta_custodia_activa
+    if oferta_custodia_activa():
+        return deepcopy(leer_estado_funcional(s)['decisionCustodiada'])
     now = ahora or timezone.now()
     record = AuditLog.objects.filter(solicitud=s, event='CREDIHOY_DECISION_DIGITAL_LOCAL').order_by('-created_at', '-pk').first()
     if record is None:

@@ -12,6 +12,8 @@
 
 
 
+
+
 from decimal import Decimal
 from dataclasses import replace
 import hashlib
@@ -276,67 +278,48 @@ def _reglas_precarga(s):
 
 def leer_estado_funcional(s):
     """Lectura compartida; la autorizacion del objeto corresponde al caller."""
+    if oferta_custodia_activa():
+        return leer_estudio_oferta_custodiado(s)
     c = _firma(s)
     detail = s.consumo_detail
     evaluation = EvaluacionConsumo.objects.filter(solicitud=s).first()
     result = evaluation.resultados.get(KEY) if evaluation and isinstance(evaluation.resultados, dict) else None
     if result is not None:
         revisiones = detail.orchestration_data.get(KEY_CONDICIONES, [])
-        base_form = (evaluation.input_snapshot.get('form_data') if revisiones else
-            _formulario_persistido(s, detail.form_data))
-        huella = _digest({"form": base_form, "firma": c.text_hash, "version": VERSION})
-        if (not isinstance(evaluation.input_snapshot, dict)
-                or evaluation.input_snapshot.get("huellaFuncional") != huella
-                or detail.orchestration_data.get(KEY, {}).get("datosGuardados") is not True):
-            raise ConflictoFuncional("RESULTADO_NO_CORRESPONDE_AL_CONTEXTO_ACTUAL")
+        base_form = evaluation.input_snapshot.get('form_data') if revisiones else _formulario_persistido(s, detail.form_data)
+        huella = _digest({'form': base_form, 'firma': c.text_hash, 'version': VERSION})
+        if not isinstance(evaluation.input_snapshot, dict) or evaluation.input_snapshot.get('huellaFuncional') != huella or detail.orchestration_data.get(KEY, {}).get('datosGuardados') is not True:
+            raise ConflictoFuncional('RESULTADO_NO_CORRESPONDE_AL_CONTEXTO_ACTUAL')
     key_hdc = KEY_HDC_REVISION if evaluation and KEY_HDC_REVISION in evaluation.resultados else KEY_HDC
-    active = evaluation.input_snapshot.get("revisionHdcActiva") if evaluation else None
+    active = evaluation.input_snapshot.get('revisionHdcActiva') if evaluation else None
     if active is not None:
         from uuid import UUID
         try:
-            prefix, identifier = active.rsplit(":", 1)
+            prefix, identifier = active.rsplit(':', 1)
             if prefix != KEY_HDC_REVISION or str(UUID(identifier)) != identifier or active not in evaluation.resultados:
                 raise ValueError
         except (ValueError, AttributeError, TypeError):
-            raise ConflictoFuncional("REVISION_HDC_ACTIVA_INVALIDA") from None
+            raise ConflictoFuncional('REVISION_HDC_ACTIVA_INVALIDA') from None
         key_hdc = active
     if evaluation and key_hdc in evaluation.resultados:
         nuevo = evaluation.resultados[key_hdc]
         vinculo = evaluation.input_snapshot.get(key_hdc, {})
         from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
-        op = OperacionGateway.objects.filter(pk=vinculo.get("operacionId"), solicitud=s,
-            proveedor="HDC", estado__in=["COMPLETADA", "SIN_INFORMACION"]).first()
-        if (op is None or str(op.consulta_id) != vinculo.get("consultaId")
-                or op.consentimiento_id != c.pk
-                or nuevo.get("solicitudId") != str(s.pk)
-                or vinculo.get("firma") != c.text_hash
-                or vinculo.get("resultadoSha256") != _digest(nuevo)):
-            raise ConflictoFuncional("RESULTADO_HDC_NO_CORRESPONDE_AL_EXPEDIENTE")
+        op = OperacionGateway.objects.filter(pk=vinculo.get('operacionId'), solicitud=s, proveedor='HDC', estado__in=['COMPLETADA', 'SIN_INFORMACION']).first()
+        if op is None or str(op.consulta_id) != vinculo.get('consultaId') or op.consentimiento_id != c.pk or (nuevo.get('solicitudId') != str(s.pk)) or (vinculo.get('firma') != c.text_hash) or (vinculo.get('resultadoSha256') != _digest(nuevo)):
+            raise ConflictoFuncional('RESULTADO_HDC_NO_CORRESPONDE_AL_EXPEDIENTE')
         _exigir_recibo_hdc(op)
         revisiones = detail.orchestration_data.get(KEY_CONDICIONES, [])
         if revisiones:
             ultima = revisiones[-1]
             form = _formulario_persistido(s, detail.form_data)
-            if (ultima['formularioNuevo'] != form or ultima['firma'] != c.text_hash
-                    or vinculo.get('revisionCondiciones') != ultima['id']
-                    or vinculo.get('huellaCondiciones') != _digest(form)
-                    or ultima['sha256'] != _digest({k: v for k, v in ultima.items() if k != 'sha256'})):
+            if ultima['formularioNuevo'] != form or ultima['firma'] != c.text_hash or vinculo.get('revisionCondiciones') != ultima['id'] or (vinculo.get('huellaCondiciones') != _digest(form)) or (ultima['sha256'] != _digest({k: v for k, v in ultima.items() if k != 'sha256'})):
                 raise ConflictoFuncional('EVALUACION_DE_CONDICIONES_ANTERIORES')
         result = nuevo
     elif detail.orchestration_data.get(KEY_CONDICIONES):
         raise ConflictoFuncional('REVISION_CONDICIONES_SIN_EVALUACION_VIGENTE')
-    state={"versionContrato": VERSION, "solicitudId": str(s.pk), "idempotencyKey": clave_funcional(s),
-        "solicitud": {"monto": str(s.monto_solicitado), "plazoMeses": s.plazo_solicitado,
-            "periodicidadPago": detail.form_data.get("periodicidadPago"),
-            "recogerCredihoy": detail.form_data.get("recogerCredihoy")},
-        "datosGuardados": detail.orchestration_data.get(KEY, {}).get("datosGuardados") is True,
-        "consentimiento": {"estado": "CONSENTIMIENTO_FIRMADO" if c.firmado else "AUTORIZACION_CENTRALES_CONFIRMADA",
-            "version": c.version,"fechaFirma": c.fecha_aceptacion.isoformat() if c.firmado else None},
-        "estadoObtencionDatos": result["estadoObtencionDatos"] if result else _datos_obtencion(), "resultado": result,
-        "estadoTramite": "PENDIENTE_REVISION" if result else "DATOS_PENDIENTES",
-        "decisionCrediticia": "NO_AUTORIZADA", "autorizadoDecisionCrediticia": False,
-        "radicacionLinix": "NO_EJECUTADA"}
-    return aplicar_revision_estudio_registrada(s,evaluation,state)
+    state = {'versionContrato': VERSION, 'solicitudId': str(s.pk), 'idempotencyKey': clave_funcional(s), 'solicitud': {'monto': str(s.monto_solicitado), 'plazoMeses': s.plazo_solicitado, 'periodicidadPago': detail.form_data.get('periodicidadPago'), 'recogerCredihoy': detail.form_data.get('recogerCredihoy')}, 'datosGuardados': detail.orchestration_data.get(KEY, {}).get('datosGuardados') is True, 'consentimiento': {'estado': 'CONSENTIMIENTO_FIRMADO' if c.firmado else 'AUTORIZACION_CENTRALES_CONFIRMADA', 'version': c.version, 'fechaFirma': c.fecha_aceptacion.isoformat() if c.firmado else None}, 'estadoObtencionDatos': result['estadoObtencionDatos'] if result else _datos_obtencion(), 'resultado': result, 'estadoTramite': 'PENDIENTE_REVISION' if result else 'DATOS_PENDIENTES', 'decisionCrediticia': 'NO_AUTORIZADA', 'autorizadoDecisionCrediticia': False, 'radicacionLinix': 'NO_EJECUTADA'}
+    return aplicar_revision_estudio_registrada(s, evaluation, state)
 
 
 def registrar_resultado_consulta_hdc(solicitud_id, operador, *, operacion, ingresos, hechos_reglas, cuotas_aplicables_explicitas=None, revision_evidencia=None, autogestion=False, descuentos_nomina=None, informe_xml=None, cuota_estimada=None, titularidad_recogida=None):
@@ -802,3 +785,67 @@ def huella_consumo_estudio(detail, version='credihoy-estudio-tecnico-firmado-v1'
     else:
         raise ValueError('HUELLA_ESTUDIO_VERSION_NO_ADMITIDA')
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, default=str).encode()).hexdigest()
+
+
+def oferta_custodia_activa():
+    from django.conf import settings
+    from .publico_restringido import alias_cotizacion
+    return alias_cotizacion() != 'default' and getattr(settings, 'CREDIHOY_OFERTA_CUSTODIA_ENABLED', False) is True
+
+
+def leer_estudio_oferta_custodiado(s):
+    """Read native registered evidence through its projection, not the full journal."""
+    from django.db import connections
+    from .publico_restringido import alias_cotizacion
+    from .autoservicio import _estudio_publico_personal
+    from .publico_institucional import project_study_decision
+    from apps.xcore_consumo.services.otp_crypto import decrypt_text, OTPCryptoError
+    if not oferta_custodia_activa():
+        raise ConflictoFuncional('CUSTODIA_OFERTA_NO_HABILITADA')
+    _firma(s)
+    with connections[alias_cotizacion()].cursor() as cursor:
+        cursor.execute('SELECT request_id,revision_cifrada,decision,operacion_hdc FROM public.credihoy_oferta_estudio_custodia WHERE solicitud_id=%s', [str(s.pk)])
+        rows = cursor.fetchmany(2)
+    if len(rows) != 1:
+        raise ConflictoFuncional('CUSTODIA_OFERTA_ESTUDIO_NO_UNICO')
+    reference, payload, decision, hdc = rows[0]
+    try:
+        if type(payload) is str:
+            payload = json.loads(payload)
+        if type(decision) is str:
+            decision = json.loads(decision)
+        encrypted = payload['resultadoCifrado']
+        if type(encrypted) is not str or not 40 <= len(encrypted) <= 4 * 1024 * 1024:
+            raise ValueError()
+        raw = decrypt_text(encrypted)
+        if hashlib.sha256(raw.encode()).hexdigest() != payload['resultadoSha256']:
+            raise ValueError()
+        revision = json.loads(raw)
+        snapshot = revision['resultado']
+        reference = str(reference)
+        public = _estudio_publico_personal(s, {'numeroDocumento': s.solicitante.numero_identificacion})
+        if public is None:
+            raise ValueError()
+        person = hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest()
+
+        def digest(value):
+            return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
+        if revision['solicitudId'] != str(s.pk) or snapshot['solicitudId'] != str(s.pk) or revision['versionReferencia'] != reference or (snapshot['requestId'] != reference) or (revision['fuentes']['huellaSolicitud']['documentoSha256'] != person) or (public['referenciaVersion'] != reference) or (public['version'] != revision['version']) or (public['evaluacionBaseId'] != revision['evaluacionBaseId']) or (decision['solicitudId'] != str(s.pk)) or (decision['revisionReferencia'] != reference) or (decision['evaluacionSha256'] != digest(snapshot)) or (decision['sha256'] != digest({k: v for k, v in decision.items() if k != 'sha256'})) or (decision['resultado']['reglasOriginales'] != snapshot['reglas']) or (public.get('decisionPolitica') != project_study_decision(decision['resultado'])) or (str(payload['recibo']['operacionHdc']) != str(hdc)):
+            raise ValueError()
+        from datetime import datetime
+        date = datetime.fromisoformat(decision['registradoEn'])
+        if date.utcoffset() is None or date > timezone.now():
+            raise ValueError()
+        projected = [{k: r[k] for k in ('codigo', 'nombre', 'resultado', 'estadoEvaluacion', 'motivos', 'datosFaltantes')} for r in snapshot['reglas']]
+        if public['reglas'] != projected:
+            raise ValueError()
+        evaluation = EvaluacionConsumo.objects.get(pk=revision['evaluacionBaseId'], solicitud=s)
+        base_hash = digest({'input': evaluation.input_snapshot, 'resultados': evaluation.resultados})
+        if revision['fuentes']['huellaSolicitud']['evaluacionSha256'] != base_hash:
+            raise ValueError()
+        from uuid import UUID
+        if str(UUID(decision['operacionId'])) != decision['operacionId']:
+            raise ValueError()
+        return {'resultado': snapshot, 'decisionCustodiada': decision, 'revisionEstudio': {'version': revision['version'], 'versionReferencia': reference, 'versionSha256': payload['resultadoSha256'], 'resultadoSha256': _digest(snapshot), 'estudioSha256': hashlib.sha256(json.dumps(public, sort_keys=True, separators=(',', ':'), ensure_ascii=True, default=str).encode()).hexdigest(), 'evaluacionBaseId': evaluation.pk, 'operacionHdc': str(hdc), 'revisionHdcActiva': evaluation.input_snapshot.get('revisionHdcActiva'), 'condicionesYConsentimientoVerificados': True, 'firmaResumenVerificada': True}}
+    except (KeyError, ValueError, TypeError, AttributeError, OTPCryptoError, EvaluacionConsumo.DoesNotExist):
+        raise ConflictoFuncional('CUSTODIA_OFERTA_EVIDENCIA_NO_VERIFICABLE') from None

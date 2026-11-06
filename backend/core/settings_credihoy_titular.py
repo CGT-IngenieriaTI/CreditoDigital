@@ -297,3 +297,8 @@ CREDIHOY_OTP_CONTRACTUAL_ENVIO_ENABLED = _otp_contractual['ENVIO_ENABLED']
 CREDIHOY_OTP_CONTRACTUAL_HMAC_KEY = _otp_contractual['HMAC_KEY']
 CREDIHOY_OTP_CONTRACTUAL_DB_ALIAS = _otp_contractual['DB_ALIAS']
 CREDIHOY_OTP_CONTRACTUAL_VERIFY_SID = _otp_contractual['VERIFY_SID']
+from apps.integraciones.autentic.pdf_criptografia import referencias_registro_sello
+try:
+    CREDIHOY_AUTENTIC_SELLO_REGISTRO_FILE,CREDIHOY_AUTENTIC_SELLO_AUTORIDAD_FILE=referencias_registro_sello(os.environ)
+except ValueError as error:
+    raise ImproperlyConfigured(str(error)) from None

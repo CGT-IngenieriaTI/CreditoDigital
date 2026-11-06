@@ -367,3 +367,162 @@ class RewriteContentTests(unittest.TestCase):
         report=verificar_sello_proveedor(self.build(),self.build())
         self.assertFalse(report['cadenaConfiable'])
         self.assertEqual(report['codigo'],'RAICES_DE_CONFIANZA_NO_CONFIGURADAS')
+
+
+class AutenticTransformationTests(unittest.TestCase):
+    def pair(self, *, occupied=False, altered=False, extra_operator=False):
+        from pypdf import PdfReader
+        from pypdf.generic import NameObject,DictionaryObject,DecodedStreamObject
+        writer=PdfWriter()
+        for _ in range(4):
+            page=writer.add_blank_page(612,792)
+            page[NameObject('/Resources')]=DictionaryObject({NameObject('/Font'):DictionaryObject()})
+            content=DecodedStreamObject()
+            content.set_data(b'q 0 0 0 rg 335 780 10 6 re f Q' if occupied else b'q Q')
+            page[NameObject('/Contents')]=writer._add_object(content)
+        stream=BytesIO();writer.write(stream);original=stream.getvalue()
+        target=PdfWriter();target.append(PdfReader(BytesIO(original)))
+        identifier='11111111-1111-4111-8111-111111111111'
+        text=('Firmado electr\u00f3nicamente. Documento No. '+identifier).encode('cp1252')
+        footer=(b'q BT 1 0 0 1 332 781 Tm ET /Span <</MCID 0>> BDC BT 1 0 0 1 332 781 Tm ET '
+            b'q 1 1 1 rg 332 778.9 241.75 8.4 re f 0 g Q BT 1 0 0 1 332 781 Tm /Xi0 6 Tf '
+            b'0.34902 0.34902 0.39608 rg ('+text+b') Tj 0 g ET EMC BT 1 0 0 1 573.75 781 Tm ET Q')
+        for number,page in enumerate(target.pages):
+            page['/Resources']['/Font'][NameObject('/Xi0')]=DictionaryObject({
+                NameObject('/Type'):NameObject('/Font'),NameObject('/Subtype'):NameObject('/Type1'),
+                NameObject('/BaseFont'):NameObject('/Helvetica'),NameObject('/Encoding'):NameObject('/WinAnsiEncoding')})
+            body=page.get_contents().get_data()
+            if altered and number==0:body+=b' q 0 0 4 4 re f Q'
+            content=DecodedStreamObject();content.set_data(b'q '+body+b' Q '+footer+(b' q Q' if extra_operator else b''))
+            page[NameObject('/Contents')]=target._add_object(content)
+        target.add_blank_page(612,792)
+        out=BytesIO();target.write(out)
+        return original,out.getvalue()
+
+    def analyze(self,**kwargs):
+        from ..pdf_criptografia import comparar_contenido_pdf
+        a,b=self.pair(**kwargs);return comparar_contenido_pdf(a,b)
+
+    def test_four_to_five_safe_mark_proves_original_visible_but_does_not_auto_accept_annex(self):
+        report=self.analyze();proof=report['transformacionAutentic']
+        self.assertTrue(proof['reconocida'],proof)
+        self.assertTrue(proof['contenidoOriginalVisible'],proof)
+        self.assertFalse(proof['anexoPermitido']);self.assertFalse(report['correspondenciaOriginal'])
+        self.assertEqual(proof['codigo'],'ANEXO_REQUIERE_VINCULO_VERIFICABLE')
+
+    def test_white_mark_cannot_hide_an_existing_graphic_even_if_all_original_operators_remain(self):
+        proof=self.analyze(occupied=True)['transformacionAutentic']
+        self.assertTrue(proof['reconocida']);self.assertTrue(proof['operadoresOriginalesConservados'])
+        self.assertFalse(proof['contenidoOriginalVisible'])
+        self.assertEqual(proof['codigo'],'AUTENTIC_MARCA_OCULTA_O_CAMBIA_GRAFICA_ORIGINAL')
+
+    def test_modified_contract_or_additional_graphical_operator_is_not_the_known_transform(self):
+        for change in ({'altered':True},{'extra_operator':True}):
+            proof=self.analyze(**change)['transformacionAutentic']
+            self.assertFalse(proof['reconocida']);self.assertFalse(proof['anexoPermitido'])
+
+
+class SealRegistryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes,serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa,ed25519
+        from cryptography.x509.oid import NameOID
+        from asn1crypto import x509 as asn1x509,keys
+        from pyhanko.sign import signers
+        from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
+        from pyhanko_certvalidator.registry import SimpleCertificateStore
+        CryptographyTests.setUpClass();cls.original=CryptographyTests.original
+        cls.now=datetime.now(timezone.utc);key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+        name=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,'SYNTHETIC PROVIDER SEAL ONLY')])
+        cert=(x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(cls.now-timedelta(days=1))
+            .not_valid_after(cls.now+timedelta(days=1)).add_extension(x509.BasicConstraints(ca=False,path_length=None),True)
+            .add_extension(x509.KeyUsage(True,True,False,False,False,False,False,False,False),True)
+            .sign(key,hashes.SHA256()))
+        cls.cert=cert.public_bytes(serialization.Encoding.DER)
+        cls.spki=sha256(key.public_key().public_bytes(serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo)).hexdigest()
+        signer=signers.SimpleSigner(signing_cert=asn1x509.Certificate.load(cls.cert),
+            signing_key=keys.PrivateKeyInfo.load(key.private_bytes(serialization.Encoding.DER,
+                serialization.PrivateFormat.PKCS8,serialization.NoEncryption())),cert_registry=SimpleCertificateStore())
+        cls.signed=signers.sign_pdf(IncrementalPdfFileWriter(BytesIO(cls.original)),
+            signature_meta=signers.PdfSignatureMetadata(field_name='SyntheticSignature'),signer=signer).getvalue()
+        cls.authority=ed25519.Ed25519PrivateKey.generate()
+        cls.public=cls.authority.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)
+
+    def envelope(self, *, revoked=False):
+        import base64
+        p={'version':'AUTENTIC_SELLO_REGISTRO_V1','proveedor':'AUTENTIC','ambiente':'DEV',
+            'referencia':'SYNTHETIC AUTHORITY NOT INSTITUTIONAL','emitidoEn':(self.now-timedelta(minutes=1)).isoformat(),
+            'vigenteHasta':(self.now+timedelta(hours=1)).isoformat(),'certificados':[{
+                'certificadoSha256':sha256(self.cert).hexdigest(),'spkiSha256':self.spki,
+                'estado':'REVOCADO' if revoked else 'ACTIVO','vigenteDesde':(self.now-timedelta(hours=1)).isoformat(),
+                'vigenteHasta':(self.now+timedelta(hours=1)).isoformat(),
+                'revocadoEn':(self.now-timedelta(seconds=1)).isoformat() if revoked else None,
+                'fuenteIndependiente':'SYNTHETIC OUT-OF-BAND CERTIFICATE REFERENCE'}]}
+        raw=json.dumps(p,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()
+        return {'payload':p,'firmaBase64':base64.b64encode(self.authority.sign(raw)).decode()}
+
+    def verify(self, **kwargs):
+        from ..pdf_criptografia import verificar_sello_proveedor
+        return verificar_sello_proveedor(self.original,self.signed,momento=self.now,
+            registro_sello=kwargs.pop('registro_sello',self.envelope()),
+            autoridad_sello=kwargs.pop('autoridad_sello',self.public),**kwargs)
+
+    def test_private_registry_loader_rejects_duplicate_json_same_file_and_invalid_authority(self):
+        import base64
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from ..pdf_criptografia import cargar_registro_sello
+        with TemporaryDirectory() as folder:
+            root=Path(folder);registry=root/'registry.json';authority=root/'authority.pub'
+            registry.write_text(json.dumps(self.envelope()),encoding='utf-8')
+            authority.write_bytes(base64.b64encode(self.public))
+            registry.chmod(0o600);authority.chmod(0o600)
+            envelope,key=cargar_registro_sello(str(registry),str(authority))
+            self.assertTrue(self.verify(registro_sello=envelope,autoridad_sello=key)['cadenaConfiable'])
+            for paths in ((registry,registry),(Path('relative.json'),authority)):
+                with self.assertRaisesRegex(ValueError,'CUSTODIA_REGISTRO_SELLO_INVALIDA'):
+                    cargar_registro_sello(*(str(p) for p in paths))
+            registry.write_text('{"payload":{},"payload":{},"firmaBase64":""}',encoding='utf-8')
+            with self.assertRaisesRegex(ValueError,'CUSTODIA_REGISTRO_SELLO_INVALIDA'):
+                cargar_registro_sello(str(registry),str(authority))
+            registry.write_text(json.dumps(self.envelope()),encoding='utf-8')
+            authority.write_bytes(b'not-a-public-key')
+            with self.assertRaisesRegex(ValueError,'CUSTODIA_REGISTRO_SELLO_INVALIDA'):
+                cargar_registro_sello(str(registry),str(authority))
+
+    def test_signed_registry_rotation_unknown_certificate_wrong_spki_and_duplicates_fail_closed(self):
+        import base64
+        def resign(envelope):
+            envelope['firmaBase64']=base64.b64encode(self.authority.sign(json.dumps(envelope['payload'],
+                sort_keys=True,separators=(',',':'),ensure_ascii=True).encode())).decode()
+            return envelope
+        for field,expected in (('certificadoSha256','SELLO_NO_REGISTRADO'),('spkiSha256','SELLO_CLAVE_NO_CORRESPONDE')):
+            envelope=self.envelope();envelope['payload']['certificados'][0][field]='0'*64
+            self.assertEqual(self.verify(registro_sello=resign(envelope))['codigo'],expected)
+        envelope=self.envelope();envelope['payload']['certificados']*=2
+        self.assertEqual(self.verify(registro_sello=resign(envelope))['codigo'],'REGISTRO_SELLO_CERTIFICADOS_INVALIDOS')
+
+    def test_independently_signed_registry_can_pin_a_self_signed_seal_without_claiming_personal_identity_or_tsa(self):
+        report=self.verify()
+        self.assertTrue(report['firmaIntegra'],report);self.assertTrue(report['cadenaConfiable'],report)
+        self.assertFalse(report['fechaConfiableTSA'])
+        self.assertEqual(report['revocacion'],'NO_REVOCADO_SEGUN_REGISTRO_INSTITUCIONAL_VIGENTE')
+
+    def test_revoked_or_unknown_rotated_certificate_does_not_become_trusted(self):
+        self.assertEqual(self.verify(registro_sello=self.envelope(revoked=True))['codigo'],'SELLO_REVOCADO')
+        envelope=self.envelope();envelope['payload']['certificados'][0]['estado']='REVOCADO'
+        self.assertEqual(self.verify(registro_sello=envelope)['codigo'],'REGISTRO_SELLO_FIRMA_O_CONTRATO_INVALIDO')
+
+    def test_other_authority_environment_expiry_and_pdf_supplied_root_cannot_authorize_trust(self):
+        from ..pdf_criptografia import verificar_sello_proveedor
+        self.assertFalse(self.verify(autoridad_sello=b'x'*32)['cadenaConfiable'])
+        self.assertFalse(self.verify(ambiente='PRODUCCION')['cadenaConfiable'])
+        self.assertFalse(verificar_sello_proveedor(self.original,self.signed,raices=[self.cert],momento=self.now)['cadenaConfiable'])
+        with patch('apps.integraciones.autentic.pdf_criptografia.datetime') as clock:
+            clock.now.return_value=self.now+timedelta(hours=2)
+            report=verificar_sello_proveedor(self.original,self.signed,registro_sello=self.envelope(),autoridad_sello=self.public)
+        self.assertFalse(report['cadenaConfiable']);self.assertEqual(report['codigo'],'REGISTRO_SELLO_VENCIDO_O_SIN_ZONA')

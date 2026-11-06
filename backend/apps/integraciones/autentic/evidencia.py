@@ -177,7 +177,7 @@ def verificar_firma_contractual(*,original,firmado,transaccion,documento_identid
 
 
 def analizar_firma_electronica_contractual(*, original, firmado, contexto, aceptacion,
-        raices=(), crls=(), ocsps=(), momento=None):
+        raices=(), crls=(), ocsps=(), momento=None,registro_sello=None,autoridad_sello=None):
     """Institutional OTP act plus provider seal, distinct from personal PKI signing.
 
     `aceptacion` must come from the native read-only acceptance verifier. Provider
@@ -239,7 +239,8 @@ def analizar_firma_electronica_contractual(*, original, firmado, contexto, acept
             confirmadoOTPEn=aceptacion.verificado_en.isoformat(),
             referenciaTemporal='AUDITORIA_OTP_INSTITUCIONAL', correlacionExpediente=True,
             reciboProveedor=True, procedenciaDescarga=True)
-        seal = verificar_sello_proveedor(original, firmado, raices=raices, crls=crls, ocsps=ocsps, momento=now)
+        seal = verificar_sello_proveedor(original, firmado, raices=raices, crls=crls, ocsps=ocsps, momento=now,
+            registro_sello=registro_sello,autoridad_sello=autoridad_sello,ambiente=receipt.ambiente)
         result['selloProveedor'] = seal
         result['fechaConfiableTSA'] = seal['fechaConfiableTSA']
         if not seal['contenido']['correspondenciaOriginal']:

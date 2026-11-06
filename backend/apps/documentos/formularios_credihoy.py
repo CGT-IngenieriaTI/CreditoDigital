@@ -6,6 +6,8 @@
 
 
 
+
+
 from contextvars import ContextVar
 from hashlib import sha256
 from io import BytesIO
@@ -539,8 +541,14 @@ def inspeccionar_evidencia_custodiada(solicitud_id, *, actor, envio_id, titular=
             context = {'solicitudId': str(case.pk), 'envioId': key, 'documentoOperacionId': binding['documentoOperacionId'], 'vinculo': binding, 'recibo': receipt, 'descarga': download, 'estado': entry['estado'], 'preparadoEn': entry['preparadoEn']}
             if 'aceptacionContractualReferencia' in binding:
                 from apps.integraciones.autentic.evidencia import analizar_firma_electronica_contractual
+                from apps.integraciones.autentic.pdf_criptografia import cargar_registro_sello
                 from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import validar_aceptacion_contractual
                 acceptance = validar_aceptacion_contractual(case, key, meta['pdfSha256'])
+                registry = getattr(settings, 'CREDIHOY_AUTENTIC_SELLO_REGISTRO_FILE', '')
+                authority = getattr(settings, 'CREDIHOY_AUTENTIC_SELLO_AUTORIDAD_FILE', '')
+                if registry or authority:
+                    envelope, public_key = cargar_registro_sello(registry, authority)
+                    trust.update(registro_sello=envelope, autoridad_sello=public_key)
                 result = analizar_firma_electronica_contractual(original=original, firmado=signed, contexto=context, aceptacion=acceptance, **trust)
             else:
                 result = analizar_firma_documental(original=original, firmado=signed, transaccion=receipt['transaccion'], document_number=entry.get('documentNumber'), documento_identidad=case.solicitante.numero_identificacion, **trust, politicas_titular=getattr(settings, 'CREDIHOY_AUTENTIC_PDF_POLITICAS_TITULAR', ()), contexto=context)

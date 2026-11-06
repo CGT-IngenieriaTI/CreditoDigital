@@ -213,6 +213,11 @@ XCORE_CONSUMO_ORACLE_ENABLED = CREDIT_PIPELINE_ASYNC = CREDIT_USE_MOCK_SERVICES 
 EMAIL_BACKEND = 'django.core.mail.backends.dummy.EmailBackend'
 
 # Deployment metadata only. Credential contents are loaded by the existing task.
+from apps.integraciones.autentic.pdf_criptografia import referencias_registro_sello
+try:
+    CREDIHOY_AUTENTIC_SELLO_REGISTRO_FILE,CREDIHOY_AUTENTIC_SELLO_AUTORIDAD_FILE=referencias_registro_sello(os.environ)
+except ValueError as error:
+    raise ImproperlyConfigured(str(error)) from None
 _recuperacion = os.environ.get('CREDIHOY_AUTENTIC_RECUPERACION_ENABLED', '0')
 if _recuperacion not in ('0', '1'):
     raise ImproperlyConfigured('Habilitacion de recuperacion Autentic invalida')

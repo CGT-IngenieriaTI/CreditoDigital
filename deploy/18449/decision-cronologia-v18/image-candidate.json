@@ -1,0 +1,15 @@
+{
+  "imagenBase": "sha256:e8d93bfb182c700b1306432ba086db887433e20dc4b734fcd207bc910dd739ed",
+  "imagenConfigId": "sha256:2a542e5eabe1c3c531c921864fab161591e8ba2c9785414af24627c65a37b487",
+  "archivoSha256": "1f83ca7755d4fe5daff038c0aa121676a66ba481314db50e1de7162c33e85c84",
+  "manifest": {
+    "hashes": {
+      "apps/xcore_consumo/services/credihoy_v2/unico/elegibilidad.py": "fbdff5ea4a9a5e1fe3039230660f3c58e6b0b372d1ed2759827ec1eaa01f0219",
+      "apps/xcore_consumo/services/credihoy_v2/unico/funcional.py": "e86d4ee56d97ff6311186319d31b9193312f960de5f1dab02479dda6f25807ea"
+    },
+    "version": "backend-c-decision-cronologia-v18"
+  },
+  "capas": 125,
+  "capasBase": 123,
+  "publicado": false
+}

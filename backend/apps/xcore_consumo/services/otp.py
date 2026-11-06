@@ -1,6 +1,8 @@
 
 
 
+
+
 from apps.xcore_consumo.services.consentimiento_integridad import build_consent_hash
 import hashlib
 import random
@@ -20,7 +22,6 @@ from apps.utils.logging import audit_event
 from apps.xcore_consumo.models import CanalOtp, ConsentimientoConsumo, EstadoOtp, EstadoSolicitudConsumo, OtpChallenge
 from apps.xcore_consumo.services.consent_pdf import build_consent_footer_pdf
 from apps.xcore_consumo.services.otp_crypto import OTPCryptoError, decrypt_text, encrypt_text
-from apps.xcore_consumo.services.orchestration import persist_orchestration_snapshot
 from apps.xcore_consumo.services.twilio_verify import TwilioVerifyClient, TwilioVerifyError
 
 PROVIDER_TWILIO_VERIFY = "twilio_verify"
@@ -437,3 +438,8 @@ def build_consent_hash(version: str, text_snapshot: str, transaction_uuid: str =
     source = f"{version}|{text_snapshot}|{transaction_uuid}|{channel}|{verified_value}"
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
+
+
+def persist_orchestration_snapshot(detail):
+    from apps.xcore_consumo.services.orchestration import persist_orchestration_snapshot as persistir
+    return persistir(detail)

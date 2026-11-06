@@ -24,6 +24,8 @@
 
 
 
+
+
 from decimal import Decimal
 from dataclasses import replace
 import hashlib
@@ -83,7 +85,9 @@ def obtener_para_evaluacion(solicitud_id, operador, *, autogestion=False, lock=F
         AuditLog.objects.get(solicitud=case, event='credihoy_continuacion_evento_completado_v1', request_id=intent.request_id)
         reserved = AuditLog.objects.filter(solicitud=case, event='credihoy_cupo_hdc_reservado_v1').exists()
         scope = getattr(settings, 'CREDIHOY_REVISION_CUSTODIADA_SOLICITUDES', ())
-        historical = type(scope) in (list, tuple) and len(scope) <= 20 and (str(case.pk) in scope) and (case.metadatos.get('consumoRealAutorizado') is True) and AuditLog.objects.filter(solicitud=case, event='credihoy_autorizacion_consumo', payload__autorizado=True).exists()
+        original = case.metadatos.get('autorizacionEconomicaCredihoy')
+        legacy = type(original) is dict and original.get('entorno') == 'PRODUCCION_CONTROLADA' and (original.get('proveedores') == ['HDC']) and (type(original.get('maximoConsultasPorProveedor')) is int) and (original['maximoConsultasPorProveedor'] == 1) and (original.get('reintentosAutomaticos') is False) and (type(original.get('referenciaAutorizacionConsumo')) is str) and bool(original['referenciaAutorizacionConsumo'].strip()) and (AuditLog.objects.filter(solicitud=case, event='credihoy_autorizacion_consumo', request_id=original['referenciaAutorizacionConsumo'], payload__condiciones=original, payload__maximoPOST=1).count() == 1)
+        historical = type(scope) in (list, tuple) and len(scope) <= 20 and (str(case.pk) in scope) and (case.metadatos.get('consumoRealAutorizado') is True) and (legacy or AuditLog.objects.filter(solicitud=case, event='credihoy_autorizacion_consumo', payload__autorizado=True).exists())
         if not reserved and (not historical):
             raise ConflictoFuncional('REVISION_SIN_ALCANCE_INSTITUCIONAL')
         operation = OperacionGateway.objects.filter(pk=evaluation.input_snapshot[KEY_HDC]['operacionId'], solicitud=case, consentimiento=_firma(case), proveedor='HDC', estado='COMPLETADA').first()

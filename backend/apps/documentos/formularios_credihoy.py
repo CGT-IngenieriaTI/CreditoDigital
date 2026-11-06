@@ -1,5 +1,7 @@
 """Official AcroForms, not reconstructed documents or electronic signatures."""
 
+
+
 from contextvars import ContextVar
 from hashlib import sha256
 from io import BytesIO
@@ -124,8 +126,11 @@ def _contexto_formato(solicitud_id, actor, titular, permiso, *, bloquear=False):
         return (_expediente_documental(solicitud_id, actor, bloquear=bloquear), 'default', str(actor.pk))
     if actor is not None:
         raise ValueError('NO_MEZCLAR_ACTOR_Y_TITULAR')
-    from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import obtener_autogestion
-    case, alias = obtener_autogestion(solicitud_id, titular, lock=bloquear)
+    from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import obtener_autogestion, _contexto_contractual, CONTRACTUAL_SCOPE
+    if titular.get('_scopeContractual') == CONTRACTUAL_SCOPE:
+        case, alias = _contexto_contractual(solicitud_id, titular, lock=bloquear)
+    else:
+        case, alias = obtener_autogestion(solicitud_id, titular, lock=bloquear)
     return (case, alias, 'titular:' + titular['_sesionReferencia'])
 
 
@@ -358,10 +363,16 @@ def enviar_formato_custodiado(solicitud_id, *, actor, operacion_id, metadata, cl
     formalization = None
     proof = None
     if titular is not None:
-        from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import preparar_envio_autogestion
-        if not isinstance(registro, RegistroFirmasExpediente) or registro.alias != alias or str(registro.solicitud_id) != str(case.pk) or (registro.envio_id != key) or (registro.seccion != 'journalFirma') or (document['codigo'] != 'COLO-FO.023'):
+        from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import preparar_envio_autogestion, preparar_envio_contractual, CONTRACTUAL_SCOPE
+        contractual = titular.get('_scopeContractual') == CONTRACTUAL_SCOPE
+        if not isinstance(registro, RegistroFirmasExpediente) or registro.alias != alias or str(registro.solicitud_id) != str(case.pk) or (registro.envio_id != key) or (registro.seccion != 'journalFirma') or (document['codigo'] != ('COLO-FO.001' if contractual else 'COLO-FO.023')):
             raise ValueError('JOURNAL_PERSONAL_NO_VINCULADO')
-        request, proof = preparar_envio_autogestion(case.pk, titular, identidad_firmante=identidad_firmante, clave=key, autoriza_firma=autoriza_firma)
+        if contractual:
+            if autoriza_firma is not True:
+                raise ValueError('ACTO_PERSONAL_DE_FIRMA_REQUERIDO')
+            request, proof = preparar_envio_contractual(case.pk, titular, key)
+        else:
+            request, proof = preparar_envio_autogestion(case.pk, titular, identidad_firmante=identidad_firmante, clave=key, autoriza_firma=autoriza_firma)
         if proof['documentoOperacionId'] != str(operacion_id):
             raise ValueError('PDF_DE_OTRA_ACEPTACION')
         metadata = request.payload['metadata']
@@ -378,6 +389,8 @@ def enviar_formato_custodiado(solicitud_id, *, actor, operacion_id, metadata, cl
         data = detail.orchestration_data
         history = dict(data.get(history_key, {}))
         binding = {'solicitudId': str(case.pk), 'documentoOperacionId': str(operacion_id), 'codigo': document['codigo'], 'pdfSha256': document['pdfSha256'], 'firmanteReferencia': sha256(metadata['docId'].encode()).hexdigest(), 'fingerprint': request.fingerprint, 'referenciaAutorizacion': referencia_autorizacion}
+        if proof is not None and document['codigo'] == 'COLO-FO.001':
+            binding.update(aceptacionContractualReferencia=proof['referencia'], secureKeySha256=sha256(metadata['secureKey'].encode()).hexdigest())
         if key in history:
             if history[key]['vinculo'] != binding:
                 raise ValueError('IDEMPOTENCIA_DOCUMENTO_CONFLICTO')
@@ -385,12 +398,17 @@ def enviar_formato_custodiado(solicitud_id, *, actor, operacion_id, metadata, cl
         if any((v['vinculo']['pdfSha256'] == document['pdfSha256'] for v in history.values())):
             raise ValueError('DOCUMENTO_YA_RECLAMADO_CONCILIAR')
         if document['codigo'] == 'COLO-FO.001':
+            if titular is None or not contractual or proof is None:
+                raise ValueError('FIRMA_CONTRACTUAL_REQUIERE_ACTO_PERSONAL_Y_OTP')
             quote = _exigir_condiciones_definitivas(case)
             if not document.get('composicionSha256') or document['composicionSha256'] != quote.get('composicionSha256'):
                 raise ValueError('COLO001_COMPOSICION_CAMBIO')
             formalization = _vinculo_formalizacion(case, document)
         if titular is not None:
-            repeated, reproof = preparar_envio_autogestion(case.pk, titular, identidad_firmante=identidad_firmante, clave=key, autoriza_firma=autoriza_firma)
+            if contractual:
+                repeated, reproof = preparar_envio_contractual(case.pk, titular, key)
+            else:
+                repeated, reproof = preparar_envio_autogestion(case.pk, titular, identidad_firmante=identidad_firmante, clave=key, autoriza_firma=autoriza_firma)
             if repeated.fingerprint != request.fingerprint or reproof != proof:
                 raise ValueError('IDENTIDAD_FIRMA_CAMBIO')
         history[key] = {'vinculo': binding, 'estado': 'ENVIANDO', 'actorId': actor_ref, **({'formalizacion': formalization} if formalization is not None else {}), **({'pruebaIdentidadFirma': proof} if proof is not None else {}), 'preparadoEn': timezone.now().isoformat()}
@@ -514,7 +532,14 @@ def inspeccionar_evidencia_custodiada(solicitud_id, *, actor, envio_id, titular=
                     if sha256(raw).hexdigest() != item['sha256']:
                         raise ValueError('CONFIANZA_DOCUMENTAL_CAMBIO')
                     trust[purpose].append(raw)
-            result = analizar_firma_documental(original=original, firmado=signed, transaccion=receipt['transaccion'], document_number=entry.get('documentNumber'), documento_identidad=case.solicitante.numero_identificacion, **trust, politicas_titular=getattr(settings, 'CREDIHOY_AUTENTIC_PDF_POLITICAS_TITULAR', ()), contexto={'solicitudId': str(case.pk), 'envioId': key, 'documentoOperacionId': binding['documentoOperacionId'], 'vinculo': binding, 'recibo': receipt, 'descarga': download, 'estado': entry['estado'], 'preparadoEn': entry['preparadoEn']})
+            context = {'solicitudId': str(case.pk), 'envioId': key, 'documentoOperacionId': binding['documentoOperacionId'], 'vinculo': binding, 'recibo': receipt, 'descarga': download, 'estado': entry['estado'], 'preparadoEn': entry['preparadoEn']}
+            if 'aceptacionContractualReferencia' in binding:
+                from apps.integraciones.autentic.evidencia import analizar_firma_electronica_contractual
+                from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import validar_aceptacion_contractual
+                acceptance = validar_aceptacion_contractual(case, key, meta['pdfSha256'])
+                result = analizar_firma_electronica_contractual(original=original, firmado=signed, contexto=context, aceptacion=acceptance, **trust)
+            else:
+                result = analizar_firma_documental(original=original, firmado=signed, transaccion=receipt['transaccion'], document_number=entry.get('documentNumber'), documento_identidad=case.solicitante.numero_identificacion, **trust, politicas_titular=getattr(settings, 'CREDIHOY_AUTENTIC_PDF_POLITICAS_TITULAR', ()), contexto=context)
         stable = {k: v for k, v in result.items() if k not in {'verificadoEn', 'sha256'}}
         digest = sha256(json.dumps(stable, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         if entry.get('verificacionSha256') != digest:
@@ -664,54 +689,47 @@ def custodiar_simulacion_ensayo(solicitud_id,*,actor,escenario,clave_idempotenci
             key=key,pdf=pdf,meta=meta,event='CREDIHOY_PDF_ENSAYO_SIMULACION_CUSTODIADO')
 
 
-def recuperar_formato(solicitud_id, *, actor, operacion_id,titular=None,proposito=None):
+def recuperar_formato(solicitud_id, *, actor, operacion_id, titular=None, proposito=None):
     import base64
     from uuid import UUID
     from apps.xcore_consumo.models import SolicitudConsumo
     from apps.xcore_consumo.services.otp_crypto import decrypt_text
-    if proposito is not None and (titular is None or proposito!='SIMULACION_NO_CONTRACTUAL'):
+    if proposito is not None and (titular is None or proposito != 'SIMULACION_NO_CONTRACTUAL'):
         raise ValueError('PROPOSITO_RECUPERACION_NO_ADMITIDO')
-    case,alias,_=_contexto_formato(solicitud_id,actor,titular,'view_versiondocumental')
-    key=str(UUID(str(operacion_id)))
+    case, alias, _ = _contexto_formato(solicitud_id, actor, titular, 'view_versiondocumental')
+    key = str(UUID(str(operacion_id)))
     from apps.utils.models import AuditLog
-    trial=AuditLog.objects.using(alias).filter(solicitud=case,
-        event='CREDIHOY_PDF_ENSAYO_SIMULACION_CUSTODIADO',request_id=key)
-    if trial.count()>1:raise ValueError('CUSTODIA_DOCUMENTAL_DUPLICADA')
+    trial = AuditLog.objects.using(alias).filter(solicitud=case, event='CREDIHOY_PDF_ENSAYO_SIMULACION_CUSTODIADO', request_id=key)
+    if trial.count() > 1:
+        raise ValueError('CUSTODIA_DOCUMENTAL_DUPLICADA')
     if trial.exists():
-        if titular is not None and proposito!='SIMULACION_NO_CONTRACTUAL':
+        if titular is not None and proposito != 'SIMULACION_NO_CONTRACTUAL':
             raise ValueError('PDF_SIMULACION_REQUIERE_PROPOSITO_EXPLICITO')
-        stored=trial.get().payload
-        envelope=json.loads(decrypt_text(stored['contenidoCifrado']))
-        pdf=base64.b64decode(envelope['pdfBase64'],validate=True)
-        if (envelope['solicitudId']!=str(case.pk) or envelope['operacionId']!=key
-                or envelope['metadata']!=stored['metadata'] or stored['codigo']!=PDF_ENSAYO
-                or stored['metadata']['codigo']!=PDF_ENSAYO
-                or sha256(pdf).hexdigest()!=stored['metadata']['pdfSha256']
-                or stored['sha256']!=stored['metadata']['pdfSha256']):
+        stored = trial.get().payload
+        envelope = json.loads(decrypt_text(stored['contenidoCifrado']))
+        pdf = base64.b64decode(envelope['pdfBase64'], validate=True)
+        if envelope['solicitudId'] != str(case.pk) or envelope['operacionId'] != key or envelope['metadata'] != stored['metadata'] or (stored['codigo'] != PDF_ENSAYO) or (stored['metadata']['codigo'] != PDF_ENSAYO) or (sha256(pdf).hexdigest() != stored['metadata']['pdfSha256']) or (stored['sha256'] != stored['metadata']['pdfSha256']):
             raise ValueError('CUSTODIA_DOCUMENTAL_NO_INTEGRA')
         if titular is not None:
-            meta=stored['metadata'];packet=meta.get('simulacion',{})
-            if (actor is not None or type(titular.get('numeroDocumento')) is not str
-                    or sha256(titular['numeroDocumento'].encode()).hexdigest()!=sha256(case.solicitante.numero_identificacion.encode()).hexdigest()
-                    or meta.get('solicitudId')!=str(case.pk) or meta.get('estado')!='SIMULACION_NO_CONTRACTUAL'
-                    or meta.get('versionContrato')!='credihoy-pdf-simulacion-ensayo-v1'
-                    or packet.get('solicitudId')!=str(case.pk) or packet.get('requestId')!=key
-                    or meta.get('simulacionSha256')!=sha256(json.dumps(packet,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-                    or any(meta.get(k) is not False for k in ('firmaAcreditada','envioHabilitado','ofertable',
-                        'aceptacionAcreditada','autorizaStart','autorizaDesembolso'))
-                    or any(packet.get(k) is not False for k in ('ofertable','autorizaDecision','autorizaStart','autorizaDesembolso'))):
+            meta = stored['metadata']
+            packet = meta.get('simulacion', {})
+            if actor is not None or type(titular.get('numeroDocumento')) is not str or sha256(titular['numeroDocumento'].encode()).hexdigest() != sha256(case.solicitante.numero_identificacion.encode()).hexdigest() or (meta.get('solicitudId') != str(case.pk)) or (meta.get('estado') != 'SIMULACION_NO_CONTRACTUAL') or (meta.get('versionContrato') != 'credihoy-pdf-simulacion-ensayo-v1') or (packet.get('solicitudId') != str(case.pk)) or (packet.get('requestId') != key) or (meta.get('simulacionSha256') != sha256(json.dumps(packet, sort_keys=True, separators=(',', ':')).encode()).hexdigest()) or any((meta.get(k) is not False for k in ('firmaAcreditada', 'envioHabilitado', 'ofertable', 'aceptacionAcreditada', 'autorizaStart', 'autorizaDesembolso'))) or any((packet.get(k) is not False for k in ('ofertable', 'autorizaDecision', 'autorizaStart', 'autorizaDesembolso'))):
                 raise ValueError('PDF_SIMULACION_DE_OTRO_TITULAR_O_PROPOSITO')
-        return pdf,dict(stored['metadata'])
-    if proposito is not None:raise ValueError('PDF_SIMULACION_EXISTENTE_NO_ENCONTRADO')
-    detail=SolicitudConsumo.objects.using(alias).get(solicitud=case)
-    stored=detail.orchestration_data['credihoy_pdf_oficiales_v1'][key]
-    if titular is not None and stored['metadata']['codigo']!='COLO-FO.023':raise ValueError('CANAL_TITULAR_SOLO_COLO023')
-    envelope=json.loads(decrypt_text(stored['contenidoCifrado']))
-    pdf=base64.b64decode(envelope['pdfBase64'],validate=True)
-    if (envelope['solicitudId']!=str(case.pk) or envelope['operacionId']!=key
-            or envelope['metadata']!=stored['metadata'] or sha256(pdf).hexdigest()!=stored['metadata']['pdfSha256']):
+        return (pdf, dict(stored['metadata']))
+    if proposito is not None:
+        raise ValueError('PDF_SIMULACION_EXISTENTE_NO_ENCONTRADO')
+    detail = SolicitudConsumo.objects.using(alias).get(solicitud=case)
+    stored = detail.orchestration_data['credihoy_pdf_oficiales_v1'][key]
+    if titular is not None:
+        from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import CONTRACTUAL_SCOPE
+        expected = 'COLO-FO.001' if titular.get('_scopeContractual') == CONTRACTUAL_SCOPE else 'COLO-FO.023'
+        if stored['metadata']['codigo'] != expected:
+            raise ValueError('CANAL_TITULAR_DOCUMENTO_DE_OTRO_PROPOSITO')
+    envelope = json.loads(decrypt_text(stored['contenidoCifrado']))
+    pdf = base64.b64decode(envelope['pdfBase64'], validate=True)
+    if envelope['solicitudId'] != str(case.pk) or envelope['operacionId'] != key or envelope['metadata'] != stored['metadata'] or (sha256(pdf).hexdigest() != stored['metadata']['pdfSha256']):
         raise ValueError('CUSTODIA_DOCUMENTAL_NO_INTEGRA')
-    return pdf,dict(stored['metadata'])
+    return (pdf, dict(stored['metadata']))
 
 
 def _vinculo_formalizacion(case, document):

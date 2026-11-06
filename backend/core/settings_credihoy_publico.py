@@ -35,6 +35,12 @@ def secreto(name):
 
 
 DEBUG = False
+CREDIHOY_PERFIL_DISPONIBILIDAD = os.environ.get('CREDIHOY_PERFIL_DISPONIBILIDAD', 'PILOT_WINDOW')
+if CREDIHOY_PERFIL_DISPONIBILIDAD not in ('PILOT_WINDOW', 'PERMANENT_PRIVATE_V1'):
+    raise ImproperlyConfigured('Perfil de disponibilidad desconocido')
+_privado_permanente = CREDIHOY_PERFIL_DISPONIBILIDAD == 'PERMANENT_PRIVATE_V1'
+if _privado_permanente and os.environ.get('DJANGO_SETTINGS_MODULE') != 'core.settings_credihoy_institucional':
+    raise ImproperlyConfigured('Disponibilidad privada requiere perfil institucional explicito')
 _ensayo_privado = os.environ.get('DJANGO_SETTINGS_MODULE') in {
     'core.settings_credihoy_restringido', 'core.settings_credihoy_institucional'}
 CREDIHOY_ACCESO_MANTENIMIENTO = _ensayo_privado and os.environ.get('CREDIHOY_PUBLICO_ENABLED') != '1'
@@ -78,7 +84,12 @@ try:
     if type(CREDIHOY_AUTOSERVICIO_ENABLED) is not bool:
         raise ValueError
     access_times = validar_plazos(CREDIHOY_PUBLICO_VALIDACION)
-    if _ensayo_privado:
+    if _privado_permanente:
+        if (cfg.get('disponibilidad') != CREDIHOY_PERFIL_DISPONIBILIDAD or cfg.get('ensayo')
+                or CREDIHOY_ADMISION_ENSAYO or CREDIHOY_PUBLICO_IDENTIDADES_HMAC != []
+                or CREDIHOY_PUBLICO_AUTORIZACION_HASTA != ''):
+            raise ValueError
+    elif _ensayo_privado:
         ensayo = cfg['ensayo']
         if (ensayo['modo'] != 'ENSAYO_HTTPS_RESTRINGIDO' or ensayo['aperturaPublica'] is not False
                 or ensayo['avisoFormalAprobado'] is not False or not ensayo['referenciaOperativa']):
@@ -98,6 +109,8 @@ except (KeyError, ValueError, TypeError):
 CREDIHOY_PUBLICO_ENABLED = os.environ.get('CREDIHOY_PUBLICO_ENABLED') == '1'
 CREDIHOY_PUBLICO_RESTRINGIDO = _ensayo_privado
 CREDIHOY_PUBLICO_MODO = 'ENSAYO_HTTPS_RESTRINGIDO' if _ensayo_privado else 'PUBLICO_HTTPS'
+if _privado_permanente:
+    CREDIHOY_PUBLICO_MODO = 'INSTITUTIONAL_PERMANENT'
 CREDIHOY_PUBLICO_BOT_SECRET = '' if _ensayo_privado else secreto('CREDIHOY_PUBLICO_BOT_SECRET')
 OTP_AES_KEY_B64 = secreto('CREDIHOY_PUBLICO_OTP_AES_KEY_B64')
 try:
@@ -125,6 +138,13 @@ API_DATA_CREDIHOY_BASE_URL = requerido('API_DATA_CREDIHOY_BASE_URL')
 API_DATA_CREDIHOY_CLIENT_ID = '' if CREDIHOY_ACCESO_MANTENIMIENTO else secreto('API_DATA_CREDIHOY_CLIENT_ID')
 API_DATA_CREDIHOY_CLIENT_SECRET = '' if CREDIHOY_ACCESO_MANTENIMIENTO else secreto('API_DATA_CREDIHOY_CLIENT_SECRET')
 API_DATA_CREDIHOY_TOKEN = ''
+CREDIHOY_IDENTIDAD_GRANTS_ENABLED = os.environ.get('CREDIHOY_IDENTIDAD_GRANTS_ENABLED', '0') == '1'
+if os.environ.get('CREDIHOY_IDENTIDAD_GRANTS_ENABLED', '0') not in ('0', '1'):
+    raise ImproperlyConfigured('Habilitacion de grants invalida')
+if CREDIHOY_IDENTIDAD_GRANTS_ENABLED:
+    CREDIHOY_IDENTIDAD_CREDENTIAL_FILE = requerido('CREDIHOY_IDENTIDAD_CREDENTIAL_FILE')
+    if not Path(CREDIHOY_IDENTIDAD_CREDENTIAL_FILE).is_absolute():
+        raise ImproperlyConfigured('Politica identidad requiere referencia absoluta')
 if urlsplit(API_DATA_CREDIHOY_BASE_URL).scheme != 'https':
     raise ImproperlyConfigured('API_DATA requiere HTTPS verificado')
 DATABASES = {'default': {'ENGINE': 'django.db.backends.postgresql',

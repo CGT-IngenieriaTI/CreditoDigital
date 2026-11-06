@@ -16,6 +16,8 @@
 
 
 
+
+
 from decimal import Decimal
 from dataclasses import replace
 import hashlib
@@ -782,7 +784,7 @@ def huella_consumo_estudio(detail, version='credihoy-estudio-tecnico-firmado-v1'
         value = detail
     elif version == 'credihoy-estudio-tecnico-firmado-v2':
         value = {k: deepcopy(detail[k]) for k in ('id', 'solicitud_id', 'created_at', 'form_data', 'core_data', 'selected_hc2_keys')}
-        downstream = {'credihoy_cotizacion_institucional', 'credihoy_cotizacion_institucional_escenarios_v1', 'credihoy_calendario_pago_v1', 'credihoy_calendario_pago_v1_revalidacion', 'credihoy_calendario_pago_v1_revalidacion_historial', 'credihoy_composiciones_contractuales_v1', 'credihoy_ofertas_linix_v1', 'credihoy_oferta_linix_actual', 'credihoy_aceptaciones_oferta_v1', 'credihoy_autentic_envios_v1', 'credihoy_autentic_identidad_v1', 'credihoy_formalizacion_autentic_v1'}
+        downstream = {'credihoy_cotizacion_institucional', 'credihoy_cotizacion_institucional_escenarios_v1', 'credihoy_calendario_pago_v1', 'credihoy_calendario_pago_v1_revalidacion', 'credihoy_calendario_pago_v1_revalidacion_historial', 'credihoy_composiciones_contractuales_v1', 'credihoy_ofertas_linix_v1', 'credihoy_oferta_linix_actual', 'credihoy_aceptaciones_oferta_v1', 'credihoy_autentic_envios_v1', 'credihoy_autentic_identidad_v1', 'credihoy_formalizacion_autentic_v1', 'credihoy_otp_contractual_v1'}
         value['orchestration_data'] = {k: deepcopy(v) for k, v in detail['orchestration_data'].items() if k not in downstream}
     else:
         raise ValueError('HUELLA_ESTUDIO_VERSION_NO_ADMITIDA')

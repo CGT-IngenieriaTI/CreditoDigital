@@ -34,6 +34,34 @@ def privado(path):
         raise ImproperlyConfigured('CUSTODIA_PROPIETARIA_NO_DISPONIBLE') from None
 
 
+def configurar_otp_contractual(environ, databases, *, session_key, delegation_key, login_sid='', centrales_sid=''):
+    """Opt-in metadata only; no accounts, provider calls or permission changes."""
+    prefix = 'CREDIHOY_OTP_CONTRACTUAL_'
+    try:
+        flags = [environ.get(prefix + name, '0') for name in ('ENABLED', 'ENVIO_ENABLED')]
+        if any(value not in ('0', '1') for value in flags) or flags == ['0', '1']:
+            raise ValueError
+        if prefix + 'HMAC_KEY' in environ:
+            raise ValueError
+        result = {'ENABLED': flags[0] == '1', 'ENVIO_ENABLED': flags[1] == '1',
+                  'HMAC_KEY': '', 'DB_ALIAS': '', 'VERIFY_SID': ''}
+        if result['ENABLED']:
+            key = privado(environ.get(prefix + 'HMAC_KEY_FILE', ''))
+            alias = environ.get(prefix + 'DB_ALIAS', 'default')
+            sid = environ.get(prefix + 'VERIFY_SID', '')
+            if (len(key) < 48 or key in (session_key, delegation_key)
+                    or alias not in {'default', 'cotizacion'} or alias not in databases
+                    or type(sid) is not str or not re.fullmatch(r'VA[a-fA-F0-9]{32}', sid)
+                    or any(type(value) is not str or not re.fullmatch(r'VA[a-fA-F0-9]{32}', value)
+                           for value in (login_sid, centrales_sid))
+                    or sid.lower() in (login_sid.lower(), centrales_sid.lower())):
+                raise ValueError
+            result.update(HMAC_KEY=key, DB_ALIAS=alias, VERIFY_SID=sid)
+        return result
+    except (ValueError, TypeError, KeyError):
+        raise ImproperlyConfigured('CONFIGURACION_OTP_CONTRACTUAL_INVALIDA') from None
+
+
 def configurar_propietario(config):
     """Valida referencias tecnicas; no crea usuarios, bases, endpoints o expedientes."""
     try:
@@ -41,7 +69,12 @@ def configurar_propietario(config):
             'fuente', 'nonce', 'secretFile', 'delegacionFile', 'vigenteHasta'}
         enabled = config.get('fuenteHabilitada', True) if type(config) is dict else None
         optional={'fuenteHabilitada','autoservicioHabilitado','autoservicioAlcance','borradores','promotoresCatalogo','historico','progresoTemporal','cotizacion','autorizacionHabilitada','autorizacionSolicitudes','autorizacionCifradoFile','centralesOtpHabilitado'}
-        optional.add('admisionEnsayo')
+        optional.update({'admisionEnsayo', 'disponibilidad'})
+        availability = config.get('disponibilidad', 'PILOT_WINDOW')
+        if (availability not in ('PILOT_WINDOW', 'PERMANENT_PRIVATE_V1')
+                or availability != os.environ.get('CREDIHOY_PERFIL_DISPONIBILIDAD', 'PILOT_WINDOW')
+                or availability == 'PERMANENT_PRIVATE_V1' and config.get('admisionEnsayo')):
+            raise ValueError
         if (type(config) is not dict or not fields<=set(config) or set(config)-fields-optional
                 or type(enabled) is not bool
                 or type(config['fuenteReferencia']) is not str or not config['fuenteReferencia'].strip()
@@ -56,7 +89,8 @@ def configurar_propietario(config):
             raise ValueError
         until = parse_datetime(config['vigenteHasta'])
         # Expired access stays denied by middleware; offline cleanup must still boot.
-        if not until or not timezone.is_aware(until):
+        if (config['vigenteHasta'] != '' if availability == 'PERMANENT_PRIVATE_V1'
+                else not until or not timezone.is_aware(until)):
             raise ValueError
         for key in ('redes', 'proxies'):
             if not config[key] or not all(ipaddress.ip_network(v, strict=True).prefixlen == 32 for v in config[key]):
@@ -229,6 +263,13 @@ CREDIHOY_PUBLICO_PROXIES = cfg['proxies']
 CREDIHOY_PUBLICO_RESTRINGIDO = True
 CREDIHOY_PUBLICO_IDENTIDADES_HMAC = cfg['documentosHmac']
 CREDIHOY_PUBLICO_AUTORIZACION_HASTA = cfg['vigenteHasta']
+CREDIHOY_PERFIL_DISPONIBILIDAD = cfg.get('disponibilidad', 'PILOT_WINDOW')
+if CREDIHOY_PERFIL_DISPONIBILIDAD == 'PERMANENT_PRIVATE_V1':
+    CREDIHOY_PUBLICO_MODO = 'OWNER_PERMANENT'
+    CREDIHOY_PUBLICO_HOST = cfg['host']
+    CSRF_TRUSTED_ORIGINS = ['https://' + cfg['host']]
+    # Availability admission is separate from the owner's document/case authorization.
+    CREDIHOY_PUBLICO_IDENTIDADES_HMAC = []
 CREDIHOY_PUBLICO_AUTORIZACION_REFERENCIA = cfg['fuenteReferencia']
 MIDDLEWARE = ['apps.xcore_consumo.services.credihoy_v2.unico.publico_controles.RedRestringidaMiddleware']
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
@@ -246,3 +287,13 @@ EMAIL_BACKEND = 'django.core.mail.backends.dummy.EmailBackend'
 LOGGING = {'version': 1, 'disable_existing_loggers': False,
     'handlers': {'console': {'class': 'logging.StreamHandler'}},
     'root': {'handlers': ['console'], 'level': 'WARNING'}}
+
+_otp_contractual = configurar_otp_contractual(os.environ, DATABASES,
+    session_key=SECRET_KEY, delegation_key=CREDIHOY_TITULAR_SECRET,
+    login_sid=globals().get('CREDIHOY_PUBLICO_VERIFY_SID', '') or os.environ.get('CREDIHOY_PUBLICO_VERIFY_SID', ''),
+    centrales_sid=globals().get('TWILIO_VERIFY_SID', '') or os.environ.get('TWILIO_VERIFY_SID', ''))
+CREDIHOY_OTP_CONTRACTUAL_ENABLED = _otp_contractual['ENABLED']
+CREDIHOY_OTP_CONTRACTUAL_ENVIO_ENABLED = _otp_contractual['ENVIO_ENABLED']
+CREDIHOY_OTP_CONTRACTUAL_HMAC_KEY = _otp_contractual['HMAC_KEY']
+CREDIHOY_OTP_CONTRACTUAL_DB_ALIAS = _otp_contractual['DB_ALIAS']
+CREDIHOY_OTP_CONTRACTUAL_VERIFY_SID = _otp_contractual['VERIFY_SID']

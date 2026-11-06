@@ -83,7 +83,8 @@ class Solicitud(TimeStampedModel):
 
     @property
     def active_otp_challenge(self):
-        return self.otp_challenges.exclude(estado="CANCELADA").order_by("-created_at").first()
+        return self.otp_challenges.exclude(estado="CANCELADA").exclude(
+            validation_result__startswith="contractual:").order_by("-created_at").first()
 
     def __str__(self) -> str:
         return self.numero_solicitud

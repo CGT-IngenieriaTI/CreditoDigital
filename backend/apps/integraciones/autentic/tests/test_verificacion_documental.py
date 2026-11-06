@@ -311,3 +311,59 @@ class CryptographyTests(unittest.TestCase):
             report=self.verify()
         self.assertEqual(report['codigo'],'LOG_CRIPTOGRAFICO_NO_AISLADO')
         self.assertEqual(stream.getvalue(),b'')
+
+
+class RewriteContentTests(unittest.TestCase):
+    """Reserialization is allowed; overlays, resources and annotations are not ignored."""
+    def build(self, *, change=None):
+        from pypdf.generic import NameObject, DecodedStreamObject, DictionaryObject
+        writer=PdfWriter();page=writer.add_blank_page(width=100,height=100)
+        stream=DecodedStreamObject();stream.set_data(b'q 0 0 5 5 re f Q')
+        page[NameObject('/Contents')]=writer._add_object(stream)
+        if change:change(writer,page)
+        out=BytesIO();writer.write(out);return out.getvalue()
+
+    def compare(self, original, signed):
+        from ..pdf_criptografia import comparar_contenido_pdf
+        return comparar_contenido_pdf(original,signed)
+
+    def test_rewritten_serialization_can_preserve_content_without_identical_hashes(self):
+        original=self.build()
+        signed=self.build(change=lambda writer,page:writer.add_metadata({'/Producer':'SYNTHETIC REWRITE'}))
+        self.assertNotEqual(sha256(original).hexdigest(),sha256(signed).hexdigest())
+        self.assertFalse(signed.startswith(original))
+        report=self.compare(original,signed)
+        self.assertTrue(report['correspondenciaOriginal'],report)
+
+    def test_same_extracted_text_does_not_hide_graphical_overlay_or_replaced_content(self):
+        from pypdf.generic import NameObject,DecodedStreamObject
+        def overlay(writer,page):
+            stream=DecodedStreamObject();stream.set_data(b'q 0 0 100 100 re f Q')
+            page[NameObject('/Contents')]=writer._add_object(stream)
+        original=self.build();signed=self.build(change=overlay)
+        self.assertFalse(self.compare(original,signed)['correspondenciaOriginal'])
+
+    def test_added_page_annotation_changed_geometry_or_active_content_are_not_equivalent(self):
+        from pypdf.generic import NameObject,DictionaryObject,TextStringObject,ArrayObject,NumberObject
+        changes=[lambda writer,page:writer.add_blank_page(width=100,height=100),
+            lambda writer,page:page.__setitem__(NameObject('/Rotate'),NumberObject(90)),
+            lambda writer,page:writer.add_js('SYNTHETIC_NOT_EXECUTED'),
+            lambda writer,page:page.__setitem__(NameObject('/Annots'),ArrayObject([
+                writer._add_object(DictionaryObject({NameObject('/Subtype'):NameObject('/Text'),
+                    NameObject('/Contents'):TextStringObject('SYNTHETIC CHANGE')}))]))]
+        for change in changes:
+            with self.subTest(change=change):
+                self.assertFalse(self.compare(self.build(),self.build(change=change))['correspondenciaOriginal'])
+
+    def test_changed_render_resource_is_not_hidden_by_unchanged_text_or_operators(self):
+        from pypdf.generic import NameObject,DictionaryObject,NumberObject
+        def resource(writer,page):
+            page[NameObject('/Resources')]=DictionaryObject({NameObject('/ExtGState'):DictionaryObject({
+                NameObject('/GS'):DictionaryObject({NameObject('/ca'):NumberObject(0)})})})
+        self.assertFalse(self.compare(self.build(),self.build(change=resource))['correspondenciaOriginal'])
+
+    def test_seal_without_provisioned_trust_never_accepts_pdf_embedded_root(self):
+        from ..pdf_criptografia import verificar_sello_proveedor
+        report=verificar_sello_proveedor(self.build(),self.build())
+        self.assertFalse(report['cadenaConfiable'])
+        self.assertEqual(report['codigo'],'RAICES_DE_CONFIANZA_NO_CONFIGURADAS')

@@ -1,4 +1,6 @@
 """Session-bound delegation to the data owner; no case DB credentials in 9A."""
+
+
 from datetime import datetime
 import hashlib
 import hmac
@@ -204,33 +206,24 @@ def claim_delegation(rid):
     return limite([('titular_delegacion',rid,1)],using=alias)
 
 
-def verificar_firmante(token,identity,*,solicitud_id,pdf_sha256,clave):
+def verificar_firmante(token, identity, *, solicitud_id, pdf_sha256, clave, proposito='AUTORIZACION_CENTRALES_PRECONSULTA'):
     """Owner-side check of the relay assertion, after live signed delegation."""
     try:
-        proof=signing.loads(token,key=key(),salt='credihoy-firmante-institucional-v1',max_age=TTL,fallback_keys=[])
-        expected={'version','fuente','requestId','consultadoEn','sesionReferencia','sesionExpiraAt',
-            'verificadoEn','verificacionReferencia','solicitudId','pdfSha256','operacionFirmaId',
-            'numeroDocumento','names','lastNames','actoPersonalFirma','OTP9AEsFirma'}
-        if type(proof) is not dict or set(proof)!=expected:raise ValueError
-        if (proof['version']!='COLO023_IDENTIDAD_INSTITUCIONAL_V1' or proof['fuente']!='API_DATA.consultarSocio'
-                or identity.get('_scopeAutorizacion')!='solicitudes:autorizar'
-                or proof['requestId']!=identity.get('_requestId')
-                or proof['sesionReferencia']!=identity['_sesionReferencia']
-                or proof['sesionExpiraAt']!=identity['_sesionExpiraAt']
-                or proof['numeroDocumento']!=identity['numeroDocumento']
-                or proof['solicitudId']!=str(solicitud_id) or proof['pdfSha256']!=pdf_sha256
-                or proof['operacionFirmaId']!=str(clave) or proof['actoPersonalFirma'] is not True
-                or proof['OTP9AEsFirma'] is not False
-                or not re.fullmatch('[a-f0-9]{64}',proof['verificacionReferencia'])
-                or any(type(proof[k]) is not str or not proof[k].strip() or len(proof[k])>120
-                    for k in ('names','lastNames'))):raise ValueError
-        now=timezone.now()
-        verified,read,expires=(datetime.fromisoformat(proof[k]) for k in ('verificadoEn','consultadoEn','sesionExpiraAt'))
-        if (any(not timezone.is_aware(t) for t in (verified,read,expires))
-                or not verified<=read<=now<expires or (now-read).total_seconds()>TTL
-                or (now-verified).total_seconds()>600):raise ValueError
+        proof = signing.loads(token, key=key(), salt='credihoy-firmante-institucional-v1', max_age=TTL, fallback_keys=[])
+        expected = {'version', 'fuente', 'requestId', 'consultadoEn', 'sesionReferencia', 'sesionExpiraAt', 'verificadoEn', 'verificacionReferencia', 'solicitudId', 'pdfSha256', 'operacionFirmaId', 'numeroDocumento', 'names', 'lastNames', 'actoPersonalFirma', 'OTP9AEsFirma'}
+        if type(proof) is not dict or set(proof) != expected:
+            raise ValueError
+        scope_ok = proposito == 'AUTORIZACION_CENTRALES_PRECONSULTA' and identity.get('_scopeAutorizacion') == 'solicitudes:autorizar'
+        if proposito == 'FIRMA_DOCUMENTO_CONTRACTUAL':
+            scope_ok = identity.get('_scopeContractual') == 'solicitudes:firmarContrato'
+        if proof['version'] != 'COLO023_IDENTIDAD_INSTITUCIONAL_V1' or proof['fuente'] != 'API_DATA.consultarSocio' or (not scope_ok) or (proof['requestId'] != identity.get('_requestId')) or (proof['sesionReferencia'] != identity['_sesionReferencia']) or (proof['sesionExpiraAt'] != identity['_sesionExpiraAt']) or (proof['numeroDocumento'] != identity['numeroDocumento']) or (proof['solicitudId'] != str(solicitud_id)) or (proof['pdfSha256'] != pdf_sha256) or (proof['operacionFirmaId'] != str(clave)) or (proof['actoPersonalFirma'] is not True) or (proof['OTP9AEsFirma'] is not False) or (not re.fullmatch('[a-f0-9]{64}', proof['verificacionReferencia'])) or any((type(proof[k]) is not str or not proof[k].strip() or len(proof[k]) > 120 for k in ('names', 'lastNames'))):
+            raise ValueError
+        now = timezone.now()
+        verified, read, expires = (datetime.fromisoformat(proof[k]) for k in ('verificadoEn', 'consultadoEn', 'sesionExpiraAt'))
+        if any((not timezone.is_aware(t) for t in (verified, read, expires))) or not verified <= read <= now < expires or (now - read).total_seconds() > TTL or ((now - verified).total_seconds() > 600):
+            raise ValueError
         return proof
-    except (KeyError,TypeError,ValueError,AttributeError,signing.BadSignature):
+    except (KeyError, TypeError, ValueError, AttributeError, signing.BadSignature):
         raise ValueError('IDENTIDAD_INSTITUCIONAL_FIRMA_NO_ACREDITADA') from None
 
 

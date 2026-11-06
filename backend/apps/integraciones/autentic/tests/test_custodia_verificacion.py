@@ -323,3 +323,76 @@ class ContractRecoveryTests(TransactionTestCase):
                     side_effect=AssertionError('NO_CREDENTIAL_LOAD')):
             self.assertEqual(task.run(),{'estado':'RECUPERACION_NO_HABILITADA','procesadas':0})
         self.assertEqual(AuditLog.objects.count(),0)
+
+
+class ElectronicAcceptanceEvidenceTests(TransactionTestCase):
+    """Synthetic PKI/typed acceptance boundary, not an institutional trust policy."""
+    def setUp(self):
+        from datetime import timedelta
+        from .test_verificacion_documental import CryptographyTests
+        from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import AceptacionContractualOTPVerificada
+        CryptographyTests.setUpClass()
+        self.fixture=CryptographyTests();self.now=self.fixture.now
+        self.original=self.fixture.original;self.signed=self.fixture.signed
+        self.ctx=context(self.original,self.signed,self.now)
+        self.proof=AceptacionContractualOTPVerificada(self.ctx['solicitudId'],self.ctx['documentoOperacionId'],
+            self.ctx['envioId'],sha256(self.original).hexdigest(),sha256(b'SYNTHETIC-ID').hexdigest(),
+            'b'*64,self.now-timedelta(minutes=4),self.now-timedelta(minutes=3),'c'*64,'SMS')
+        self.ctx['vinculo'].update(aceptacionContractualReferencia=self.proof.referencia,
+            secureKeySha256=self.proof.secure_key_sha256)
+
+    def analyze(self, **kwargs):
+        from ..evidencia import analizar_firma_electronica_contractual
+        return analizar_firma_electronica_contractual(original=self.original,firmado=self.signed,
+            contexto=kwargs.pop('contexto',self.ctx),aceptacion=kwargs.pop('aceptacion',self.proof),
+            raices=kwargs.pop('raices',self.fixture.roots),crls=self.fixture.crls,momento=self.now,**kwargs)
+
+    def test_electronic_act_uses_institutional_time_without_fabricating_provider_timezone_or_tsa(self):
+        self.ctx['recibo']['fecha_proveedor']='2026-11-06 14:34:33'
+        self.ctx['recibo']['respuesta_original']['processedDate']='2026-11-06 14:34:33'
+        result=self.analyze()
+        self.assertTrue(result['firmaAcreditada'],result)
+        self.assertEqual(result['referenciaTemporal'],'AUDITORIA_OTP_INSTITUCIONAL')
+        self.assertFalse(result['fechaConfiableTSA'])
+        self.assertFalse(result['fechaProveedorConZona'])
+        self.assertFalse(result['identidadProveedorVerificoOTP'])
+        self.assertEqual(result['firmadoEn'],self.proof.verificado_en.isoformat())
+        self.assertEqual(result,self.analyze())
+
+    def test_browser_booleans_and_foreign_document_securekey_or_transaction_do_not_attest_acceptance(self):
+        from copy import deepcopy
+        for proof in (True,{}, {'otpVerificado':True}):
+            self.assertFalse(self.analyze(aceptacion=proof)['firmaAcreditada'])
+        for area,key in (('vinculo','pdfSha256'),('vinculo','secureKeySha256'),
+                ('vinculo','aceptacionContractualReferencia'),('descarga','transaccionReferencia')):
+            value=deepcopy(self.ctx);value[area][key]='f'*64
+            self.assertFalse(self.analyze(contexto=value)['firmaAcreditada'])
+
+    def test_missing_root_or_cryptographic_tampering_remains_pending(self):
+        result=self.analyze(raices=())
+        self.assertFalse(result['firmaAcreditada'])
+        self.assertIn('SELLO_PROVEEDOR_NO_ACREDITADO',result['pendientes'])
+        self.signed=self.signed.replace(b'/MediaBox [ 0 0 100 100 ]',b'/MediaBox [ 0 0 101 100 ]',1)
+        self.assertFalse(self.analyze()['firmaAcreditada'])
+
+    def test_receipt_type_is_still_required_and_old_pki_route_is_unchanged(self):
+        from ..evidencia import analizar_firma_documental
+        self.ctx['recibo']['tipo_respuesta']='OTHER'
+        self.ctx['recibo']['respuesta_original']['type']='OTHER'
+        self.assertFalse(self.analyze()['firmaAcreditada'])
+        old=analizar_firma_documental(original=self.original,firmado=self.signed,
+            transaccion='SYNTHETIC-TX',documento_identidad='SYNTHETIC-ID',
+            contexto=self.ctx,raices=self.fixture.roots,crls=self.fixture.crls,momento=self.now)
+        self.assertFalse(old['firmaAcreditada'])
+
+    def test_contractual_adapter_returns_native_type_only_for_matching_otp_identity_and_transaction(self):
+        from ..evidencia import verificar_firma_contractual,FirmaContractualVerificada
+        from ..contratos import AutenticError
+        kwargs=dict(original=self.original,firmado=self.signed,transaccion='SYNTHETIC-TX',
+            documento_identidad='SYNTHETIC-ID',contexto=self.ctx,aceptacion_contractual=self.proof,
+            raices=self.fixture.roots,crls=self.fixture.crls,momento=self.now)
+        value=verificar_firma_contractual(**kwargs)
+        self.assertIsInstance(value,FirmaContractualVerificada)
+        self.assertEqual(value.firmado_en,self.proof.verificado_en)
+        for change in ({'documento_identidad':'OTHER'},{'transaccion':'OTHER'}):
+            with self.assertRaises(AutenticError):verificar_firma_contractual(**{**kwargs,**change})

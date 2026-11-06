@@ -157,15 +157,103 @@ class FirmaContractualVerificada:
     verificacion_sha256: str
 
 
-def verificar_firma_contractual(*,original,firmado,transaccion,documento_identidad,**kwargs):
+def verificar_firma_contractual(*,original,firmado,transaccion,documento_identidad,
+        aceptacion_contractual=None,**kwargs):
     """Contract evidence only; never rewrites a credit consent or its validity."""
-    report=analizar_firma_documental(original=original,firmado=firmado,transaccion=transaccion,
-        documento_identidad=documento_identidad,**kwargs)
+    if aceptacion_contractual is None:
+        report=analizar_firma_documental(original=original,firmado=firmado,transaccion=transaccion,
+            documento_identidad=documento_identidad,**kwargs)
+    else:
+        if (getattr(aceptacion_contractual,'titular_sha256',None)!=sha256(documento_identidad.encode()).hexdigest()
+                or kwargs.get('contexto',{}).get('recibo',{}).get('transaccion')!=transaccion):
+            raise AutenticError('FIRMA_CONTRACTUAL_IDENTIDAD_O_TRANSACCION_NO_CORRESPONDE')
+        report=analizar_firma_electronica_contractual(original=original,firmado=firmado,
+            aceptacion=aceptacion_contractual,**kwargs)
     if report.get('firmaAcreditada') is not True:
         error=AutenticError('FIRMA_CONTRACTUAL_EVIDENCIA_PENDIENTE');error.resultado=report;raise error
     return FirmaContractualVerificada(report['solicitudId'],report['envioId'],report['originalSha256'],
         report['firmadoSha256'],sha256(transaccion.encode()).hexdigest(),
         datetime.fromisoformat(report['firmadoEn']),report['sha256'])
+
+
+def analizar_firma_electronica_contractual(*, original, firmado, contexto, aceptacion,
+        raices=(), crls=(), ocsps=(), momento=None):
+    """Institutional OTP act plus provider seal, distinct from personal PKI signing.
+
+    `aceptacion` must come from the native read-only acceptance verifier. Provider
+    metadata and browser booleans do not attest the OTP. No historical receipt,
+    signature or consent is migrated to this evidence method.
+    """
+    from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import AceptacionContractualOTPVerificada
+    from .cliente import ReciboFirma
+    from .pdf_criptografia import verificar_sello_proveedor
+    result = {'version': 'AUTENTIC_FIRMA_ELECTRONICA_CONTRACTUAL_V1',
+        'metodo': 'OTP_INSTITUCIONAL_MAS_SELLO_PROVEEDOR_V1', 'estado': 'PENDIENTE_VERIFICACION',
+        'firmaAcreditada': False, 'identidadProveedorVerificoOTP': False,
+        'fechaProveedorConZona': False, 'fechaConfiableTSA': False, 'pendientes': []}
+    now = momento or datetime.now(timezone.utc)
+    try:
+        if type(aceptacion) is not AceptacionContractualOTPVerificada:
+            raise ValueError('ACEPTACION_CONTRACTUAL_NO_ACREDITADA')
+        original_hash, signed_hash = validar_pdf(original), validar_pdf(firmado)
+        binding, download = contexto['vinculo'], contexto['descarga']
+        receipt = ReciboFirma(**contexto['recibo'])
+        receipt.validar_recuperacion(receipt.ambiente)
+        reply = receipt.respuesta_original
+        prepared = datetime.fromisoformat(contexto['preparadoEn'])
+        recovered = datetime.fromisoformat(download['recuperadoEn'])
+        dates = (aceptacion.aceptado_en, aceptacion.verificado_en, prepared, recovered, now)
+        if (any(v.utcoffset() is None for v in dates) or not
+                aceptacion.aceptado_en <= aceptacion.verificado_en <= prepared <= recovered <= now):
+            raise ValueError('CRONOLOGIA_CONTRACTUAL_NO_ACREDITADA')
+        if (contexto['estado'] != 'FIRMA_REPORTADA_NO_VERIFICADA'
+                or receipt.tipo_respuesta != 'reply_signature' or reply.get('type') != 'reply_signature'
+                or reply.get('operationCode') != 1000 or reply.get('transactionId') != receipt.transaccion
+                or reply.get('processedDate') != receipt.fecha_proveedor
+                or reply.get('urlDocuments') != receipt.url_documentos
+                or contexto['solicitudId'] != aceptacion.solicitud_id
+                or contexto['envioId'] != aceptacion.envio_id
+                or contexto['documentoOperacionId'] != aceptacion.documento_id
+                or binding['solicitudId'] != aceptacion.solicitud_id
+                or binding['documentoOperacionId'] != aceptacion.documento_id
+                or binding['pdfSha256'] != original_hash or original_hash != aceptacion.pdf_sha256
+                or binding['firmanteReferencia'] != aceptacion.titular_sha256
+                or binding['aceptacionContractualReferencia'] != aceptacion.referencia
+                or binding['secureKeySha256'] != aceptacion.secure_key_sha256
+                or download['solicitudId'] != aceptacion.solicitud_id
+                or download['envioId'] != aceptacion.envio_id
+                or download['originalSha256'] != original_hash or download['pdfSha256'] != signed_hash
+                or download['transaccionReferencia'] != sha256(receipt.transaccion.encode()).hexdigest()):
+            raise ValueError('VINCULO_CONTRACTUAL_NO_INTEGRO')
+        if not _procedencia_descarga_integra(download.get('procedencia'), receipt.ambiente,
+                sha256(receipt.url_documentos.encode()).hexdigest()):
+            raise ValueError('PROCEDENCIA_CONTRACTUAL_NO_ACREDITADA')
+        # Keep the provider's unzoned text unchanged. The personal electronic act
+        # is timed by the institutional OTP audit, not a manufactured provider TSA.
+        result['fechaProveedorConZona'] = datetime.fromisoformat(receipt.fecha_proveedor).utcoffset() is not None
+        result.update(solicitudId=aceptacion.solicitud_id, envioId=aceptacion.envio_id,
+            originalSha256=original_hash, firmadoSha256=signed_hash,
+            transaccionReferencia=sha256(receipt.transaccion.encode()).hexdigest(),
+            aceptacionReferencia=aceptacion.referencia, secureKeySha256=aceptacion.secure_key_sha256,
+            aceptadoEn=aceptacion.aceptado_en.isoformat(),
+            confirmadoOTPEn=aceptacion.verificado_en.isoformat(),
+            referenciaTemporal='AUDITORIA_OTP_INSTITUCIONAL', correlacionExpediente=True,
+            reciboProveedor=True, procedenciaDescarga=True)
+        seal = verificar_sello_proveedor(original, firmado, raices=raices, crls=crls, ocsps=ocsps, momento=now)
+        result['selloProveedor'] = seal
+        result['fechaConfiableTSA'] = seal['fechaConfiableTSA']
+        if not seal['contenido']['correspondenciaOriginal']:
+            result['pendientes'].append('CORRESPONDENCIA_CONTENIDO_NO_ACREDITADA')
+        if not seal['firmaIntegra'] or not seal['cadenaConfiable']:
+            result['pendientes'].append('SELLO_PROVEEDOR_NO_ACREDITADO')
+        if not result['pendientes']:
+            result.update(estado='FIRMA_CONTRACTUAL_VERIFICADA', firmaAcreditada=True,
+                firmadoEn=aceptacion.verificado_en.isoformat())
+    except (ValueError, TypeError, KeyError, AttributeError, AutenticError):
+        result['estado'] = 'INVALIDA'
+        result['pendientes'] = ['ACEPTACION_Y_VINCULO_CONTRACTUAL_NO_ACREDITADOS']
+    result['sha256'] = sha256(json.dumps(result, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return result
 
 
 @dataclass(frozen=True)

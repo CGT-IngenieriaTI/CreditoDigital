@@ -1,4 +1,6 @@
-﻿import hashlib
+
+from apps.xcore_consumo.services.consentimiento_integridad import build_consent_hash
+import hashlib
 import random
 import re
 import uuid
@@ -72,7 +74,7 @@ def _request_meta(request) -> dict:
 
 
 def get_active_otp_challenge(solicitud):
-    return solicitud.active_otp_challenge
+    return solicitud.otp_challenges.exclude(estado=EstadoOtp.CANCELADA).exclude(validation_result__startswith='contractual:').order_by('-created_at').first()
 
 
 def _otp_message(code: str) -> str:
@@ -83,32 +85,18 @@ def _otp_message(code: str) -> str:
 
 
 def _invalidate_pending_challenges(solicitud, *, keep_id=None):
-    candidates = solicitud.otp_challenges.exclude(
-        estado__in=[EstadoOtp.VALIDADA, EstadoOtp.EXPIRADA, EstadoOtp.BLOQUEADA, EstadoOtp.CANCELADA]
-    )
+    candidates = solicitud.otp_challenges.exclude(estado__in=[EstadoOtp.VALIDADA, EstadoOtp.EXPIRADA, EstadoOtp.BLOQUEADA, EstadoOtp.CANCELADA]).exclude(validation_result__startswith='contractual:')
     if keep_id:
         candidates = candidates.exclude(id=keep_id)
-    candidates.update(estado=EstadoOtp.CANCELADA, validation_result="canceled", ultimo_error="Reemplazada por un nuevo envío OTP.")
+    candidates.update(estado=EstadoOtp.CANCELADA, validation_result='canceled', ultimo_error='Reemplazada por un nuevo envío OTP.')
 
 
-def _create_base_challenge(solicitud, *, channel: str, provider: str, destination: str, request=None) -> OtpChallenge:
+def _create_base_challenge(solicitud, *, channel: str, provider: str, destination: str, request=None, using=None, max_intentos=None) -> OtpChallenge:
     meta = _request_meta(request)
     destination_masked = mask_destination(channel, destination)
     encrypted_destination = encrypt_text(destination)
-
-    return OtpChallenge.objects.create(
-        solicitud=solicitud,
-        canal=channel,
-        provider=provider,
-        destino=destination_masked,
-        destination_masked=destination_masked,
-        destination_full_encrypted=encrypted_destination,
-        estado=EstadoOtp.PENDIENTE,
-        max_intentos=getattr(settings, "TWILIO_VERIFY_RESEND_MAX", 3),
-        transaction_uuid=uuid.uuid4().hex,
-        ip_address=meta["ip_address"],
-        user_agent=meta["user_agent"],
-    )
+    manager = OtpChallenge.objects if using is None else OtpChallenge.objects.using(using)
+    return manager.create(solicitud=solicitud, canal=channel, provider=provider, destino=destination_masked, destination_masked=destination_masked, destination_full_encrypted=encrypted_destination, estado=EstadoOtp.PENDIENTE, max_intentos=getattr(settings, 'TWILIO_VERIFY_RESEND_MAX', 3) if max_intentos is None else max_intentos, transaction_uuid=uuid.uuid4().hex, ip_address=meta['ip_address'], user_agent=meta['user_agent'])
 
 
 def _send_email(destination: str, code: str, solicitud):

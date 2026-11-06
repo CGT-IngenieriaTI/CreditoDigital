@@ -8,6 +8,8 @@
 
 
 
+
+
 from contextvars import ContextVar
 from hashlib import sha256
 from io import BytesIO
@@ -279,47 +281,14 @@ def _exigir_condiciones_definitivas(case):
     return quote
 
 
-def _anexar_oferta_versionada(case,pdf,quote,campos):
-    """Local traceable copy of stored conditions, not a new contract or signature."""
-    from xml.sax.saxutils import escape
-    from apps.utils.pdf import build_legal_document_pdf
-    offer=quote['ofertaVersionada']
-    if (offer['solicitudId']!=str(case.pk) or offer['sha256']!=quote['composicionSha256']
-            or offer['titularReferencia']!=sha256(case.solicitante.numero_identificacion.encode()).hexdigest()
-            or offer['versionCondiciones']!=quote['versionCondiciones']):
+def _anexar_oferta_versionada(case, pdf, quote, campos):
+    """Retain the existing binding hook without appending to the official form."""
+    offer = quote['ofertaVersionada']
+    if offer['solicitudId'] != str(case.pk) or offer['sha256'] != quote['composicionSha256'] or offer['titularReferencia'] != sha256(case.solicitante.numero_identificacion.encode()).hexdigest() or (offer['versionCondiciones'] != quote['versionCondiciones']):
         raise ValueError('OFERTA_DOCUMENTAL_DE_OTRO_CONTEXTO')
-    rows=[
-        'Expediente: '+str(case.pk),
-        'Titular: '+campos.get('nombre',{}).get('valor','Nombre pendiente de acreditacion'),
-        'Identificacion: '+case.solicitante.numero_identificacion,
-        'Oferta SHA-256: '+offer['sha256'],
-        'Version de condiciones: '+offer['versionCondiciones'],
-        'Calculo institucional: '+offer['calculoRequestId'],
-        'Monto COP: '+offer['condiciones']['monto'],
-        'Plazo en meses: '+str(offer['condiciones']['numeroCuotas']),
-        'Periodicidad: '+offer['condiciones']['periodicidad'],
-        'Tasa NAMV porcentaje: '+offer['condiciones']['tasaNominalNamv'],
-        'Tasa EA porcentaje: '+quote['tasaEaPorcentaje'],
-        'Cuota institucional COP (sin redondeo adicional): '+offer['cuotaContractual'],
-        'Primer vencimiento: '+quote['primeraFechaPago'],
-        'Vigencia de oferta: '+offer['desde']+' a '+offer['hasta'],
-        'Seguro mensual parametrizado porcentaje: '+offer['seguroVida']['porcentajeMensualParametrizado'],
-        'Importe del seguro: gestionado por LINIX; no se suma otra prima desde el canal.',
-        'Intereses iniciales: descuento en desembolso segun LINIX. Plan de pagos: gestion nativa LINIX.',
-        'No acredita aceptacion, firma, pagare, radicacion ni desembolso.',
-        'Anexo local de trazabilidad; homologacion documental pendiente antes de su envio contractual.']
-    annex=build_legal_document_pdf('Condiciones de oferta versionada CrediHoy',
-        'Copia local vinculada al COLO-FO.001. No sustituye el plan de pagos institucional.',
-        [escape(row) for row in rows],deterministic=True)
-    writer=PdfWriter();writer.clone_document_from_reader(PdfReader(BytesIO(pdf)))
-    original_pages=len(writer.pages)
-    for page in PdfReader(BytesIO(annex)).pages:writer.add_page(page)
-    output=BytesIO();writer.write(output)
-    return output.getvalue(),{'ofertaSha256':offer['sha256'],'versionCondiciones':offer['versionCondiciones'],
-        'calculoRequestId':offer['calculoRequestId'],'evaluacionSha256':offer['evaluacionSha256'],
-        'anexoOferta':{'version':'credihoy-anexo-oferta-local-v1','sha256':sha256(annex).hexdigest(),
-            'paginasOriginales':original_pages,'paginasAnexo':len(writer.pages)-original_pages,
-            'homologacionAcreditada':False},'envioHabilitado':False}
+    if len(PdfReader(BytesIO(pdf)).pages) != FORMATOS['COLO-FO.001']['paginas']:
+        raise ValueError('COLO001_REQUIERE_TRES_PAGINAS_OFICIALES')
+    return (pdf, {'ofertaSha256': offer['sha256'], 'versionCondiciones': offer['versionCondiciones'], 'calculoRequestId': offer['calculoRequestId'], 'evaluacionSha256': offer['evaluacionSha256'], 'paginasInstitucionales': FORMATOS['COLO-FO.001']['paginas'], 'condicionesOferta': {'cuotaContractual': offer['cuotaContractual'], 'versionCondiciones': offer['versionCondiciones'], 'ofertaSha256': offer['sha256'], 'primerVencimiento': quote['primeraFechaPago']}, 'anexoIncorporado': False, 'envioHabilitado': False})
 
 
 def _validar_condiciones_en_campos(case,campos):

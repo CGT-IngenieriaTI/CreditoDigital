@@ -14,6 +14,8 @@
 
 
 
+
+
 from decimal import Decimal
 from dataclasses import replace
 import hashlib
@@ -710,7 +712,8 @@ def preparar_revision_estudio(solicitud_id, operador):
             legacy_existing = existing
     from .elegibilidad import contexto_desde_estudio, evaluar_decision_digital
     from .condiciones_producto import politica_digital
-    observed = contexto_desde_estudio(case, evaluation.resultados[KEY_HDC], ahora=context.fecha_evaluacion or timezone.now())
+    decision_time = timezone.now()
+    observed = contexto_desde_estudio(case, evaluation.resultados[KEY_HDC], ahora=decision_time)
     from .normativa import actualizacion_al_corte
     from .estamentos import BLOQUEADO, actualizar_estamentos
     updated = actualizacion_al_corte(context.reglas.fecha_actualizacion_datos, context.fecha_evaluacion or timezone.now())
@@ -719,7 +722,8 @@ def preparar_revision_estudio(solicitud_id, operador):
             actualizar_estamentos(case.pk, actor=operador, autogestion=True, revision_conservada=True)
         except ValueError:
             pass
-        observed = contexto_desde_estudio(case, evaluation.resultados[KEY_HDC], ahora=context.fecha_evaluacion or timezone.now())
+        decision_time = timezone.now()
+        observed = contexto_desde_estudio(case, evaluation.resultados[KEY_HDC], ahora=decision_time)
     if legacy_existing is not None and observed.clasificacion_estamentos['estado'] == BLOQUEADO:
         return legacy_existing.pk
     sources['decisionFuentes'] = {'clasificacionEstamentos': {k: v for k, v in observed.clasificacion_estamentos.items() if k not in ('consultaReferencia', 'fechaConsulta')}, 'politicaSha256': _digest(politica_digital())}
@@ -731,8 +735,8 @@ def preparar_revision_estudio(solicitud_id, operador):
     entry = EntradaCredihoyUnicoV2(monto_solicitado=Decimal(form['monto']), plazo_meses=form['plazoMeses'], periodicidad_pago=form['periodicidadPago'], modalidad_codigo='111', recogida=RecogidaCredihoyUnicoV2(aplica=form['recogerCredihoy']))
     evaluated = evaluar_respuestas_controladas(entry, hdc=operation, operaciones_esperadas={operation.operacion_id: ('HDC', operation.request_id)}, ingresos=context.ingresos, hechos_reglas=context.reglas, fecha=context.fecha_evaluacion or timezone.now(), request_id=reference, descuentos_nomina=context.descuentos_nomina, cuota_estimada=context.cuota_estimada if context.cuota_estimada.disponible else None, informe_xml=xml, fecha_consulta_hdc=queried, custodia_respuesta_sha256=proof)
     evaluated.update(solicitudId=str(case.pk), estadoTramite='SUBSANACION_REQUERIDA' if any((r['codigo'] == 'UNICO_FILA_9' and r['estadoEvaluacion'] == 'NO_CUMPLE' for r in evaluated['reglas'])) else 'EN_REVISION', HDCNuevas=0)
-    decision_context = contexto_desde_estudio(case, evaluated, ahora=context.fecha_evaluacion or timezone.now())
-    evaluated['decisionDigital'] = evaluar_decision_digital(decision_context, ahora=context.fecha_evaluacion or timezone.now())
+    decision_context = contexto_desde_estudio(case, evaluated, ahora=decision_time)
+    evaluated['decisionDigital'] = evaluar_decision_digital(decision_context, ahora=decision_time)
     with transaction.atomic(durable=True):
         locked = obtener_para_evaluacion(case.pk, operador, autogestion=True, lock=True, revision_conservada=True)
         current = EvaluacionConsumo.objects.get(pk=evaluation.pk, solicitud=locked)

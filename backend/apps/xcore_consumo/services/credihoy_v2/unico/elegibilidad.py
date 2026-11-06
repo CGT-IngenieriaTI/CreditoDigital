@@ -9,6 +9,8 @@
 
 
 
+
+
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -539,7 +541,7 @@ def contexto_desde_estudio(s, resultado, *, ahora):
         criterion = row[0]['estadoEvaluacion'] == 'CUMPLE'
         reference = politica_digital()['referencia'] + ':' + definition['version']
     holder = hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest()
-    observed = ConsultaEstamentoOracle.objects.filter(solicitud=s, estado='OK').order_by('-created_at', '-pk').first()
+    observed = ConsultaEstamentoOracle.objects.filter(solicitud=s, estado='OK', created_at__lte=ahora).order_by('-created_at', '-pk').first()
     classification = clasificar_novedades(observed.response_payload if observed else None, solicitud_id=s.pk, titular_referencia=holder, ahora=ahora, monto=s.monto_solicitado)
     collection = None
     row32 = [v for v in rows if v.get('codigo') == 'UNICO_FILA_32']
@@ -594,8 +596,8 @@ def leer_decision_estudio(s, *, ahora=None):
         date = datetime.fromisoformat(body['registradoEn'])
         if key != str(record.request_id) or body['solicitudId'] != str(s.pk) or (not body['actorTecnicoId']) or (date.utcoffset() is None) or (date > now) or (body['sha256'] != hashlib.sha256(json.dumps({k: v for k, v in body.items() if k != 'sha256'}, sort_keys=True, default=str).encode()).hexdigest()) or (body['evaluacionSha256'] != hashlib.sha256(json.dumps(state['resultado'], sort_keys=True, default=str).encode()).hexdigest()):
             raise ValueError()
-        context = contexto_desde_estudio(s, state['resultado'], ahora=now)
-        expected = json.loads(json.dumps(evaluar_decision_digital(context, ahora=now), default=str))
+        context = contexto_desde_estudio(s, state['resultado'], ahora=date)
+        expected = json.loads(json.dumps(evaluar_decision_digital(context, ahora=date), default=str))
         if body['contextoSha256'] != hashlib.sha256(json.dumps(asdict(context), sort_keys=True, default=str).encode()).hexdigest() or body['resultado'] != expected:
             raise ValueError()
         return deepcopy(body)

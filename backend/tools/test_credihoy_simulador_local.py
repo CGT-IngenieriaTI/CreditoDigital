@@ -70,6 +70,19 @@ class DecimalPlanTests(SimpleTestCase):
         payments=[Decimal(self.plan(rate=rate)['cuotaSinRedondear']) for rate in ('10.123456','18.234567','29.345678')]
         self.assertTrue(payments[0]<payments[1]<payments[2])
 
+    def test_user_dbms_output_matches_both_rows_including_separately_rounded_ic_iv(self):
+        plan=self.plan('400000',2,'16.67',tasa_fija_mensual_porcentaje=Decimal('.277833'),
+            tasa_variable_mensual_porcentaje=Decimal('1.111332'))
+        expected=[{'capital':'198532','IC':'1111','IV':'4445','seguro':'360','cuota':'204448','saldoFinal':'201468'},
+            {'capital':'201468','IC':'560','IV':'2239','seguro':'181','cuota':'204448','saldoFinal':'0'}]
+        for row,observed in zip(plan['amortizacion'],expected):
+            self.assertEqual({k:Decimal(row[k]) for k in observed},{k:Decimal(v) for k,v in observed.items()})
+        self.assertEqual(plan['totales'],{'capital':'400000','intereses':'8355','seguro':'541','cuotas':'408896'})
+        self.assertEqual(plan['cuotaCalculada'],'204448')
+        self.assertEqual(Decimal(plan['desgloseTasaMensual']['namvResultante']),Decimal('16.669980'))
+        self.assertEqual(plan['tasaNamvPorcentaje'],'16.67')
+        self.assertFalse(plan['paridadGeneralLinixAcreditada'])
+
     def test_decimal_precision_zero_rate_cents_and_last_installment_adjustment(self):
         from decimal import localcontext
         expected=self.plan(unidad_redondeo=Decimal('.01'))

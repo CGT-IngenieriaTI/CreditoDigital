@@ -1,5 +1,7 @@
 
 
+
+
 import base64
 import math
 import unicodedata
@@ -1048,7 +1050,7 @@ def encode_pdf_base64(pdf_bytes: bytes) -> str:
 
 
 
-def calcular_plan_credihoy(monto, plazo, tasa_namv, *, perfil, periodicidad_meses, seguro_mensual_porcentaje, base_seguro, factor_adicional, unidad_redondeo):
+def calcular_plan_credihoy(monto, plazo, tasa_namv, *, perfil, periodicidad_meses, seguro_mensual_porcentaje, base_seguro, factor_adicional, unidad_redondeo, tasa_fija_mensual_porcentaje=None, tasa_variable_mensual_porcentaje=None):
     """Decimal annuality model in the existing calculator, not a LINIX response.
 
     The principal/interest equation is the existing end-period PMT equation.
@@ -1077,7 +1079,15 @@ def calcular_plan_credihoy(monto, plazo, tasa_namv, *, perfil, periodicidad_mese
         context.prec = 60
         if monto.quantize(unit, rounding=ROUND_HALF_UP) != monto:
             raise ValueError('CALCULO_PROPIO_CAPITAL_NO_REPRESENTABLE')
-        interes = tasa_namv / Decimal(1200)
+        split = tasa_fija_mensual_porcentaje is not None or tasa_variable_mensual_porcentaje is not None
+        if split:
+            components = (tasa_fija_mensual_porcentaje, tasa_variable_mensual_porcentaje)
+            if any((type(v) is not Decimal or not v.is_finite() or v < 0 for v in components)) or (sum(components) * 12).quantize(Decimal('.01'), rounding=ROUND_HALF_UP) != tasa_namv.quantize(Decimal('.01'), rounding=ROUND_HALF_UP):
+                raise ValueError('CALCULO_PROPIO_DESGLOSE_TASA_NO_CORRESPONDE')
+            fixed, variable = (v / Decimal(100) for v in components)
+            interes = fixed + variable
+        else:
+            interes = tasa_namv / Decimal(1200)
         seguro = seguro_mensual_porcentaje / Decimal(100)
         tasa_total = interes + seguro if base_seguro == 'SALDO_INICIAL_PERIODO' else interes
         exact = monto / Decimal(plazo) if tasa_total == 0 else monto * tasa_total / (1 - (1 + tasa_total) ** (-plazo))
@@ -1090,7 +1100,12 @@ def calcular_plan_credihoy(monto, plazo, tasa_namv, *, perfil, periodicidad_mese
         total_interest = total_insurance = total_payment = Decimal(0)
         for number in range(1, plazo + 1):
             start = balance
-            interest = (start * interes).quantize(unit, rounding=ROUND_HALF_UP)
+            if split:
+                ic = (start * fixed).quantize(unit, rounding=ROUND_HALF_UP)
+                iv = (start * variable).quantize(unit, rounding=ROUND_HALF_UP)
+                interest = ic + iv
+            else:
+                interest = (start * interes).quantize(unit, rounding=ROUND_HALF_UP)
             premium = (start * seguro).quantize(unit, rounding=ROUND_HALF_UP) if base_seguro == 'SALDO_INICIAL_PERIODO' else fixed_premium
             principal = balance if number == plazo else payment - interest - premium
             if principal <= 0 or principal > balance:
@@ -1100,5 +1115,5 @@ def calcular_plan_credihoy(monto, plazo, tasa_namv, *, perfil, periodicidad_mese
             total_interest += interest
             total_insurance += premium
             total_payment += current
-            rows.append({'periodo': number, 'saldoInicial': format(start, 'f'), 'capital': format(principal, 'f'), 'intereses': format(interest, 'f'), 'seguro': format(premium, 'f'), 'otros': '0', 'cuota': format(current, 'f'), 'saldoFinal': format(balance, 'f')})
-        return {'version': 'credihoy-plan-decimal-v1', 'perfil': list(perfil), 'modelo': 'ANUALIDAD_VENCIDA_SEGURO_' + base_seguro, 'monto': format(monto, 'f'), 'plazo': plazo, 'periodicidadMeses': periodicidad_meses, 'tasaNamvPorcentaje': format(tasa_namv, 'f'), 'seguroMensualPorcentaje': format(seguro_mensual_porcentaje, 'f'), 'baseSeguro': base_seguro, 'factorAdicional': format(factor_adicional, 'f'), 'precisionDecimal': 60, 'unidadRedondeo': format(unit, 'f'), 'redondeo': 'ROUND_HALF_UP', 'cuotaSinRedondear': format(exact + (monto * seguro if base_seguro == 'CAPITAL_INICIAL' else Decimal(0)), 'f'), 'cuotaCalculada': format(payment, 'f'), 'ultimaCuota': rows[-1]['cuota'], 'saldoFinal': format(balance, 'f'), 'amortizacion': rows, 'totales': {'capital': format(monto, 'f'), 'intereses': format(total_interest, 'f'), 'seguro': format(total_insurance, 'f'), 'cuotas': format(total_payment, 'f')}, 'paridadGeneralLinixAcreditada': False, 'ofertaContractual': False, 'fechasContractualesAcreditadas': False}
+            rows.append({'periodo': number, 'saldoInicial': format(start, 'f'), 'capital': format(principal, 'f'), 'intereses': format(interest, 'f'), 'seguro': format(premium, 'f'), 'otros': '0', 'cuota': format(current, 'f'), 'saldoFinal': format(balance, 'f'), **({'IC': format(ic, 'f'), 'IV': format(iv, 'f')} if split else {})})
+        return {'version': 'credihoy-plan-decimal-v1', 'perfil': list(perfil), 'modelo': 'ANUALIDAD_VENCIDA_SEGURO_' + base_seguro, 'monto': format(monto, 'f'), 'plazo': plazo, 'periodicidadMeses': periodicidad_meses, 'tasaNamvPorcentaje': format(tasa_namv, 'f'), 'desgloseTasaMensual': {'fijaPorcentaje': format(tasa_fija_mensual_porcentaje, 'f'), 'variablePorcentaje': format(tasa_variable_mensual_porcentaje, 'f'), 'namvResultante': format(interes * 1200, 'f'), 'diferenciaRespectoNamvEntrada': format(interes * 1200 - tasa_namv, 'f'), 'redondeoIntereses': 'POR_COMPONENTE', 'politicaDistribucionAcreditada': False} if split else None, 'seguroMensualPorcentaje': format(seguro_mensual_porcentaje, 'f'), 'baseSeguro': base_seguro, 'factorAdicional': format(factor_adicional, 'f'), 'precisionDecimal': 60, 'unidadRedondeo': format(unit, 'f'), 'redondeo': 'ROUND_HALF_UP', 'cuotaSinRedondear': format(exact + (monto * seguro if base_seguro == 'CAPITAL_INICIAL' else Decimal(0)), 'f'), 'cuotaCalculada': format(payment, 'f'), 'ultimaCuota': rows[-1]['cuota'], 'saldoFinal': format(balance, 'f'), 'amortizacion': rows, 'totales': {'capital': format(monto, 'f'), 'intereses': format(total_interest, 'f'), 'seguro': format(total_insurance, 'f'), 'cuotas': format(total_payment, 'f')}, 'paridadGeneralLinixAcreditada': False, 'ofertaContractual': False, 'fechasContractualesAcreditadas': False}

@@ -28,11 +28,11 @@ function version8(){
  return {...original,version:8,capacidad:{...original.capacidad,
   preliminarNoDecisoria:'614792',capacidadDisponible:'814791.75',capacidadResidualPostCuota:'609998.46'}};
 }
-function renderStudy(estudio){
+function renderStudy(estudio,extra={},vista='evaluacion'){
  const useState=React.useState;
- React.useState=initial=>useState(initial==='estado'?'evaluacion':initial);
+ React.useState=initial=>useState(initial==='estado'?vista:initial);
  try{return renderToStaticMarkup(React.createElement(EspacioAsociado,{nombre:'SYNTHETIC',
-  solicitudes:[validarSolicitudPublica(row(estudio))],busy:false,actualizar:()=>{},salir:()=>{}}));}
+  solicitudes:[validarSolicitudPublica(row(estudio))],busy:false,actualizar:()=>{},salir:()=>{},...extra}));}
  finally{React.useState=useState;}
 }
 
@@ -44,7 +44,12 @@ test('continuidad acreditada separa estudio favorable de decision final sin inve
   continuidad:{version:'credihoy-continuidad-publica-v1',estudioFavorable:true,estadoRadicacion:'PREPARACION_PENDIENTE',
    decisionInstitucional:'PENDIENTE',firmaContractual:'PENDIENTE',radicacionHabilitada:false,firmaHabilitada:false}};
  const html=renderStudy(study);
- assert.match(html,/Estudio favorable/);assert.match(html,/Revisar condiciones para radicar/);
+ assert.match(html,/Estudio favorable/);assert.match(html,/Condiciones institucionales pendientes/);
+ assert.doesNotMatch(html,/Revisar condiciones para radicar/);
+ const ready=renderStudy(study,{cotizacionHabilitada:true,cotizar:()=>Promise.reject(new Error('NO_HTTP_IN_SSR'))});
+ assert.match(ready,/Revisar condiciones para radicar/);
+ const signature=renderStudy(study,{},'firma');assert.match(signature,/Firma pendiente/);
+ assert.doesNotMatch(signature,/Firma no acreditada/);
  assert.doesNotMatch(html,/Tu solicitud requiere revision del estamento institucional correspondiente|APROBADO PARA RADICACION|Credito aprobado/);
  for(const mutation of [c=>c.radicacionHabilitada=true,c=>c.firmaHabilitada=true,
    c=>c.decisionInstitucional='APROBADA',c=>c.estudioFavorable='true']){

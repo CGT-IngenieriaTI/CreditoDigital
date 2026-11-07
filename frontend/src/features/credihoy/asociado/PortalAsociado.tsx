@@ -364,8 +364,10 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
             </ol>
           </div>}
           <Pendientes items={s.pendientes}/><Aviso titulo="Para continuar">{s.siguientePaso}</Aviso>
-          {estudioFavorable&&<div className="ca-bottom-actions"><button className="btn btn-outline-primary"
-            onClick={()=>setVista('simulador')}><Calculator size={16} aria-hidden="true"/>Revisar condiciones para radicar</button></div>}
+          {estudioFavorable&&(cotizacionHabilitada&&cotizar&&s.procedencia?.origen==='FUENTE_OPERATIVA'
+            ?<div className="ca-bottom-actions"><button className="btn btn-outline-primary"
+              onClick={()=>setVista('simulador')}><Calculator size={16} aria-hidden="true"/>Revisar condiciones para radicar</button></div>
+            :<Aviso titulo="Condiciones institucionales pendientes">La cuota institucional aun no esta disponible. La radicacion y la firma permanecen pendientes; tu estudio se conserva.</Aviso>)}
           {s.estudio?.reglas.some(r=>r.codigo==='UNICO_FILA_9'&&r.estadoEvaluacion==='NO_CUMPLE')&&
             <div className="ca-bottom-actions"><a className="btn btn-outline-primary"
               href="https://consulta.congente.coop:8030/home/verificacion_view/."
@@ -373,7 +375,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
               <ExternalLink size={16} aria-hidden="true"/>Actualiza tus datos para continuar
             </a></div>}
         </>}
-        {s&&vista==='firma'&&<><Etiqueta tono="warning">{institucion?'Firma pendiente':'Firma no acreditada'}</Etiqueta>
+        {s&&vista==='firma'&&<><Etiqueta tono="warning">{institucion||s.estudio?.decisionPolitica?.continuidad?.firmaContractual==='PENDIENTE'?'Firma pendiente':'Firma no acreditada'}</Etiqueta>
           <DocumentosAsociado institucion={institucion}/></>}
         {s&&vista==='historial'&&<>
           <ol className="ca-history">

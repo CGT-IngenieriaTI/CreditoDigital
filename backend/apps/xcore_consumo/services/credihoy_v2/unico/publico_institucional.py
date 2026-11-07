@@ -665,20 +665,21 @@ def validar_simulacion_propia(value, sid, *, ahora=None):
 
 
 def project_simulacion_aceptable(row):
-    from datetime import datetime, timezone
+    from datetime import datetime,timezone
     try:
-        if type(row) is not dict or set(row) != {'versionContrato', 'solicitudId', 'estado', 'cuota', 'oferta', 'aceptacion', 'simulacion', 'aceptacionSimulacion', 'autorizaStart', 'autorizaDesembolso'} or row['versionContrato'] != 'credihoy-cotizacion-titular-v1' or (row['estado'] != 'SIMULACION_PROPIA') or (row['cuota'] is not None) or (row['oferta'] is not None) or (row['aceptacion'] != {'aceptada': False, 'fecha': None}) or (row['autorizaStart'] is not False) or (row['autorizaDesembolso'] is not False):
-            raise ValueError()
-        validar_simulacion_propia(row['simulacion'], row['solicitudId'])
-        a = row['aceptacionSimulacion']
-        if type(a) is not dict or set(a) != {'aceptada', 'fecha'} or type(a['aceptada']) is not bool:
-            raise ValueError()
+        if (type(row) is not dict or set(row)!={'versionContrato','solicitudId','estado','cuota','oferta',
+                'aceptacion','simulacion','aceptacionSimulacion','autorizaStart','autorizaDesembolso'}
+                or row['versionContrato']!='credihoy-cotizacion-titular-v1' or row['estado']!='SIMULACION_PROPIA'
+                or row['cuota'] is not None or row['oferta'] is not None
+                or row['aceptacion']!={'aceptada':False,'fecha':None}
+                or row['autorizaStart'] is not False or row['autorizaDesembolso'] is not False):raise ValueError()
+        a=row['aceptacionSimulacion']
+        if type(a) is not dict or set(a)!={'aceptada','fecha'} or type(a['aceptada']) is not bool:raise ValueError()
         if a['aceptada']:
-            t = datetime.fromisoformat(a['fecha'])
-            if t.utcoffset() is None or not datetime.fromisoformat(row['simulacion']['calculadoEn']) <= t <= datetime.now(timezone.utc):
-                raise ValueError()
-        elif a['fecha'] is not None:
-            raise ValueError()
+            t=datetime.fromisoformat(a['fecha'])
+            if t.utcoffset() is None or not datetime.fromisoformat(row['simulacion']['calculadoEn'])<=t<=datetime.now(timezone.utc):raise ValueError()
+        elif a['fecha'] is not None:raise ValueError()
+        validar_simulacion_propia(row['simulacion'],row['solicitudId'],
+            ahora=t if a['aceptada'] else None)
         return json.loads(json.dumps(row))
-    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
-        raise NoDisponible from None
+    except (KeyError,TypeError,ValueError,AttributeError,ArithmeticError):raise NoDisponible from None

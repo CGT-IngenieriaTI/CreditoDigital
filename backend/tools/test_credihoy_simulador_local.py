@@ -85,6 +85,60 @@ class OwnQuoteTests(TransactionTestCase):
         receipt=self.detail.orchestration_data[self.q.KEY]['aceptacionesSimulacion'][sim['sha256']]
         self.assertEqual(receipt['sesionReferencia'],self.identity['_sesionReferencia']);self.assertFalse(receipt['firmaContractual'])
 
+    def test_accepted_simulation_survives_display_ttl_without_renewal_or_new_acceptance(self):
+        from dataclasses import fields
+        from apps.xcore_consumo.services.credihoy_v2.unico.elegibilidad import ContextoElegibilidad
+        sim=self.calculate()
+        first=self.operate(operacion='aceptar_simulacion',simulacionSha256=sim['sha256'],acepta=True)
+        future=timezone.now()+timedelta(hours=2)
+        args={f.name:None for f in fields(ContextoElegibilidad)}
+        args.update(solicitud_id=str(self.s.pk),titular_referencia=sha256(self.identity['numeroDocumento'].encode()).hexdigest())
+        with patch.object(self.q.timezone,'now',return_value=future):
+            repeated=self.operate(operacion='aceptar_simulacion',simulacionSha256=sim['sha256'],acepta=True)
+            self.assertEqual(first,repeated)
+            self.assertTrue(wire.project_quote(repeated)['aceptacionSimulacion']['aceptada'])
+            linked=self.q.aplicar_simulacion_aceptada_a_contexto(ContextoElegibilidad(**args),self.s)
+        self.assertEqual(linked.cuota_contractual,sim['cuota'])
+        self.assertEqual(repeated['simulacion']['vigenteHasta'],sim['vigenteHasta'])
+        self.assertEqual(AuditLog.objects.filter(event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR').count(),1)
+        self.context['versionCondiciones']='b'*64
+        with self.assertRaises(ValueError):self.operate()
+
+    def test_expired_unaccepted_simulation_cannot_be_accepted_backdated_or_extended(self):
+        sim=self.calculate()
+        with patch.object(self.q.timezone,'now',return_value=timezone.now()+timedelta(hours=2)):
+            # The independent document validator uses its own clock.
+            with patch.object(self.q,'_simulacion_persistida_para_continuidad',wraps=self.q._simulacion_persistida_para_continuidad):
+                self.detail.refresh_from_db()
+                entry=self.detail.orchestration_data[self.q.KEY]
+                late={'solicitudId':str(self.s.pk),'simulacionSha256':sim['sha256'],
+                    'versionCondiciones':sim['versionCondiciones'],'revisionReferencia':sim['revisionReferencia'],
+                    'titularReferencia':entry['titularReferencia'],'sesionReferencia':self.identity['_sesionReferencia'],
+                    'fecha':(timezone.now()).isoformat(),'requestId':str(uuid4()),'acepta':True,
+                    'textoVersion':'credihoy-aceptacion-simulacion-v1','firmaContractual':False,
+                    'autorizaStart':False,'autorizaDesembolso':False}
+                late['sha256']=self.q._huella_simulacion(late)
+                with self.assertRaises(ValueError):self.q._validar_aceptacion_simulacion(sim,late,entry['titularReferencia'])
+        self.assertEqual(AuditLog.objects.filter(event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR').count(),0)
+
+    def test_intake_evidence_requires_matching_personal_audit_and_current_revision(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import elegibilidad
+        sim=self.calculate()
+        self.operate(operacion='aceptar_simulacion',simulacionSha256=sim['sha256'],acepta=True)
+        decision={'operacionId':777,'sha256':'d'*64,'revisionReferencia':self.ref,
+            'resultado':{'estado':'REQUIERE_CONSEJO_ADMINISTRACION'}}
+        with patch.object(elegibilidad,'leer_decision_estudio',return_value=decision):
+            proof=self.q.comprobante_simulacion_aceptada(self.s,self.identity)
+            self.assertEqual(proof['cuota'],sim['cuota']);self.assertFalse(proof['autorizaStart'])
+            self.assertEqual(proof['clasificacionRegistrada'],'REQUIERE_CONSEJO_ADMINISTRACION')
+            event=AuditLog.objects.get(pk=proof['aceptacionAuditoriaId'])
+            self.assertEqual(event.event,'CREDIHOY_SIMULACION_ACEPTADA_TITULAR')
+            event.actor='titular:'+str(uuid4());event.save(update_fields=['actor'])
+            with self.assertRaisesRegex(ValueError,'ACEPTACION_PERSONAL_SIN_AUDITORIA_VINCULADA'):
+                self.q.comprobante_simulacion_aceptada(self.s,self.identity)
+        with self.assertRaisesRegex(ValueError,'ACEPTACION_DE_OTRO_TITULAR'):
+            self.q.comprobante_simulacion_aceptada(self.s,{**self.identity,'numeroDocumento':'0000000088'})
+
     def test_reject_cross_holder_changed_revision_changed_catalog_and_payload_injection(self):
         sim=self.calculate()
         self.identity['numeroDocumento']='0000000088'

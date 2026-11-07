@@ -56,6 +56,9 @@ def consult(grant,identity,payload,rid,*,firmante=None):
     body=wire.encode(payload)
     editing = 'borrador' in payload
     quoting = 'cotizacion' in payload
+    radicating = 'radicacion' in payload
+    if radicating and getattr(settings,'CREDIHOY_RADICACION_TITULAR_ENABLED',False) is not True:
+        raise wire.NoDisponible
     if quoting:
         from .simulacion_lectura import es_simulacion, simulador_habilitado
         if es_simulacion(payload['cotizacion']) and not simulador_habilitado():raise wire.NoDisponible
@@ -64,7 +67,7 @@ def consult(grant,identity,payload,rid,*,firmante=None):
     if editing:
         from .autoservicio import habilitar
         habilitar(str(grant.pk),expira_at=grant.sesion_expira_at)
-    proof=signing.dumps({'scope':'solicitudes:autorizar' if consenting else 'solicitudes:cotizar' if quoting else 'solicitudes:borrador' if editing else 'solicitudes:leer','aud':PATH,'requestId':rid,
+    proof=signing.dumps({'scope':'solicitudes:radicar' if radicating else 'solicitudes:autorizar' if consenting else 'solicitudes:cotizar' if quoting else 'solicitudes:borrador' if editing else 'solicitudes:leer','aud':PATH,'requestId':rid,
         'bodySha256':hashlib.sha256(body).hexdigest(),'accesoId':str(grant.pk),
         'numeroDocumento':identity['numeroDocumento'],
         'sesionExpiraAt':grant.sesion_expira_at.isoformat(),
@@ -86,19 +89,22 @@ def authorize(request):
             or request.content_type!='application/json' or len(body)>4096
             or not auth.startswith('Bearer ') or len(auth)>8192 or str(UUID(rid))!=rid
             or type(payload) is not dict or set(payload) not in ({'accesoId','navegador'},
-                {'accesoId','navegador','solicitudId'}, {'accesoId','navegador','borrador'}, {'accesoId','navegador','cotizacion'}, {'accesoId','navegador','autorizacion'})
+                {'accesoId','navegador','solicitudId'}, {'accesoId','navegador','borrador'}, {'accesoId','navegador','cotizacion'}, {'accesoId','navegador','autorizacion'}, {'accesoId','navegador','radicacion'})
             or str(UUID(payload['accesoId']))!=payload['accesoId']
             or not re.fullmatch('[a-f0-9]{64}',payload['navegador'])):raise ValueError
     if 'solicitudId' in payload and str(UUID(payload['solicitudId']))!=payload['solicitudId']:raise ValueError
     proof=signing.loads(auth[7:],key=key(),salt=SALT,max_age=TTL,fallback_keys=[])
     editing = 'borrador' in payload
     quoting = 'cotizacion' in payload
+    radicating = 'radicacion' in payload
+    if radicating and getattr(settings,'CREDIHOY_RADICACION_TITULAR_ENABLED',False) is not True:
+        raise wire.NoDisponible
     if quoting:
         from .simulacion_lectura import es_simulacion, simulador_habilitado
         if es_simulacion(payload['cotizacion']) and not simulador_habilitado():raise wire.NoDisponible
     consenting='autorizacion' in payload
     if consenting and getattr(settings,'CREDIHOY_AUTORIZACION_TITULAR_ENABLED',False) is not True:raise wire.NoDisponible
-    if (proof['scope']!=('solicitudes:autorizar' if consenting else 'solicitudes:cotizar' if quoting else 'solicitudes:borrador' if editing else 'solicitudes:leer') or proof['aud']!=PATH or proof['requestId']!=rid
+    if (proof['scope']!=('solicitudes:radicar' if radicating else 'solicitudes:autorizar' if consenting else 'solicitudes:cotizar' if quoting else 'solicitudes:borrador' if editing else 'solicitudes:leer') or proof['aud']!=PATH or proof['requestId']!=rid
             or proof['accesoId']!=payload['accesoId']
             or not hmac.compare_digest(proof['bodySha256'],hashlib.sha256(body).hexdigest())
             or type(proof['numeroDocumento']) is not str
@@ -111,8 +117,9 @@ def authorize(request):
             for v in cohort)):raise ValueError
     identity={'numeroDocumento':proof['numeroDocumento'],
         '_sesionReferencia':proof['accesoId'],'_sesionExpiraAt':proof['sesionExpiraAt']}
-    if not editing and not quoting and not consenting:
+    if not editing and not quoting and not consenting and not radicating:
         identity.update(_scopeLectura=proof['scope'],_requestId=rid)
+    if radicating:identity.update(_scopeRadicacion=proof['scope'],_requestId=rid)
     if consenting:identity.update(_scopeAutorizacion=proof['scope'],_requestId=rid)
     if 'firmanteInstitucional' in proof:
         if (not consenting or payload['autorizacion'].get('accion')!='verificar_firmante'

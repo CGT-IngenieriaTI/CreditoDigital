@@ -1117,71 +1117,135 @@ def calcular_simulacion_propia(solicitud_id, operador, *, vigencia_segundos=3600
         return body
 
 
-def _operacion_simulacion_propia(identity, payload, rid):
+def _operacion_simulacion_propia(identity,payload,rid):
     """Personal simulation acceptance is not a contractual signature or Council decision."""
     from .autoservicio import _estudio_publico_personal
     from .publico_institucional import validar_simulacion_propia
-    op = payload.get('operacion')
-    expected = {'solicitudId', 'operacion'}
-    if op == 'aceptar_simulacion':
-        expected |= {'simulacionSha256', 'acepta'}
-    if set(payload) != expected or op not in {'consultar', 'aceptar_simulacion'}:
+    op=payload.get('operacion');expected={'solicitudId','operacion'}
+    if op=='aceptar_simulacion':expected|={'simulacionSha256','acepta'}
+    if set(payload)!=expected or op not in {'consultar','aceptar_simulacion'}:
         raise ValueError('PETICION_SIMULACION_INVALIDA')
-    sid = str(UUID(payload['solicitudId']))
-    rid = str(UUID(rid))
-    s = _obtener(sid, None, titular=identity)
-    study = _estudio_publico_personal(s, identity)
-    if not study or not study.get('decisionPolitica', {}).get('continuidad', {}).get('estudioFavorable'):
+    sid=str(UUID(payload['solicitudId']));rid=str(UUID(rid))
+    s=_obtener(sid,None,titular=identity)
+    # The signed study reader manages its own READ ONLY transaction.
+    study=_estudio_publico_personal(s,identity)
+    if not study or not study.get('decisionPolitica',{}).get('continuidad',{}).get('estudioFavorable'):
         raise ValueError('ESTUDIO_FAVORABLE_REQUERIDO')
     with transaction.atomic(using=alias_cotizacion()):
-        s = _obtener(sid, None, titular=identity)
-        detail, context = _contexto(s)
-        entry = detail.orchestration_data.get(KEY, {})
-        sim = validar_simulacion_propia(entry.get('simulacion'), sid)
-        holder = hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()
-        if entry.get('motor') != 'PROPIO_390_111_CFA' or entry.get('titularReferencia') != holder or sim['versionCondiciones'] != context['versionCondiciones'] or (sim['revisionReferencia'] != study['referenciaVersion']):
+        s=_obtener(sid,None,titular=identity)
+        detail,context=_contexto(s)
+        entry=detail.orchestration_data.get(KEY,{})
+        holder=hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()
+        sim,accepted=_simulacion_persistida_para_continuidad(entry,sid,holder)
+        if (entry.get('motor')!='PROPIO_390_111_CFA' or entry.get('titularReferencia')!=holder
+                or sim['versionCondiciones']!=context['versionCondiciones']
+                or sim['revisionReferencia']!=study['referenciaVersion']):
             raise ValueError('SIMULACION_DESACTUALIZADA_O_DE_OTRO_TITULAR')
-        history = dict(entry.get('aceptacionesSimulacion', {}))
-        accepted = history.get(sim['sha256'])
-        if accepted is not None:
-            _validar_aceptacion_simulacion(sim, accepted, holder)
-        if op == 'aceptar_simulacion':
-            if payload['acepta'] is not True or payload['simulacionSha256'] != sim['sha256']:
+        history=dict(entry.get('aceptacionesSimulacion',{}))
+        if op=='aceptar_simulacion':
+            if payload['acepta'] is not True or payload['simulacionSha256']!=sim['sha256']:
                 raise ValueError('ACEPTACION_DE_OTRA_SIMULACION')
             if accepted is None:
-                accepted = {'solicitudId': sid, 'simulacionSha256': sim['sha256'], 'versionCondiciones': sim['versionCondiciones'], 'revisionReferencia': sim['revisionReferencia'], 'titularReferencia': holder, 'sesionReferencia': identity['_sesionReferencia'], 'fecha': timezone.now().isoformat(), 'requestId': rid, 'acepta': True, 'textoVersion': 'credihoy-aceptacion-simulacion-v1', 'firmaContractual': False, 'autorizaStart': False, 'autorizaDesembolso': False}
-                accepted['sha256'] = _huella_simulacion(accepted)
-                history[sim['sha256']] = accepted
-                detail.orchestration_data = {**detail.orchestration_data, KEY: {**entry, 'aceptacionesSimulacion': history}}
-                detail.save(update_fields=['orchestration_data', 'updated_at'])
-                AuditLog.objects.create(solicitud=s, event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR', actor=_actor(None, identity), request_id=rid, payload={'simulacionSha256': sim['sha256'], 'aceptacionSha256': accepted['sha256'], 'autorizaStart': False, 'autorizaDesembolso': False})
-        return {'versionContrato': 'credihoy-cotizacion-titular-v1', 'solicitudId': sid, 'estado': 'SIMULACION_PROPIA', 'cuota': None, 'oferta': None, 'aceptacion': {'aceptada': False, 'fecha': None}, 'simulacion': sim, 'aceptacionSimulacion': {'aceptada': accepted is not None, 'fecha': accepted['fecha'] if accepted else None}, 'autorizaStart': False, 'autorizaDesembolso': False}
+                accepted={'solicitudId':sid,'simulacionSha256':sim['sha256'],
+                    'versionCondiciones':sim['versionCondiciones'],'revisionReferencia':sim['revisionReferencia'],
+                    'titularReferencia':holder,'sesionReferencia':identity['_sesionReferencia'],
+                    'fecha':timezone.now().isoformat(),'requestId':rid,'acepta':True,
+                    'textoVersion':'credihoy-aceptacion-simulacion-v1','firmaContractual':False,
+                    'autorizaStart':False,'autorizaDesembolso':False}
+                accepted['sha256']=_huella_simulacion(accepted)
+                _validar_aceptacion_simulacion(sim,accepted,holder)
+                history[sim['sha256']]=accepted
+                detail.orchestration_data={**detail.orchestration_data,KEY:{**entry,'aceptacionesSimulacion':history}}
+                detail.save(update_fields=['orchestration_data','updated_at'])
+                AuditLog.objects.create(solicitud=s,event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR',
+                    actor=_actor(None,identity),request_id=rid,payload={'simulacionSha256':sim['sha256'],
+                        'aceptacionSha256':accepted['sha256'],'autorizaStart':False,'autorizaDesembolso':False})
+        return {'versionContrato':'credihoy-cotizacion-titular-v1','solicitudId':sid,'estado':'SIMULACION_PROPIA',
+            'cuota':None,'oferta':None,'aceptacion':{'aceptada':False,'fecha':None},
+            'simulacion':sim,'aceptacionSimulacion':{'aceptada':accepted is not None,'fecha':accepted['fecha'] if accepted else None},
+            'autorizaStart':False,'autorizaDesembolso':False}
 
 
-def _validar_aceptacion_simulacion(sim, receipt, holder):
+def _validar_aceptacion_simulacion(sim,receipt,holder):
     try:
-        body = {k: v for k, v in receipt.items() if k != 'sha256'}
-        when = datetime.fromisoformat(receipt['fecha'])
-        if set(receipt) != {'solicitudId', 'simulacionSha256', 'versionCondiciones', 'revisionReferencia', 'titularReferencia', 'sesionReferencia', 'fecha', 'requestId', 'acepta', 'textoVersion', 'firmaContractual', 'autorizaStart', 'autorizaDesembolso', 'sha256'} or _huella_simulacion(body) != receipt['sha256'] or receipt['solicitudId'] != sim['solicitudId'] or (receipt['simulacionSha256'] != sim['sha256']) or (receipt['versionCondiciones'] != sim['versionCondiciones']) or (receipt['revisionReferencia'] != sim['revisionReferencia']) or (receipt['titularReferencia'] != holder) or (receipt['acepta'] is not True) or (receipt['textoVersion'] != 'credihoy-aceptacion-simulacion-v1') or any((receipt[k] is not False for k in ('firmaContractual', 'autorizaStart', 'autorizaDesembolso'))) or (str(UUID(receipt['sesionReferencia'])) != receipt['sesionReferencia']) or (str(UUID(receipt['requestId'])) != receipt['requestId']) or (when.utcoffset() is None) or (not datetime.fromisoformat(sim['calculadoEn']) <= when <= timezone.now()):
-            raise ValueError()
-    except (TypeError, ValueError, KeyError, AttributeError):
-        raise ValueError('ACEPTACION_SIMULACION_NO_INTEGRA') from None
+        body={k:v for k,v in receipt.items() if k!='sha256'}
+        when=datetime.fromisoformat(receipt['fecha'])
+        if (set(receipt)!={'solicitudId','simulacionSha256','versionCondiciones','revisionReferencia','titularReferencia',
+                'sesionReferencia','fecha','requestId','acepta','textoVersion','firmaContractual','autorizaStart','autorizaDesembolso','sha256'}
+                or _huella_simulacion(body)!=receipt['sha256'] or receipt['solicitudId']!=sim['solicitudId']
+                or receipt['simulacionSha256']!=sim['sha256'] or receipt['versionCondiciones']!=sim['versionCondiciones']
+                or receipt['revisionReferencia']!=sim['revisionReferencia'] or receipt['titularReferencia']!=holder
+                or receipt['acepta'] is not True or receipt['textoVersion']!='credihoy-aceptacion-simulacion-v1'
+                or any(receipt[k] is not False for k in ('firmaContractual','autorizaStart','autorizaDesembolso'))
+                or str(UUID(receipt['sesionReferencia']))!=receipt['sesionReferencia']
+                or str(UUID(receipt['requestId']))!=receipt['requestId'] or when.utcoffset() is None
+                or not datetime.fromisoformat(sim['calculadoEn'])<=when<datetime.fromisoformat(sim['vigenteHasta'])
+                or when>timezone.now()):raise ValueError()
+    except (TypeError,ValueError,KeyError,AttributeError):raise ValueError('ACEPTACION_SIMULACION_NO_INTEGRA') from None
     return receipt
 
 
-def aplicar_simulacion_aceptada_a_contexto(contexto, s):
+def aplicar_simulacion_aceptada_a_contexto(contexto,s):
     """Feed the existing special-intake gate, without manufacturing a contractual offer."""
     from dataclasses import replace
     from .publico_institucional import validar_simulacion_propia
     from .funcional import leer_estado_funcional
-    detail, context = _contexto(s, lock=False)
-    entry = detail.orchestration_data.get(KEY, {})
-    sim = validar_simulacion_propia(entry.get('simulacion'), str(s.pk))
-    holder = hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest()
-    if contexto.solicitud_id != str(s.pk) or contexto.titular_referencia != holder or entry.get('titularReferencia') != holder or (sim['versionCondiciones'] != context['versionCondiciones']) or (sim['revisionReferencia'] != leer_estado_funcional(s)['revisionEstudio']['versionReferencia']):
+    detail,context=_contexto(s,lock=False)
+    entry=detail.orchestration_data.get(KEY,{})
+    holder=hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest()
+    sim,accepted=_simulacion_persistida_para_continuidad(entry,str(s.pk),holder)
+    if (contexto.solicitud_id!=str(s.pk) or contexto.titular_referencia!=holder
+            or entry.get('titularReferencia')!=holder or sim['versionCondiciones']!=context['versionCondiciones']
+            or sim['revisionReferencia']!=leer_estado_funcional(s)['revisionEstudio']['versionReferencia']):
         raise ValueError('CONTEXTO_NO_CORRESPONDE_A_SIMULACION')
-    accepted = entry.get('aceptacionesSimulacion', {}).get(sim['sha256'])
-    if accepted is None:
-        raise ValueError('ACEPTACION_PERSONAL_SIMULACION_REQUERIDA')
-    _validar_aceptacion_simulacion(sim, accepted, holder)
-    return replace(contexto, cuota_contractual=sim['cuota'])
+    if accepted is None:raise ValueError('ACEPTACION_PERSONAL_SIMULACION_REQUERIDA')
+    _validar_aceptacion_simulacion(sim,accepted,holder)
+    # Offer/contractual-acceptance fields deliberately remain unchanged.
+    return replace(contexto,cuota_contractual=sim['cuota'])
+
+
+def _simulacion_persistida_para_continuidad(entry,sid,holder):
+    """An accepted quote is checked at acceptance, without extending its TTL."""
+    from .publico_institucional import validar_simulacion_propia
+    try:
+        raw=entry['simulacion']
+        accepted=entry.get('aceptacionesSimulacion',{}).get(raw['sha256'])
+        if accepted is not None:
+            _validar_aceptacion_simulacion(raw,accepted,holder)
+            sim=validar_simulacion_propia(raw,sid,ahora=datetime.fromisoformat(accepted['fecha']))
+        else:sim=validar_simulacion_propia(raw,sid)
+    except (KeyError,TypeError,AttributeError):raise ValueError('SIMULACION_PERSISTIDA_NO_INTEGRA') from None
+    return sim,accepted
+
+
+def comprobante_simulacion_aceptada(s,identity):
+    """Owner-only durable evidence. Does not authorize START or human approval."""
+    from .elegibilidad import leer_decision_estudio
+    from .funcional import leer_estado_funcional
+    holder=hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()
+    if s.solicitante.numero_identificacion!=identity['numeroDocumento']:
+        raise ValueError('ACEPTACION_DE_OTRO_TITULAR')
+    detail,context=_contexto(s,lock=False)
+    entry=detail.orchestration_data.get(KEY,{})
+    sim,accepted=_simulacion_persistida_para_continuidad(entry,str(s.pk),holder)
+    if accepted is None:raise ValueError('ACEPTACION_PERSONAL_SIMULACION_REQUERIDA')
+    revision=leer_estado_funcional(s)['revisionEstudio']['versionReferencia']
+    if (entry.get('motor')!='PROPIO_390_111_CFA' or entry.get('titularReferencia')!=holder
+            or sim['versionCondiciones']!=context['versionCondiciones'] or sim['revisionReferencia']!=revision):
+        raise ValueError('CONDICIONES_ACEPTADAS_NO_CORRESPONDEN_AL_EXPEDIENTE')
+    rows=list(AuditLog.objects.filter(solicitud=s,event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR',
+        request_id=accepted['requestId']).values('id','actor','payload')[:2])
+    if (len(rows)!=1 or rows[0]['actor']!='titular:'+accepted['sesionReferencia']
+            or rows[0]['payload']!={'simulacionSha256':sim['sha256'],'aceptacionSha256':accepted['sha256'],
+                'autorizaStart':False,'autorizaDesembolso':False}):
+        raise ValueError('ACEPTACION_PERSONAL_SIN_AUDITORIA_VINCULADA')
+    decision=leer_decision_estudio(s)
+    if decision is None or decision['revisionReferencia']!=revision:
+        raise ValueError('DECISION_NO_CORRESPONDE_A_REVISION_ACEPTADA')
+    return {'solicitudId':str(s.pk),'titularReferencia':holder,'revisionReferencia':revision,
+        'decisionReferencia':decision['operacionId'],'decisionSha256':decision['sha256'],
+        'clasificacionRegistrada':decision['resultado']['estado'],'versionCondiciones':sim['versionCondiciones'],
+        'simulacionSha256':sim['sha256'],'aceptacionSha256':accepted['sha256'],
+        'aceptacionAuditoriaId':rows[0]['id'],'aceptadaEn':accepted['fecha'],
+        'monto':sim['monto'],'plazoMeses':sim['plazoMeses'],'periodicidad':sim['periodicidad'],
+        'tasaNominalNamv':sim['tasaNominalNamv'],'cuota':sim['cuota'],'autorizaStart':False}

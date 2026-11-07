@@ -17,6 +17,8 @@
 
 
 
+
+
 import hashlib
 import hmac
 import json
@@ -288,22 +290,11 @@ def project_quote(row):
     """Explicit allowlist: never expose holder hashes, XML, actors or core IDs."""
     from datetime import date, datetime, timezone
     from decimal import Decimal
+    if type(row) is dict and row.get('estado') == 'SIMULACION_PROPIA':
+        return project_simulacion_aceptable(row)
     try:
         fields = {'versionContrato', 'solicitudId', 'estado', 'cuota', 'oferta', 'aceptacion', 'autorizaStart', 'autorizaDesembolso'}
-        own = type(row) is dict and row.get('estado') == 'SIMULACION_PROPIA'
-        if own:
-            fields |= {'simulacion', 'aceptacionSimulacion'}
-            validar_simulacion_propia(row['simulacion'], row['solicitudId'])
-            a = row['aceptacionSimulacion']
-            if type(a) is not dict or set(a) != {'aceptada', 'fecha'} or type(a['aceptada']) is not bool:
-                raise ValueError()
-            if a['aceptada']:
-                t = datetime.fromisoformat(a['fecha'])
-                if t.utcoffset() is None or not datetime.fromisoformat(row['simulacion']['calculadoEn']) <= t <= datetime.now(timezone.utc):
-                    raise ValueError()
-            elif a['fecha'] is not None:
-                raise ValueError()
-        if type(row) is not dict or set(row) != fields or row['versionContrato'] != 'credihoy-cotizacion-titular-v1' or (str(UUID(row['solicitudId'])) != row['solicitudId']) or (row['autorizaStart'] is not False) or (row['autorizaDesembolso'] is not False) or (row['estado'] not in {'SIMULACION_PROPIA', 'DISPONIBLE_PARCIAL', 'SIN_COTIZACION', 'NO_HABILITADA', 'REQUIERE_CONCILIACION', 'DESACTUALIZADA', 'PARAMETROS_EXPEDIENTE_INCOMPLETOS', 'PARAMETROS_FALTANTES', 'NO_DISPONIBLE', 'ERROR_TEMPORAL'}):
+        if type(row) is not dict or set(row) != fields or row['versionContrato'] != 'credihoy-cotizacion-titular-v1' or (str(UUID(row['solicitudId'])) != row['solicitudId']) or (row['autorizaStart'] is not False) or (row['autorizaDesembolso'] is not False) or (row['estado'] not in {'DISPONIBLE_PARCIAL', 'SIN_COTIZACION', 'NO_HABILITADA', 'REQUIERE_CONCILIACION', 'DESACTUALIZADA', 'PARAMETROS_EXPEDIENTE_INCOMPLETOS', 'PARAMETROS_FALTANTES', 'NO_DISPONIBLE', 'ERROR_TEMPORAL'}):
             raise ValueError()
         offer = row['oferta']
         accept = row['aceptacion']
@@ -671,3 +662,23 @@ def validar_simulacion_propia(value, sid, *, ahora=None):
         return json.loads(json.dumps(value))
     except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
         raise ValueError('SIMULACION_PROPIA_NO_VIGENTE_O_INVALIDA') from None
+
+
+def project_simulacion_aceptable(row):
+    from datetime import datetime, timezone
+    try:
+        if type(row) is not dict or set(row) != {'versionContrato', 'solicitudId', 'estado', 'cuota', 'oferta', 'aceptacion', 'simulacion', 'aceptacionSimulacion', 'autorizaStart', 'autorizaDesembolso'} or row['versionContrato'] != 'credihoy-cotizacion-titular-v1' or (row['estado'] != 'SIMULACION_PROPIA') or (row['cuota'] is not None) or (row['oferta'] is not None) or (row['aceptacion'] != {'aceptada': False, 'fecha': None}) or (row['autorizaStart'] is not False) or (row['autorizaDesembolso'] is not False):
+            raise ValueError()
+        validar_simulacion_propia(row['simulacion'], row['solicitudId'])
+        a = row['aceptacionSimulacion']
+        if type(a) is not dict or set(a) != {'aceptada', 'fecha'} or type(a['aceptada']) is not bool:
+            raise ValueError()
+        if a['aceptada']:
+            t = datetime.fromisoformat(a['fecha'])
+            if t.utcoffset() is None or not datetime.fromisoformat(row['simulacion']['calculadoEn']) <= t <= datetime.now(timezone.utc):
+                raise ValueError()
+        elif a['fecha'] is not None:
+            raise ValueError()
+        return json.loads(json.dumps(row))
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        raise NoDisponible from None

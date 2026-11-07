@@ -643,7 +643,7 @@ export function OfertaTitular({sid,operar,horaServidor=Date.now}:{sid:string;ope
       <div><dt>Plazo</dt><dd>{sim.plazoMeses} meses</dd></div><div><dt>Tasa NAMV</dt><dd>{sim.tasaNominalNamv} %</dd></div>
       <div><dt>Periodicidad</dt><dd>Mensual</dd></div><div><dt>Seguro mensual sobre saldo</dt><dd>{sim.seguroMensualPorcentaje} %</dd></div></dl>
       <p>Este plan de pagos es aproximado. Una vez desembolsado tu crédito, recibirás por correo electrónico el plan de pagos definitivo generado al momento de tu desembolso.</p>
-      <div style={{overflowX:'auto'}} tabIndex={0} aria-label="Plan de pagos aproximado"><table className="table"><thead><tr>
+      <div style={{overflowX:'auto'}} tabIndex={0} aria-label="Plan de pagos aproximado"><table className="table" style={{minWidth:640,whiteSpace:'nowrap'}}><thead><tr>
         <th scope="col">Cuota</th><th scope="col">Capital</th><th scope="col">Intereses</th><th scope="col">Seguro</th><th scope="col">Total</th><th scope="col">Saldo</th>
       </tr></thead><tbody>{sim.amortizacion.map(r=><tr key={r.periodo}><th scope="row">{r.periodo}</th><td>{moneda(r.capital)}</td>
         <td>{moneda(r.intereses)}</td><td>{moneda(r.seguro)}</td><td>{moneda(r.cuota)}</td><td>{moneda(r.saldoFinal)}</td></tr>)}</tbody></table></div>

@@ -113,7 +113,10 @@ export interface EstudioPublico {
       capacidadDisponible:string|null;cuotaNuevaEstimada:string|null;residualPosteriorEstimado:string|null}};
   decision:'PENDIENTE_REVISION'|'REQUIERE_SUBSANACION';autorizadoDecisionCrediticia:false;
   decisionPolitica?:{version:'credihoy-decision-publica-v1';versionPolitica:string;estado:'APROBADO'|'RECHAZADO'|'EN_REVISION';
-    motivos:{codigo:string;regla:string|null}[];decisionLinixRegistrada:false;autorizaDesembolso:false};
+    motivos:{codigo:string;regla:string|null}[];decisionLinixRegistrada:false;autorizaDesembolso:false;
+    continuidad?:{version:'credihoy-continuidad-publica-v1';estudioFavorable:boolean;
+      estadoRadicacion:'PREPARACION_PENDIENTE';decisionInstitucional:'PENDIENTE';firmaContractual:'PENDIENTE';
+      radicacionHabilitada:false;firmaHabilitada:false}};
 }
 export interface SimulacionPublica {cuota:string;tasaNominalNamv:string;
   origen:'REFERENCIA_INSTITUCIONAL_REGISTRADA'|'CALCULO_INSTITUCIONAL';
@@ -247,7 +250,17 @@ export function validarEstudioPublico(raw:unknown,sid:string,now=Date.now()):Est
     'fechaEvaluacion','reglas','capacidad','decision','autorizadoDecisionCrediticia'];
   if(p.decisionPolitica!==undefined){
     fields.push('decisionPolitica');const d=obj(p.decisionPolitica);
-    if(Object.keys(d).sort().join(',')!==['version','versionPolitica','estado','motivos','decisionLinixRegistrada','autorizaDesembolso'].sort().join(',')
+    const decisionFields=['version','versionPolitica','estado','motivos','decisionLinixRegistrada','autorizaDesembolso'];
+    if(d.continuidad!==undefined){
+      decisionFields.push('continuidad');const c=obj(d.continuidad);
+      if(Object.keys(c).sort().join(',')!=='decisionInstitucional,estadoRadicacion,estudioFavorable,firmaContractual,firmaHabilitada,radicacionHabilitada,version'
+        ||c.version!=='credihoy-continuidad-publica-v1'||typeof c.estudioFavorable!=='boolean'
+        ||c.estadoRadicacion!=='PREPARACION_PENDIENTE'||c.decisionInstitucional!=='PENDIENTE'
+        ||c.firmaContractual!=='PENDIENTE'||c.radicacionHabilitada!==false||c.firmaHabilitada!==false
+        ||c.estudioFavorable&&(d.estado==='RECHAZADO'||!Array.isArray(d.motivos)
+          ||d.motivos.some(v=>obj(v).codigo!=='REVISION_ESTAMENTO_INSTITUCIONAL')))fail();
+    }
+    if(Object.keys(d).sort().join(',')!==decisionFields.sort().join(',')
       ||d.version!=='credihoy-decision-publica-v1'||!text(d.versionPolitica)||text(d.versionPolitica).length>120
       ||!['APROBADO','RECHAZADO','EN_REVISION'].includes(text(d.estado))
       ||d.decisionLinixRegistrada!==false||d.autorizaDesembolso!==false||!Array.isArray(d.motivos)||d.motivos.length>40)fail();
@@ -277,6 +290,9 @@ export function validarEstudioPublico(raw:unknown,sid:string,now=Date.now()):Est
     return {...r,motivos:[...r.motivos as string[]],datosFaltantes:[...r.datosFaltantes as string[]]} as EstudioPublico['reglas'][number];
   });
   if(new Set(rules.map(r=>r.codigo)).size!==16)fail();
+  if(p.decisionPolitica&&obj(obj(p.decisionPolitica).continuidad??{}).estudioFavorable===true
+    &&rules.some(r=>!['CUMPLE','NO_APLICA'].includes(r.estadoEvaluacion)
+      &&!(r.codigo==='UNICO_FILA_6'&&r.estadoEvaluacion==='NO_CUMPLE')))fail();
   const capacityFields=['estado','valor','preliminarNoDecisoria','cuotaContractualDisponible'];
   if(c.metodologia!==undefined){
     capacityFields.push('metodologia');const m=obj(c.metodologia);

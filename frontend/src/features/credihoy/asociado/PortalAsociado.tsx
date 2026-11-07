@@ -22,7 +22,7 @@ function motivoEstudio(value:string){return MOTIVOS_ESTUDIO[value]??'Esta valida
 function motivoDecision(codigo:string,regla:string|null){
   if(regla==='UNICO_FILA_9')return 'Debes actualizar tus datos con Congente.';
   if(codigo==='CLASIFICACION_INSTITUCIONAL_PENDIENTE')return 'Congente debe verificar el estamento que corresponde a tu solicitud.';
-  if(codigo==='REVISION_ESTAMENTO_INSTITUCIONAL')return 'Tu solicitud requiere revision del estamento institucional correspondiente.';
+  if(codigo==='REVISION_ESTAMENTO_INSTITUCIONAL')return 'La decision institucional sigue pendiente.';
   if(codigo==='CAPACIDAD_NO_EVALUABLE')return 'Falta informacion acreditada para decidir sobre tu capacidad de pago.';
   if(codigo==='REGLA_EXCLUYENTE_NO_CUMPLE')return 'Tu solicitud no cumple una condicion obligatoria del credito.';
   return 'Congente debe revisar una condicion pendiente de tu solicitud.';
@@ -145,6 +145,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
   },[s?.referencia,s?.estudio?.referenciaVersion,puedeLeerActo,centralesHabilitadas]);
   const siguiente=s?resolverSiguienteAccion(s,acto?.sid===s.referencia?acto.data:null,consultandoActo):null;
   const quote=s?.simulacion,institucion=s?.institucional;
+  const estudioFavorable=s?.estudio?.decisionPolitica?.continuidad?.estudioFavorable===true;
   const editando=edicionBorrador&&!s?.envio;
   useEffect(()=>{if(s?.envio)setEdicionBorrador(false);},[s?.envio]);
   useEffect(()=>{
@@ -311,19 +312,21 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
           </Aviso>}
           <div className={'ca-result'+(institucion?' ca-result--approved':'')}>
             <span className="ca-icon-tile">{institucion?<BadgeCheck size={27} aria-hidden="true"/>:<Clock3 size={27} aria-hidden="true"/>}</span>
-            <h3>{institucion?'Aprobacion institucional registrada':'Resultado institucional por confirmar'}</h3>
-            <p>{institucion?'La formalizacion y la firma de tus documentos siguen pendientes.':'No hay una decision institucional acreditada disponible en esta consulta.'}</p>
+            <h3>{institucion?'Aprobacion institucional registrada':estudioFavorable?'Estudio favorable':'Resultado institucional por confirmar'}</h3>
+            <p>{institucion?'La formalizacion y la firma de tus documentos siguen pendientes.':estudioFavorable?
+              'Las validaciones del estudio estan cumplidas. La radicacion y la decision final conservan sus propios requisitos.':
+              'No hay una decision institucional acreditada disponible en esta consulta.'}</p>
           </div>
-          <dl className="ca-metrics"><div><dt>Decision</dt><dd className="ca-metric-text">{institucion?'Aprobada; formalizacion pendiente':'Sin resultado acreditado'}</dd></div>
+          <dl className="ca-metrics"><div><dt>Decision institucional</dt><dd className="ca-metric-text">{institucion?'Aprobada; formalizacion pendiente':estudioFavorable?'Pendiente':'Sin resultado acreditado'}</dd></div>
             <div><dt>Fecha de la decision</dt><dd>{institucion?fechaPublica(institucion.fechaDecision):'No disponible'}</dd></div></dl>
           {institucion&&<p className="ca-notice">{INCIDENCIAS[institucion.incidencias]}</p>}
           <h3 className="ca-section-title">Validaciones del canal</h3><p className="ca-notice">Requisitos cumplidos: {s.requisitosCumplidos??'Por verificar'}. La evaluacion del canal se conserva separada de la decision institucional.</p>
           {s.estudio&&<div className="ca-study">
             <div className="ca-study-heading"><h3 className="ca-section-title">Estudio de tu solicitud</h3>
               <span>Version {s.estudio.version} - {fechaPublica(s.estudio.fechaEvaluacion)}</span></div>
-            {s.estudio.decisionPolitica?<Aviso tono={s.estudio.decisionPolitica.estado==='APROBADO'?'success':s.estudio.decisionPolitica.estado==='RECHAZADO'?'error':'warning'}
-              titulo={s.estudio.decisionPolitica.estado==='APROBADO'?'Aprobado por la politica de credito':s.estudio.decisionPolitica.estado==='RECHAZADO'?'Solicitud rechazada por la politica de credito':'Solicitud en revision'}>
-              {s.estudio.decisionPolitica.motivos.length>0&&<ul>{s.estudio.decisionPolitica.motivos.map((m,i)=><li key={i}>{motivoDecision(m.codigo,m.regla)}</li>)}</ul>}
+            {s.estudio.decisionPolitica?<Aviso tono={estudioFavorable||s.estudio.decisionPolitica.estado==='APROBADO'?'success':s.estudio.decisionPolitica.estado==='RECHAZADO'?'error':'warning'}
+              titulo={estudioFavorable?'Estudio favorable':s.estudio.decisionPolitica.estado==='APROBADO'?'Aprobado por la politica de credito':s.estudio.decisionPolitica.estado==='RECHAZADO'?'Solicitud rechazada por la politica de credito':'Solicitud en revision'}>
+              {s.estudio.decisionPolitica.motivos.some(m=>m.codigo!=='REVISION_ESTAMENTO_INSTITUCIONAL')&&<ul>{s.estudio.decisionPolitica.motivos.filter(m=>m.codigo!=='REVISION_ESTAMENTO_INSTITUCIONAL').map((m,i)=><li key={i}>{motivoDecision(m.codigo,m.regla)}</li>)}</ul>}
               <p>La oferta contractual, la formalizacion y el registro institucional conservan sus validaciones pendientes.</p>
             </Aviso>:<Aviso tono="warning" titulo={s.estudio.decision==='REQUIERE_SUBSANACION'?'Hay requisitos por subsanar':'Estudio pendiente de revision'}>
               Los datos incompletos y las validaciones pendientes no son un rechazo definitivo de tu credito.</Aviso>}
@@ -361,6 +364,8 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
             </ol>
           </div>}
           <Pendientes items={s.pendientes}/><Aviso titulo="Para continuar">{s.siguientePaso}</Aviso>
+          {estudioFavorable&&<div className="ca-bottom-actions"><button className="btn btn-outline-primary"
+            onClick={()=>setVista('simulador')}><Calculator size={16} aria-hidden="true"/>Revisar condiciones para radicar</button></div>}
           {s.estudio?.reglas.some(r=>r.codigo==='UNICO_FILA_9'&&r.estadoEvaluacion==='NO_CUMPLE')&&
             <div className="ca-bottom-actions"><a className="btn btn-outline-primary"
               href="https://consulta.congente.coop:8030/home/verificacion_view/."

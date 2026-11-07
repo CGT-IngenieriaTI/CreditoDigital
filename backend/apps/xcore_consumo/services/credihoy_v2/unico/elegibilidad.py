@@ -11,6 +11,8 @@
 
 
 
+
+
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -338,40 +340,58 @@ def contrato_evaluacion_decision(c,politica,*,autoridad=None,ahora):
 
 class PuertaRadicacionOrdinaria:
     """Sin ruta HTTP ni habilitacion productiva. Revalida antes de delegar."""
+
     def __init__(self, *, autoridad, politica, cargar_contexto, transporte):
-        self.autoridad, self.politica = autoridad, politica
-        self.cargar_contexto, self.transporte = cargar_contexto, transporte
+        self.autoridad, self.politica = (autoridad, politica)
+        self.cargar_contexto, self.transporte = (cargar_contexto, transporte)
 
-    def preparar_contrato(self,solicitud_id,*,ahora):
-        contexto=self.cargar_contexto(solicitud_id)
-        if contexto.solicitud_id!=str(solicitud_id):
-            raise RadicacionOrdinariaBloqueada({'codigo':'CONTEXTO_DE_OTRO_EXPEDIENTE'})
-        return contrato_evaluacion_decision(contexto,self.politica,autoridad=self.autoridad,ahora=ahora)
-
-    def preflight(self, solicitud_id, *, ahora, contrato_preparado=None):
+    def preparar_contrato(self, solicitud_id, *, ahora):
         contexto = self.cargar_contexto(solicitud_id)
         if contexto.solicitud_id != str(solicitud_id):
             raise RadicacionOrdinariaBloqueada({'codigo': 'CONTEXTO_DE_OTRO_EXPEDIENTE'})
-        digital=None
-        if contexto.clasificacion_estamentos is not None or ahora.date()>=datetime(2026,10,26).date():
-            digital=evaluar_decision_digital(contexto,ahora=ahora)
-            if digital['estado']!='APROBADO':
-                raise RadicacionOrdinariaBloqueada({'codigo':'PARADA_POLITICA_DIGITAL','decision':digital})
+        return contrato_evaluacion_decision(contexto, self.politica, autoridad=self.autoridad, ahora=ahora)
+
+    def preflight(self, solicitud_id, *, ahora, contrato_preparado=None, modo='ORDINARIA'):
+        if modo not in {'ORDINARIA', 'ESPECIAL'}:
+            raise RadicacionOrdinariaBloqueada({'codigo': 'MODO_RADICACION_INVALIDO'})
+        contexto = self.cargar_contexto(solicitud_id)
+        if contexto.solicitud_id != str(solicitud_id):
+            raise RadicacionOrdinariaBloqueada({'codigo': 'CONTEXTO_DE_OTRO_EXPEDIENTE'})
+        digital = None
+        if contexto.clasificacion_estamentos is not None or ahora.date() >= datetime(2026, 10, 26).date():
+            digital = evaluar_decision_digital(contexto, ahora=ahora)
+            from .estamentos import FAMILIAR, COLABORADOR
+            admitted = {'APROBADO'} if modo == 'ORDINARIA' else {FAMILIAR, COLABORADOR}
+            if digital['estado'] not in admitted:
+                raise RadicacionOrdinariaBloqueada({'codigo': 'PARADA_POLITICA_DIGITAL', 'decision': digital})
         if contrato_preparado is not None:
-            current=contrato_evaluacion_decision(contexto,self.politica,autoridad=self.autoridad,ahora=ahora)
-            if (type(contrato_preparado) is not dict or contrato_preparado!=current):
-                raise RadicacionOrdinariaBloqueada({'codigo':'EVALUACION_DECISION_O_CONDICIONES_CAMBIARON'})
+            current = contrato_evaluacion_decision(contexto, self.politica, autoridad=self.autoridad, ahora=ahora)
+            if type(contrato_preparado) is not dict or contrato_preparado != current:
+                raise RadicacionOrdinariaBloqueada({'codigo': 'EVALUACION_DECISION_O_CONDICIONES_CAMBIARON'})
         if digital is not None:
-            controls=digital['preflightRadicacionOrdinaria']
+            controls = digital['preflightRadicacionEspecial' if modo == 'ESPECIAL' else 'preflightRadicacionOrdinaria']
+            if modo == 'ESPECIAL':
+                from copy import deepcopy
+                controls = deepcopy(controls)
+                posterior = {'OFERTA_CONTRACTUAL_AUSENTE_O_NO_VIGENTE', 'ACEPTACION_NO_VINCULADA_A_OFERTA_VIGENTE'}
+                controls['requisitosFormalizacionPosterior'] = [v for v in controls['causales'] if v['codigo'] in posterior]
+                controls['causales'] = [v for v in controls['causales'] if v['codigo'] not in posterior]
+                try:
+                    cuota = Decimal(contexto.cuota_contractual)
+                    quote_ok = cuota.is_finite() and cuota > 0
+                except (InvalidOperation, TypeError, ValueError):
+                    quote_ok = False
+                if not quote_ok:
+                    controls['causales'].append({'codigo': 'CUOTA_LINIX_NO_ACREDITADA', 'categoria': 'DATOS', 'regla': None})
+                controls['elegible'] = not controls['causales']
+                controls['estado'] = 'APROBADO_PARA_RADICACION' if controls['elegible'] else 'RADICACION_BLOQUEADA'
             if not controls['elegible']:
                 raise RadicacionOrdinariaBloqueada(controls)
             return controls
-        return exigir_elegibilidad(contexto, self.politica,
-                                   autoridad=self.autoridad, ahora=ahora)
+        return exigir_elegibilidad(contexto, self.politica, autoridad=self.autoridad, ahora=ahora)
 
     def start(self, solicitud_id, *, ahora):
         self.preflight(solicitud_id, ahora=ahora)
-        # Technical activation is a separate, intentionally closed boundary.
         raise RadicacionOrdinariaBloqueada({'codigo': 'TRANSPORTE_ORDINARIO_NO_HABILITADO'})
 
     def preparar_recorrido(self, solicitud_id, intencion_id, *, lectura_workflow, ahora):
@@ -379,9 +399,8 @@ class PuertaRadicacionOrdinaria:
         from .estamentos import preparar_politica_ejecucion
         contexto = self.cargar_contexto(solicitud_id)
         if contexto.solicitud_id != str(solicitud_id):
-            raise RadicacionOrdinariaBloqueada({'codigo':'CONTEXTO_DE_OTRO_EXPEDIENTE'})
-        return preparar_politica_ejecucion(contexto, evaluar_decision_digital(contexto, ahora=ahora),
-            intencion_id=intencion_id, lectura=lectura_workflow, ahora=ahora)
+            raise RadicacionOrdinariaBloqueada({'codigo': 'CONTEXTO_DE_OTRO_EXPEDIENTE'})
+        return preparar_politica_ejecucion(contexto, evaluar_decision_digital(contexto, ahora=ahora), intencion_id=intencion_id, lectura=lectura_workflow, ahora=ahora)
 
 
 def evaluar_decision_digital(c, *, ahora):
@@ -625,3 +644,15 @@ def leer_decision_estudio(s, *, ahora=None):
         return deepcopy(body)
     except (KeyError, TypeError, ValueError, AttributeError):
         raise ValueError('DECISION_PERSISTIDA_NO_VERIFICABLE') from None
+
+
+def continuidad_desde_decision(result):
+    """Separate verified historical study fitness from current transport clearance."""
+    from .estamentos import ORDINARIO, FAMILIAR, COLABORADOR
+    state = result.get('estado')
+    special = state in {FAMILIAR, COLABORADOR}
+    preparation = result.get('preparacion', {})
+    good = state in {'APROBADO', FAMILIAR, COLABORADOR} and preparation.get('estado') == 'ELEGIBLE_PARA_REVISION' and (preparation.get('causales') == []) and (result.get('decisionLinixRegistrada') is False) and (result.get('autorizaDesembolso') is False)
+    controls = result.get('preflightRadicacionEspecial' if special else 'preflightRadicacionOrdinaria', {})
+    pending = [dict(v) for v in controls.get('causales', [])]
+    return {'version': 'credihoy-continuidad-estudio-v1', 'estudioFavorable': good, 'estadoEstudio': 'FAVORABLE' if good else 'VALIDACIONES_PENDIENTES', 'elegibilidadRadicacion': 'REQUIERE_PREFLIGHT_ACTUAL', 'clasificacion': result.get('estamento', {}).get('estado') if special else ORDINARIO if state == 'APROBADO' else None, 'decisionInstitucional': 'PENDIENTE', 'firmaContractual': 'PENDIENTE', 'precondicionesPendientes': pending, 'requiereAccionPersonal': True, 'autorizaStart': False, 'autorizaFirma': False, 'autorizaDesembolso': False}

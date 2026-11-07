@@ -11,6 +11,8 @@
 
 
 
+
+
 import hashlib
 import hmac
 import json
@@ -452,7 +454,13 @@ def project_study(value, solicitud_id):
         if type(value) is dict and 'decisionPolitica' in value:
             fields.add('decisionPolitica')
             decision = value['decisionPolitica']
-            if type(decision) is not dict or set(decision) != {'version', 'versionPolitica', 'estado', 'motivos', 'decisionLinixRegistrada', 'autorizaDesembolso'} or decision['version'] != 'credihoy-decision-publica-v1' or (type(decision['versionPolitica']) is not str) or (not 1 <= len(decision['versionPolitica']) <= 120) or (decision['estado'] not in {'APROBADO', 'RECHAZADO', 'EN_REVISION'}) or (decision['decisionLinixRegistrada'] is not False) or (decision['autorizaDesembolso'] is not False) or (type(decision['motivos']) is not list) or (len(decision['motivos']) > 40):
+            decision_fields = {'version', 'versionPolitica', 'estado', 'motivos', 'decisionLinixRegistrada', 'autorizaDesembolso'}
+            if 'continuidad' in decision:
+                decision_fields.add('continuidad')
+                c = decision['continuidad']
+                if type(c) is not dict or set(c) != {'version', 'estudioFavorable', 'estadoRadicacion', 'decisionInstitucional', 'firmaContractual', 'radicacionHabilitada', 'firmaHabilitada'} or c['version'] != 'credihoy-continuidad-publica-v1' or (type(c['estudioFavorable']) is not bool) or (c['estadoRadicacion'] != 'PREPARACION_PENDIENTE') or (c['decisionInstitucional'] != 'PENDIENTE') or (c['firmaContractual'] != 'PENDIENTE') or (c['radicacionHabilitada'] is not False) or (c['firmaHabilitada'] is not False) or (c['estudioFavorable'] and (decision['estado'] == 'RECHAZADO' or any((r['codigo'] != 'REVISION_ESTAMENTO_INSTITUCIONAL' for r in decision['motivos'])))):
+                    raise ValueError
+            if type(decision) is not dict or set(decision) != decision_fields or decision['version'] != 'credihoy-decision-publica-v1' or (type(decision['versionPolitica']) is not str) or (not 1 <= len(decision['versionPolitica']) <= 120) or (decision['estado'] not in {'APROBADO', 'RECHAZADO', 'EN_REVISION'}) or (decision['decisionLinixRegistrada'] is not False) or (decision['autorizaDesembolso'] is not False) or (type(decision['motivos']) is not list) or (len(decision['motivos']) > 40):
                 raise ValueError
             for reason in decision['motivos']:
                 if type(reason) is not dict or set(reason) != {'codigo', 'regla'} or type(reason['codigo']) is not str or (not re.fullmatch('[A-Z][A-Z0-9_]{1,120}', reason['codigo'])) or (reason['regla'] is not None and (not re.fullmatch('UNICO_FILA_[0-9]{1,2}', str(reason['regla'])))):
@@ -472,6 +480,9 @@ def project_study(value, solicitud_id):
             for key in ('motivos', 'datosFaltantes'):
                 if type(row[key]) is not list or len(row[key]) > 20 or any((type(v) is not str or not 1 <= len(v) <= 240 for v in row[key])):
                     raise ValueError
+        if value.get('decisionPolitica', {}).get('continuidad', {}).get('estudioFavorable') is True:
+            if any((r['estadoEvaluacion'] not in {'CUMPLE', 'NO_APLICA'} and (not (r['codigo'] == 'UNICO_FILA_6' and r['estadoEvaluacion'] == 'NO_CUMPLE')) for r in rows)):
+                raise ValueError
         cap = value['capacidad']
         capacity_fields = {'estado', 'valor', 'preliminarNoDecisoria', 'cuotaContractualDisponible'}
         if 'metodologia' in cap:
@@ -595,4 +606,9 @@ def project_study_decision(result):
         reasons.append({'codigo': 'REVISION_ESTAMENTO_INSTITUCIONAL', 'regla': None})
     elif state == 'POLITICA_NO_APLICABLE':
         reasons.append({'codigo': 'POLITICA_PRODUCTO_NO_APLICABLE', 'regla': None})
-    return {'version': 'credihoy-decision-publica-v1', 'versionPolitica': result['versionPolitica'], 'estado': public_state, 'motivos': reasons, 'decisionLinixRegistrada': False, 'autorizaDesembolso': False}
+    projection = {'version': 'credihoy-decision-publica-v1', 'versionPolitica': result['versionPolitica'], 'estado': public_state, 'motivos': reasons, 'decisionLinixRegistrada': False, 'autorizaDesembolso': False}
+    if 'preparacion' in result:
+        from .elegibilidad import continuidad_desde_decision
+        continuity = continuidad_desde_decision(result)
+        projection['continuidad'] = {'version': 'credihoy-continuidad-publica-v1', 'estudioFavorable': continuity['estudioFavorable'], 'estadoRadicacion': 'PREPARACION_PENDIENTE', 'decisionInstitucional': 'PENDIENTE', 'firmaContractual': 'PENDIENTE', 'radicacionHabilitada': False, 'firmaHabilitada': False}
+    return projection

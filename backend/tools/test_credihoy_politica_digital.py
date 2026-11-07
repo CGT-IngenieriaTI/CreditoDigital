@@ -204,6 +204,65 @@ class DigitalDecisionTests(TestCase):
             self.assertEqual(evaluar_decision_digital(c,ahora=NOW)['estado'],state)
             transport.start.assert_not_called()
 
+    def test_special_intake_preflight_does_not_require_final_offer_or_human_approval(self):
+        c=replace(self.c,clasificacion_estamentos=classify([{'resultado':'SI','tipofamiliar':'TRABAJADOR CONGENTE'}]),
+            decision_autorizada=False,decision_referencia=None,oferta_referencia=None,oferta_huella=None,
+            aceptacion_referencia=None,aceptacion_oferta_huella=None)
+        transport=Mock();gate=PuertaRadicacionOrdinaria(autoridad=self.a,politica=self.p,
+            cargar_contexto=lambda _:c,transporte=transport)
+        result=gate.preflight(c.solicitud_id,ahora=NOW,modo='ESPECIAL')
+        self.assertEqual(result['estado'],'APROBADO_PARA_RADICACION')
+        self.assertTrue(result['requiereSeleccionHumana']);self.assertFalse(result['esAprobacion'])
+        self.assertEqual({v['codigo'] for v in result['requisitosFormalizacionPosterior']},
+            {'OFERTA_CONTRACTUAL_AUSENTE_O_NO_VIGENTE','ACEPTACION_NO_VINCULADA_A_OFERTA_VIGENTE'})
+        with self.assertRaises(RadicacionOrdinariaBloqueada):gate.preflight(c.solicitud_id,ahora=NOW)
+        for changed in (replace(c,consentimiento_vigente=False),replace(c,documentos_vigentes=False),
+                replace(c,xml_completo=False),replace(c,tasa_concordante=False),replace(c,cuota_contractual=None),
+                replace(c,start_previos=1),replace(c,intencion_existente='ALREADY_RESERVED')):
+            gate.cargar_contexto=lambda _,value=changed:value
+            with self.assertRaises(RadicacionOrdinariaBloqueada):
+                gate.preflight(c.solicitud_id,ahora=NOW,modo='ESPECIAL')
+        transport.start.assert_not_called()
+
+    def test_historical_study_fitness_is_not_a_current_start_or_signature_permission(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico.elegibilidad import continuidad_desde_decision
+        from apps.xcore_consumo.services.credihoy_v2.unico.publico_institucional import project_study_decision
+        c=replace(self.c,clasificacion_estamentos=classify([{'resultado':'SI','tipofamiliar':'TRABAJADOR CONGENTE'}]))
+        decision=evaluar_decision_digital(c,ahora=NOW);before=deepcopy(decision)
+        continuity=continuidad_desde_decision(decision)
+        self.assertTrue(continuity['estudioFavorable'])
+        self.assertEqual(continuity['decisionInstitucional'],'PENDIENTE')
+        self.assertEqual(continuity['clasificacion'],COLABORADOR)
+        self.assertFalse(continuity['autorizaStart']);self.assertFalse(continuity['autorizaFirma'])
+        projected=project_study_decision(decision)
+        self.assertEqual(projected['estado'],'EN_REVISION')
+        self.assertTrue(projected['continuidad']['estudioFavorable'])
+        self.assertFalse(projected['continuidad']['radicacionHabilitada'])
+        self.assertEqual(decision,before)
+        rows=deepcopy(c.reglas);next(r for r in rows if r['codigo']=='UNICO_FILA_21')['estadoEvaluacion']='NO_CUMPLE'
+        failed=evaluar_decision_digital(replace(c,reglas=rows),ahora=NOW)
+        self.assertFalse(continuidad_desde_decision(failed)['estudioFavorable'])
+
+    def test_special_quote_preparation_is_read_only_and_cannot_create_contractual_offer(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from apps.xcore_consumo.services.credihoy_v2.unico import cotizacion,elegibilidad
+        case=SimpleNamespace(pk=SID)
+        c=replace(self.c,clasificacion_estamentos=classify([{'resultado':'SI','tipofamiliar':'TRABAJADOR CONGENTE'}]))
+        decision={'resultado':evaluar_decision_digital(c,ahora=NOW),'operacionId':'SYNTHETIC',
+            'sha256':'d'*64,'revisionReferencia':SID}
+        with patch.object(cotizacion,'_obtener',return_value=case), \
+                patch.object(elegibilidad,'leer_decision_estudio',return_value=decision), \
+                patch.object(cotizacion,'_contexto',return_value=(None,{'solicitudId':SID})) as context, \
+                patch.object(cotizacion,'preparar_oferta_linix') as offer:
+            result=cotizacion.preparar_cotizacion_radicacion_especial(SID,Mock())
+            context.assert_called_once_with(case,lock=False);offer.assert_not_called()
+            self.assertFalse(result['ejecutaCuota']);self.assertFalse(result['ofertaContractual'])
+            self.assertFalse(result['autorizaStart']);self.assertFalse(result['autorizaFirma'])
+            decision['resultado']=evaluar_decision_digital(self.c,ahora=NOW)
+            with self.assertRaisesRegex(ValueError,'RADICACION_ESPECIAL_REQUIERE_ESTUDIO_FAVORABLE'):
+                cotizacion.preparar_cotizacion_radicacion_especial(SID,Mock())
+
     def test_missing_expired_foreign_classification_and_prior_start_do_not_reopen_chain(self):
         for c in (replace(self.c,clasificacion_estamentos=None),replace(self.c,titular_referencia='b'*64)):
             self.assertEqual(evaluar_decision_digital(c,ahora=NOW)['estado'],'BLOQUEO_ESTAMENTOS_SIN_EVIDENCIA')

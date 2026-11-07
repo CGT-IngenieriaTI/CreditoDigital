@@ -5,6 +5,8 @@
 
 
 
+
+
 import hashlib
 import json
 from uuid import UUID,uuid4
@@ -998,3 +1000,15 @@ def _exigir_decision_ofertable(s, detail):
         return {'operacionId': entry['operacionId'], 'sha256': entry['sha256'], 'evaluacionSha256': entry['evaluacionSha256'], 'versionPolitica': decision['versionPolitica']}
     except (KeyError, TypeError, ValueError, AttributeError):
         raise ValueError('OFERTA_REQUIERE_DECISION_DIGITAL_APROBADA_DEL_ESTUDIO_VIGENTE') from None
+
+
+def preparar_cotizacion_radicacion_especial(solicitud_id, operador, *, titular=None):
+    """Read-only intake preparation, not a quote execution or contractual offer."""
+    from .elegibilidad import leer_decision_estudio, continuidad_desde_decision
+    from .estamentos import FAMILIAR, COLABORADOR
+    s = _obtener(solicitud_id, operador, titular=titular)
+    decision = leer_decision_estudio(s)
+    if decision is None or decision['resultado']['estado'] not in {FAMILIAR, COLABORADOR} or (not continuidad_desde_decision(decision['resultado'])['estudioFavorable']):
+        raise ValueError('RADICACION_ESPECIAL_REQUIERE_ESTUDIO_FAVORABLE')
+    _, payload = _contexto(s, lock=False)
+    return {'versionContrato': 'credihoy-cuota-preparacion-especial-v1', 'solicitudId': str(s.pk), 'decisionReferencia': decision['operacionId'], 'decisionSha256': decision['sha256'], 'revisionReferencia': decision['revisionReferencia'], 'parametros': payload, 'ofertaContractual': False, 'aceptacionContractual': False, 'ejecutaCuota': False, 'autorizaStart': False, 'autorizaFirma': False, 'autorizaDesembolso': False}

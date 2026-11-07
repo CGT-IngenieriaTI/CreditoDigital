@@ -139,6 +139,46 @@ class OwnQuoteTests(TransactionTestCase):
         with self.assertRaisesRegex(ValueError,'ACEPTACION_DE_OTRO_TITULAR'):
             self.q.comprobante_simulacion_aceptada(self.s,{**self.identity,'numeroDocumento':'0000000088'})
 
+    def test_narrow_acceptance_view_verifies_owner_without_full_audit_or_other_case_access(self):
+        import sys
+        from pathlib import Path
+        from django.db import connection,transaction,DatabaseError
+        if connection.vendor!='postgresql':self.skipTest('PostgreSQL required')
+        sys.path.insert(0,str(Path(__file__).resolve().parents[3]/'api_data_v1/tools'))
+        from credihoy_oa01_ensamblaje import personal_intake_acceptance_view_sql
+        sim=self.calculate()
+        self.operate(operacion='aceptar_simulacion',simulacionSha256=sim['sha256'],acepta=True)
+        other=Solicitud.objects.create(solicitante=self.s.solicitante,producto=wire.PRODUCTO)
+        AuditLog.objects.create(solicitud=other,event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR',
+            actor='titular:'+str(uuid4()),request_id=uuid4(),payload={'notExposed':'OTHER_CASE'})
+        AuditLog.objects.create(solicitud=self.s,event='NOT_AN_ACCEPTANCE',actor='service',
+            request_id=uuid4(),payload={'notExposed':'OTHER_EVENT'})
+        with connection.cursor() as c:
+            c.execute("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='credihoy_titular_cotizacion') THEN CREATE ROLE credihoy_titular_cotizacion NOLOGIN; END IF; END $$")
+            c.execute('GRANT USAGE ON SCHEMA public TO credihoy_titular_cotizacion')
+            c.execute('GRANT SELECT ON public.xcore_consumo_solicitudconsumo TO credihoy_titular_cotizacion')
+            c.execute('REVOKE ALL ON public.utils_auditlog FROM credihoy_titular_cotizacion')
+            c.execute(personal_intake_acceptance_view_sql([str(self.s.pk)]))
+        decision={'operacionId':str(uuid4()),'sha256':'d'*64,'revisionReferencia':self.ref,
+            'resultado':{'estado':'REQUIERE_CONSEJO_ADMINISTRACION'}}
+        state={'revisionEstudio':{'versionReferencia':self.ref},'decisionCustodiada':decision}
+        try:
+            with transaction.atomic(),patch.object(funcional,'oferta_custodia_activa',return_value=True),\
+                    patch.object(funcional,'leer_estado_funcional',return_value=state):
+                with connection.cursor() as c:
+                    c.execute('SET LOCAL ROLE credihoy_titular_cotizacion')
+                    c.execute('SELECT solicitud_id,payload FROM public.credihoy_simulacion_aceptacion_publica')
+                    rows=c.fetchall()
+                self.assertEqual(len(rows),1);self.assertEqual(str(rows[0][0]),str(self.s.pk))
+                body=json.loads(rows[0][1]) if type(rows[0][1]) is str else rows[0][1]
+                self.assertEqual(set(body),{'simulacionSha256','aceptacionSha256','autorizaStart','autorizaDesembolso'})
+                proof=self.q.comprobante_simulacion_aceptada(self.s,self.identity)
+                self.assertEqual(proof['cuota'],sim['cuota']);self.assertFalse(proof['autorizaStart'])
+                with self.assertRaises(DatabaseError),transaction.atomic():
+                    with connection.cursor() as c:c.execute('SELECT payload FROM public.utils_auditlog')
+        finally:
+            with connection.cursor() as c:c.execute('DROP VIEW public.credihoy_simulacion_aceptacion_publica')
+
     def test_reject_cross_holder_changed_revision_changed_catalog_and_payload_injection(self):
         sim=self.calculate()
         self.identity['numeroDocumento']='0000000088'

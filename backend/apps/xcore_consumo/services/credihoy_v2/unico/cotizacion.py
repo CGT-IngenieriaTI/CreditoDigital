@@ -1220,8 +1220,7 @@ def _simulacion_persistida_para_continuidad(entry,sid,holder):
 
 def comprobante_simulacion_aceptada(s,identity):
     """Owner-only durable evidence. Does not authorize START or human approval."""
-    from .elegibilidad import leer_decision_estudio
-    from .funcional import leer_estado_funcional
+    from .funcional import leer_estado_funcional,oferta_custodia_activa
     holder=hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()
     if s.solicitante.numero_identificacion!=identity['numeroDocumento']:
         raise ValueError('ACEPTACION_DE_OTRO_TITULAR')
@@ -1229,17 +1228,28 @@ def comprobante_simulacion_aceptada(s,identity):
     entry=detail.orchestration_data.get(KEY,{})
     sim,accepted=_simulacion_persistida_para_continuidad(entry,str(s.pk),holder)
     if accepted is None:raise ValueError('ACEPTACION_PERSONAL_SIMULACION_REQUERIDA')
-    revision=leer_estado_funcional(s)['revisionEstudio']['versionReferencia']
+    state=leer_estado_funcional(s)
+    revision=state['revisionEstudio']['versionReferencia']
     if (entry.get('motor')!='PROPIO_390_111_CFA' or entry.get('titularReferencia')!=holder
             or sim['versionCondiciones']!=context['versionCondiciones'] or sim['revisionReferencia']!=revision):
         raise ValueError('CONDICIONES_ACEPTADAS_NO_CORRESPONDEN_AL_EXPEDIENTE')
-    rows=list(AuditLog.objects.filter(solicitud=s,event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR',
-        request_id=accepted['requestId']).values('id','actor','payload')[:2])
+    if oferta_custodia_activa():
+        with connections[alias_cotizacion()].cursor() as cursor:
+            cursor.execute('SELECT registro_id,actor,payload FROM public.credihoy_simulacion_aceptacion_publica '
+                'WHERE solicitud_id=%s AND request_id=%s LIMIT 2',[str(s.pk),accepted['requestId']])
+            rows=[{'id':row[0],'actor':row[1],'payload':json.loads(row[2]) if type(row[2]) is str else row[2]}
+                for row in cursor.fetchall()]
+    else:
+        rows=list(AuditLog.objects.filter(solicitud=s,event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR',
+            request_id=accepted['requestId']).values('id','actor','payload')[:2])
     if (len(rows)!=1 or rows[0]['actor']!='titular:'+accepted['sesionReferencia']
             or rows[0]['payload']!={'simulacionSha256':sim['sha256'],'aceptacionSha256':accepted['sha256'],
                 'autorizaStart':False,'autorizaDesembolso':False}):
         raise ValueError('ACEPTACION_PERSONAL_SIN_AUDITORIA_VINCULADA')
-    decision=leer_decision_estudio(s)
+    if oferta_custodia_activa():decision=state.get('decisionCustodiada')
+    else:
+        from .elegibilidad import leer_decision_estudio
+        decision=leer_decision_estudio(s)
     if decision is None or decision['revisionReferencia']!=revision:
         raise ValueError('DECISION_NO_CORRESPONDE_A_REVISION_ACEPTADA')
     return {'solicitudId':str(s.pk),'titularReferencia':holder,'revisionReferencia':revision,

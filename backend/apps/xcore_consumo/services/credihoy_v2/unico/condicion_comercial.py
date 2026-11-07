@@ -1,6 +1,8 @@
 """Seleccion automatica desde hechos api_data. Solo lee catalogo; no cotiza."""
 
 
+
+
 from django.conf import settings
 from ..pagaduria import PagaduriaLinix
 from apps.xcore_consumo.tasas_models import AsignacionTarifaCredihoy, TasaComercialCredihoy
@@ -159,3 +161,69 @@ def resolver_para_solicitud(solicitud_id, operador, *, request_id, cliente=None,
         result=resolver_condicion(p,_simulacion(s).get('tasaNamvObservada'))
         return SeleccionTarifaCredihoy.objects.create(solicitud=s,request_id=key,responsable=operador,
             evidencia=evidence or {},evidencia_sha256=digest,resultado=result)
+
+
+def resolver_desde_revision_conservada(solicitud_id, operador, *, revision_referencia, persistir=False):
+    """Bind the current study's authentic payroll evidence to the existing catalog.
+
+    No rate is edited, source timestamp renewed, quote sent or offer accepted.
+    The original institutional request id remains the selection's evidence id.
+    """
+    import hashlib, json
+    from datetime import datetime
+    from uuid import UUID
+    from django.db import transaction
+    from django.core.exceptions import PermissionDenied
+    from django.utils import timezone
+    from apps.utils.models import AuditLog
+    from apps.xcore_consumo.tasas_models import SeleccionTarifaCredihoy
+    from apps.xcore_consumo.services.otp_crypto import decrypt_text
+    from .funcional import obtener_para_evaluacion, leer_estado_funcional
+    from ..pagaduria import adaptar_pagaduria
+    if type(persistir) is not bool:
+        raise ValueError('SELECCION_PERSISTENCIA_INVALIDA')
+    if not operador.is_authenticated or not operador.is_active or (not operador.is_staff):
+        raise PermissionDenied
+    ref = str(UUID(str(revision_referencia)))
+    with transaction.atomic():
+        case = obtener_para_evaluacion(solicitud_id, operador, autogestion=True, revision_conservada=True, lock=persistir)
+        state = leer_estado_funcional(case)
+        if state.get('revisionEstudio', {}).get('versionReferencia') != ref:
+            raise ValueError('SELECCION_REVISION_NO_VIGENTE')
+        draft = AuditLog.objects.get(solicitud=case, event='CREDIHOY_ESTUDIO_REVISION_PREPARADA', request_id=ref)
+        rows = [r for r in state['resultado']['reglas'] if r['codigo'] == 'UNICO_FILA_32']
+        if len(rows) != 1:
+            raise ValueError('SELECCION_FUENTE_INSTITUCIONAL_NO_UNIVOCA')
+        source_ref = rows[0].get('evidencia', {}).get('existeCredihoy111Registrado', {}).get('referencia_evidencia', '')
+        if source_ref.startswith('CICLO_VIDA_111_V1:'):
+            source_ref = source_ref[len('CICLO_VIDA_111_V1:'):]
+        source_ref = str(UUID(source_ref))
+        entry = AuditLog.objects.get(solicitud=case, event='credihoy_hechos_continuacion_v1', request_id=source_ref)
+        raw = decrypt_text(entry.payload['hechosCifrados'])
+        facts = json.loads(raw)
+        if entry.created_at > draft.created_at or entry.payload.get('requestId') != source_ref or hashlib.sha256(raw.encode()).hexdigest() != entry.payload['sha256']:
+            raise ValueError('SELECCION_FUENTE_CUSTODIADA_NO_INTEGRA')
+        evidence = facts.get('pagaduria')
+        if type(evidence) is not dict:
+            raise ValueError('PAGADURIA_CUSTODIADA_NO_DISPONIBLE')
+        p = adaptar_pagaduria(evidence, request_id=source_ref, fecha_consulta=evidence.get('fechaConsulta'))
+        if p.estado != 'DISPONIBLE' or p.activa is not True or p.tipo not in {'N', 'V'} or (datetime.fromisoformat(p.fechaConsulta) > timezone.now()):
+            raise ValueError('PAGADURIA_CUSTODIADA_NO_ACREDITADA')
+        if getattr(settings, 'CREDIHOY_TASAS_ENABLED', False) is not True:
+            raise ValueError('CATALOGO_COMERCIAL_NO_HABILITADO_EN_EJECUTOR')
+        result = resolver_condicion(p)
+        keys = ('tarifaId', 'versionTarifa', 'asignacionId', 'versionAsignacion', 'soporteTarifaSha256', 'soporteAsignacionSha256', 'tasaComercialNamv')
+        if any((result.get(k) is None for k in keys)):
+            raise ValueError('SELECCION_CATALOGO_VIGENTE_NO_ACREDITADA')
+        digest = hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest()
+        existing = SeleccionTarifaCredihoy.objects.filter(request_id=source_ref).first()
+        latest = SeleccionTarifaCredihoy.objects.filter(solicitud=case).order_by('-creado_at', '-pk').first()
+        if latest is not None and (existing is None or latest.pk != existing.pk):
+            raise ValueError('SELECCION_CONSERVADA_REQUIERE_CONCILIACION')
+        if existing and (existing.solicitud_id != case.pk or existing.evidencia != evidence or existing.evidencia_sha256 != digest or any((existing.resultado.get(k) != result[k] for k in keys))):
+            raise ValueError('SELECCION_CONSERVADA_REQUIERE_CONCILIACION')
+        selected = existing
+        if persistir and selected is None:
+            selected = SeleccionTarifaCredihoy.objects.create(solicitud=case, request_id=source_ref, responsable=operador, evidencia=evidence, evidencia_sha256=digest, resultado=result)
+            AuditLog.objects.create(solicitud=case, event='CREDIHOY_SELECCION_DESDE_CUSTODIA', actor='user:' + str(operador.pk), request_id=source_ref, payload={'revisionReferencia': ref, 'reciboId': entry.pk, 'reciboSha256': entry.payload['sha256'], 'seleccionId': selected.pk, 'evidenciaSha256': digest, 'Oracle': 0, 'START': 0, 'aceptacionInferida': False, 'tasaModificada': False})
+        return {'estado': 'SELECCION_COMERCIAL_VINCULADA' if selected else 'SELECCION_COMERCIAL_PREPARADA', 'persistido': selected is not None, 'seleccionId': selected.pk if selected else None, 'reciboId': entry.pk, 'reciboSha256': entry.payload['sha256'], 'evidenciaSha256': digest, 'revisionReferencia': ref, 'requestIdOriginal': source_ref, 'aceptacionInferida': False, 'tasaModificada': False, 'Oracle': 0, 'HDC': 0, 'START': 0, 'firma': 0}

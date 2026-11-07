@@ -275,6 +275,23 @@ class DigitalDecisionTests(TestCase):
             projection=namespace['continuidad_desde_decision'](result)
             self.assertTrue(projection['estudioFavorable']);self.assertEqual(projection['clasificacion'],state)
 
+    def test_technical_quote_keeps_real_scope_and_rejects_ordinary_or_mixed_identity(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from apps.xcore_consumo.services.credihoy_v2.unico import cotizacion,funcional,elegibilidad
+        case=SimpleNamespace(pk=SID);operator=Mock()
+        c=replace(self.c,clasificacion_estamentos=classify([{'resultado':'SI','tipofamiliar':'TRABAJADOR CONGENTE'}]))
+        with patch.object(funcional,'obtener_para_evaluacion',return_value=case) as access, \
+                patch.object(elegibilidad,'leer_decision_estudio',return_value={'resultado':evaluar_decision_digital(c,ahora=NOW)}):
+            self.assertEqual(cotizacion._obtener(SID,operator,autogestion_tecnica=True,lock=True),case)
+            access.assert_called_once_with(SID,operator,autogestion=True,revision_conservada=True,lock=True)
+            with self.assertRaisesRegex(ValueError,'NO_MEZCLAR_ACTOR_Y_TITULAR'):
+                cotizacion._obtener(SID,operator,titular={'numeroDocumento':'SYNTHETIC'},autogestion_tecnica=True)
+        with patch.object(funcional,'obtener_para_evaluacion',return_value=case), \
+                patch.object(elegibilidad,'leer_decision_estudio',return_value={'resultado':evaluar_decision_digital(self.c,ahora=NOW)}):
+            with self.assertRaisesRegex(ValueError,'COTIZACION_TECNICA_SOLO_RADICACION_ESPECIAL'):
+                cotizacion._obtener(SID,operator,autogestion_tecnica=True)
+
     def test_missing_expired_foreign_classification_and_prior_start_do_not_reopen_chain(self):
         for c in (replace(self.c,clasificacion_estamentos=None),replace(self.c,titular_referencia='b'*64)):
             self.assertEqual(evaluar_decision_digital(c,ahora=NOW)['estado'],'BLOQUEO_ESTAMENTOS_SIN_EVIDENCIA')

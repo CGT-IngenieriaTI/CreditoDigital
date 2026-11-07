@@ -7,6 +7,8 @@
 
 
 
+
+
 import hashlib
 import json
 from uuid import UUID,uuid4
@@ -34,38 +36,47 @@ MOTIVOS = {'COTIZACION_RECOGIDA_NO_CERTIFICADA', 'SELECCION_COMERCIAL_REQUERIDA'
     'PARAMETROS_DISTINTOS_DEL_EXPEDIENTE_EXISTENTE'}
 
 
-def _obtener(sid,operador,*,lock=False,titular=None):
+def _obtener(sid, operador, *, lock=False, titular=None, autogestion_tecnica=False):
+    if type(autogestion_tecnica) is not bool:
+        raise ValueError('COTIZACION_MODO_INVALIDO')
+    if autogestion_tecnica:
+        if titular is not None or operador is None:
+            raise ValueError('NO_MEZCLAR_ACTOR_Y_TITULAR')
+        from .funcional import obtener_para_evaluacion
+        from .elegibilidad import leer_decision_estudio, continuidad_desde_decision
+        case = obtener_para_evaluacion(sid, operador, autogestion=True, revision_conservada=True, lock=lock)
+        decision = leer_decision_estudio(case)
+        if decision is None or decision['resultado']['estado'] not in {'REQUIERE_CONSEJO_ADMINISTRACION', 'REQUIERE_COMITE_INSTITUCIONAL_CREDITO'} or (not continuidad_desde_decision(decision['resultado'])['estudioFavorable']):
+            raise ValueError('COTIZACION_TECNICA_SOLO_RADICACION_ESPECIAL')
+        return case
     if titular is None:
         from .consentimiento_real import obtener
-        return obtener(sid,operador,lock=lock)
+        return obtener(sid, operador, lock=lock)
     from django.conf import settings
     from django.http import Http404
     from . import publico_institucional as wire
     from apps.solicitudes.models import Solicitud
-    if (operador is not None or type(titular) is not dict
-            or getattr(settings,'CREDIHOY_COTIZACION_TITULAR_ENABLED',False) is not True
-            or getattr(settings,'CREDIHOY_COTIZACION_ENABLED',False) is not True
-            or (alias_cotizacion()=='default' and (getattr(settings,'CREDIHOY_TITULAR_FUENTE_ENABLED',True) is not True
-                or getattr(settings,'CREDIHOY_SEGUIMIENTO_DB_ALIAS','')!='default'
-                or not getattr(settings,'CREDIHOY_SEGUIMIENTO_SOURCE_REFERENCE','')))
-            or (alias_cotizacion()!='default' and not getattr(settings,'CREDIHOY_COTIZACION_SOURCE_REFERENCE',''))):raise wire.NoDisponible
-    expires=datetime.fromisoformat(titular['_sesionExpiraAt'])
-    if (expires.utcoffset() is None or expires<=timezone.now()
-            or str(UUID(titular['_sesionReferencia']))!=titular['_sesionReferencia']):raise wire.NoDisponible
-    permitted=(getattr(settings,'CREDIHOY_COTIZACION_SOLICITUDES',[]) if alias_cotizacion()!='default'
-        else getattr(settings,'CREDIHOY_PUBLICO_ENSAYO',{}).get('solicitudes',[]))
-    if str(sid) not in permitted:raise Http404
-    query=Solicitud.objects.select_related('solicitante')
-    # Lock SolicitudConsumo below, not the joined holder or immutable dossier.
-    try:s=query.get(pk=sid,producto=wire.PRODUCTO,
-        metadatos__modo__in=['CONSULTA_REAL_CONTROLADA','AUTOGESTION_ENVIADA'],
-        solicitante__tipo_identificacion='CC',solicitante__numero_identificacion=titular['numeroDocumento'])
-    except Solicitud.DoesNotExist:raise Http404 from None
-    if s.metadatos.get('modo')=='AUTOGESTION_ENVIADA':
+    if operador is not None or type(titular) is not dict or getattr(settings, 'CREDIHOY_COTIZACION_TITULAR_ENABLED', False) is not True or (getattr(settings, 'CREDIHOY_COTIZACION_ENABLED', False) is not True) or (alias_cotizacion() == 'default' and (getattr(settings, 'CREDIHOY_TITULAR_FUENTE_ENABLED', True) is not True or getattr(settings, 'CREDIHOY_SEGUIMIENTO_DB_ALIAS', '') != 'default' or (not getattr(settings, 'CREDIHOY_SEGUIMIENTO_SOURCE_REFERENCE', '')))) or (alias_cotizacion() != 'default' and (not getattr(settings, 'CREDIHOY_COTIZACION_SOURCE_REFERENCE', ''))):
+        raise wire.NoDisponible
+    expires = datetime.fromisoformat(titular['_sesionExpiraAt'])
+    if expires.utcoffset() is None or expires <= timezone.now() or str(UUID(titular['_sesionReferencia'])) != titular['_sesionReferencia']:
+        raise wire.NoDisponible
+    permitted = getattr(settings, 'CREDIHOY_COTIZACION_SOLICITUDES', []) if alias_cotizacion() != 'default' else getattr(settings, 'CREDIHOY_PUBLICO_ENSAYO', {}).get('solicitudes', [])
+    if str(sid) not in permitted:
+        raise Http404
+    query = Solicitud.objects.select_related('solicitante')
+    try:
+        s = query.get(pk=sid, producto=wire.PRODUCTO, metadatos__modo__in=['CONSULTA_REAL_CONTROLADA', 'AUTOGESTION_ENVIADA'], solicitante__tipo_identificacion='CC', solicitante__numero_identificacion=titular['numeroDocumento'])
+    except Solicitud.DoesNotExist:
+        raise Http404 from None
+    if getattr(s, 'metadatos', {}).get('modo') == 'AUTOGESTION_ENVIADA':
         from .autoservicio import validar_vinculo_consumo
-        try:validar_vinculo_consumo(s)
-        except ValueError:raise Http404 from None
-    if expires<=timezone.now():raise wire.NoDisponible
+        try:
+            validar_vinculo_consumo(s)
+        except ValueError:
+            raise Http404 from None
+    if expires <= timezone.now():
+        raise wire.NoDisponible
     return s
 
 
@@ -464,7 +475,13 @@ def vincular_oferta_a_payload(payload,oferta,*,fecha_desembolso_efectiva=None,pr
     except (KeyError,TypeError,ValueError,ArithmeticError):raise ValueError('SOLICITUD_NO_CORRESPONDE_A_OFERTA_LINIX') from None
 
 
-def cotizacion(solicitud_id, operador, request_id, *, ejecutar=False, cliente=None, escenario=None, sesion=None, dinamica=False, titular=None):
+def cotizacion(solicitud_id, operador, request_id, *, ejecutar=False, cliente=None, escenario=None, sesion=None, dinamica=False, titular=None, autogestion_tecnica=False):
+    if type(autogestion_tecnica) is not bool or (autogestion_tecnica and (titular is not None or dinamica)):
+        raise ValueError('COTIZACION_MODO_INVALIDO')
+    if autogestion_tecnica and ejecutar:
+        from django.conf import settings
+        if getattr(settings, 'CREDIHOY_COTIZACION_ENABLED', False) is not True:
+            raise ValueError('COTIZACION_NO_HABILITADA_EN_EJECUTOR')
     if dinamica:
         if titular is not None:
             raise ValueError('ESCENARIO_TITULAR_NO_PERSISTIDO')
@@ -473,7 +490,7 @@ def cotizacion(solicitud_id, operador, request_id, *, ejecutar=False, cliente=No
         raise ValueError('COTIZACION_REQUIERE_TRANSACCION_INDEPENDIENTE')
     rid = str(UUID(request_id))
     with transaction.atomic(using=alias_cotizacion()):
-        s = _obtener(solicitud_id, operador, lock=True, titular=titular)
+        s = _obtener(solicitud_id, operador, lock=True, titular=titular, autogestion_tecnica=autogestion_tecnica)
         from .funcional import oferta_custodia_activa
         if ejecutar and oferta_custodia_activa():
             _exigir_decision_ofertable(s, SolicitudConsumo.objects.get(solicitud=s))
@@ -506,7 +523,7 @@ def cotizacion(solicitud_id, operador, request_id, *, ejecutar=False, cliente=No
     except Exception:
         return _empty(s.pk, rid, 'REQUIERE_CONCILIACION', payload)
     with transaction.atomic(using=alias_cotizacion()):
-        s = _obtener(solicitud_id, operador, lock=True, titular=titular)
+        s = _obtener(solicitud_id, operador, lock=True, titular=titular, autogestion_tecnica=autogestion_tecnica)
         detail = SolicitudConsumo.objects.select_for_update().get(solicitud=s)
         entry = detail.orchestration_data.get(KEY, {})
         if entry.get('requestId') != rid:
@@ -520,6 +537,8 @@ def cotizacion(solicitud_id, operador, request_id, *, ejecutar=False, cliente=No
                 return _empty(s.pk, rid, 'DESACTUALIZADA', current)
         except (ValueError, KeyError, AttributeError):
             return _empty(s.pk, rid, 'DESACTUALIZADA')
+        if autogestion_tecnica:
+            return result
         if result.get('disponible') is True and result.get('fuente') == 'LINIX_CALCULO_CUOTA':
             try:
                 _exigir_decision_ofertable(s, detail)
@@ -1012,3 +1031,22 @@ def preparar_cotizacion_radicacion_especial(solicitud_id, operador, *, titular=N
         raise ValueError('RADICACION_ESPECIAL_REQUIERE_ESTUDIO_FAVORABLE')
     _, payload = _contexto(s, lock=False)
     return {'versionContrato': 'credihoy-cuota-preparacion-especial-v1', 'solicitudId': str(s.pk), 'decisionReferencia': decision['operacionId'], 'decisionSha256': decision['sha256'], 'revisionReferencia': decision['revisionReferencia'], 'parametros': payload, 'ofertaContractual': False, 'aceptacionContractual': False, 'ejecutaCuota': False, 'autorizaStart': False, 'autorizaFirma': False, 'autorizaDesembolso': False}
+
+
+def preparar_radicacion_tecnica(solicitud_id, operador, *, cliente=None):
+    """Existing scoped service preparation; never an intake intention or offer."""
+    from django.conf import settings
+    from uuid import uuid5, NAMESPACE_URL
+    from .funcional import leer_estado_funcional
+    from .condicion_comercial import resolver_desde_revision_conservada
+    s = _obtener(solicitud_id, operador, autogestion_tecnica=True)
+    state = leer_estado_funcional(s)
+    revision = state.get('revisionEstudio', {}).get('versionReferencia')
+    if not revision:
+        raise ValueError('RADICACION_REQUIERE_REVISION_VERIFICADA')
+    if getattr(settings, 'CREDIHOY_COTIZACION_ENABLED', False) is not True:
+        raise ValueError('COTIZACION_NO_HABILITADA_EN_EJECUTOR')
+    selected = resolver_desde_revision_conservada(s.pk, operador, revision_referencia=revision, persistir=True)
+    key = str(uuid5(NAMESPACE_URL, 'credihoy-cuota-radicacion-especial:' + str(s.pk) + ':' + revision + ':' + str(selected['seleccionId'])))
+    quote = cotizacion(s.pk, operador, key, ejecutar=True, cliente=cliente, autogestion_tecnica=True)
+    return {'versionContrato': 'credihoy-preparacion-radicacion-tecnica-v1', 'solicitudId': str(s.pk), 'revisionReferencia': revision, 'seleccionId': selected['seleccionId'], 'requestIdCuota': key, 'estadoCuota': quote['estado'], 'cuotaDisponible': quote.get('disponible') is True, 'fuenteCuota': quote.get('fuente'), 'versionCondiciones': quote.get('versionCondiciones'), 'ofertaGenerada': False, 'aceptacionInferida': False, 'intencionCreada': False, 'autorizaStart': False, 'autorizaFirma': False, 'autorizaDesembolso': False}

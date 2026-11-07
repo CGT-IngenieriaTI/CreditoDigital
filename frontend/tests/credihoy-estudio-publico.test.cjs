@@ -45,10 +45,15 @@ test('continuidad acreditada separa estudio favorable de decision final sin inve
    decisionInstitucional:'PENDIENTE',firmaContractual:'PENDIENTE',radicacionHabilitada:false,firmaHabilitada:false}};
  const html=renderStudy(study);
  assert.match(html,/Estudio favorable/);assert.match(html,/Condiciones institucionales pendientes/);
- assert.doesNotMatch(html,/Revisar condiciones para radicar/);
+ assert.doesNotMatch(html,/Revisar cuota y condiciones/);
  const ready=renderStudy(study,{cotizacionHabilitada:true,cotizar:()=>Promise.reject(new Error('NO_HTTP_IN_SSR'))});
- assert.match(ready,/Revisar condiciones para radicar/);
- const signature=renderStudy(study,{},'firma');assert.match(signature,/Firma pendiente/);
+ assert.match(ready,/Revisar cuota y condiciones/);
+ assert.ok(ready.indexOf('Revisar cuota y condiciones')<ready.indexOf('Las 16 reglas del estudio'));
+ for(const view of ['estado','firma']){
+  const action=renderStudy(study,{cotizacionHabilitada:true,cotizar:()=>Promise.reject(new Error('NO_HTTP_IN_SSR'))},view);
+  assert.match(action,/Revisar cuota y condiciones/);
+ }
+ const signature=renderStudy(study,{},'firma');assert.match(signature,/Preparacion documental pendiente/);
  assert.doesNotMatch(signature,/Firma no acreditada/);
  assert.doesNotMatch(html,/Tu solicitud requiere revision del estamento institucional correspondiente|APROBADO PARA RADICACION|Credito aprobado/);
  for(const mutation of [c=>c.radicacionHabilitada=true,c=>c.firmaHabilitada=true,
@@ -58,6 +63,17 @@ test('continuidad acreditada separa estudio favorable de decision final sin inve
  }
  const rejected=structuredClone(study);rejected.decisionPolitica.estado='RECHAZADO';
  assert.throws(()=>validarEstudioPublico(rejected,id));
+});
+
+test('documentos del canal no muestran pagare de LINIX ni infieren una firma por la aprobacion',()=>{
+ const {DocumentosAsociado}=load('asociado/PortalAsociado.tsx');
+ const pending=renderToStaticMarkup(React.createElement(DocumentosAsociado,{institucion:{estado:'APROBADA_PENDIENTE_FIRMA'}}));
+ assert.match(pending,/Preparacion documental pendiente/);
+ assert.match(pending,/No hay un documento contractual disponible para firmar/);
+ assert.doesNotMatch(pending,/Pagare|pagare|LINPAG|Documento firmado y verificado|<button|<a /);
+ const verified=renderToStaticMarkup(React.createElement(DocumentosAsociado,{formalizacion:{documento:'COLO-FO.001',firmaAcreditada:true}}));
+ assert.match(verified,/COLO-FO.001/);assert.match(verified,/Documento firmado y verificado/);
+ assert.doesNotMatch(verified,/Pagare|pagare|LINPAG/);
 });
 
 test('V8 consume capacidad disponible y residual separados sin reinterpretar el legacy',()=>{

@@ -33,7 +33,7 @@ export const VISTAS:{codigo:Vista;nombre:string;icono:LucideIcon;descripcion:str
   {codigo:'simulador',nombre:'Simulacion',icono:Calculator,descripcion:'Las condiciones disponibles para tu solicitud.'},
   {codigo:'autorizaciones',nombre:'Autorizaciones',icono:ShieldCheck,descripcion:'Cada autorizacion tiene un proposito diferente.'},
   {codigo:'evaluacion',nombre:'Resultado',icono:BadgeCheck,descripcion:'La decision institucional y las validaciones pendientes.'},
-  {codigo:'firma',nombre:'Documentos y firma',icono:Files,descripcion:'Tus documentos del canal y el pagare, por separado.'},
+  {codigo:'firma',nombre:'Documentos y firma',icono:Files,descripcion:'Documentos contractuales del canal.'},
   {codigo:'historial',nombre:'Historial',icono:History,descripcion:'Los hechos registrados de tu solicitud.'},
 ];
 export function siguienteVista(vista:Vista,direccion:1|-1):Vista{
@@ -64,7 +64,7 @@ export function ProgresoSolicitud({solicitud}:{solicitud:SolicitudPublica}){
   const etapas=[
     {titulo:'Solicitud registrada',detalle:fechaPublica(solicitud.fechaCreacion),confirmada:true},
     {titulo:'Decision institucional',detalle:institucion?'Aprobacion registrada':'Sin resultado acreditado',confirmada:Boolean(institucion)},
-    {titulo:'Documentos y firma',detalle:institucion?'Firma pendiente':'Sin estado acreditado',confirmada:false},
+    {titulo:'Documentos y firma',detalle:solicitud.formalizacionDocumental?.firmaAcreditada?'Documento verificado':'Preparacion documental pendiente',confirmada:solicitud.formalizacionDocumental?.firmaAcreditada===true},
   ];
   return <ol className="ca-credit-progress" aria-label="Progreso acreditado de la solicitud">{etapas.map((etapa,i)=><li
     key={etapa.titulo} className={etapa.confirmada?'is-confirmed':'is-pending'}>
@@ -73,28 +73,16 @@ export function ProgresoSolicitud({solicitud}:{solicitud:SolicitudPublica}){
   </li>)}</ol>;
 }
 
-export function DocumentosAsociado({institucion}:{institucion?:InstitucionalPublica|null}){
+export function DocumentosAsociado({formalizacion}:{institucion?:InstitucionalPublica|null;formalizacion?:SolicitudPublica['formalizacionDocumental']}){
   return <div className="ca-documents">
     <section className="ca-document-band" aria-labelledby="ca-autentic-title">
       <div className="ca-band-heading"><span className="ca-icon-tile"><FileCheck2 size={23} aria-hidden="true"/></span>
         <div><p className="ch-eyebrow">Documentos del canal</p><h3 id="ca-autentic-title">Documentos y firma electronica</h3></div></div>
       <dl className="ca-authorizations">
-        <div><dt>Documentos para firmar</dt><dd>No hay un paquete pendiente acreditado disponible en esta consulta.</dd></div>
-        <div><dt>Documentos firmados</dt><dd>No hay una firma verificada disponible para esta solicitud.</dd></div>
-        <div><dt>Autorizacion de centrales</dt><dd>Se verifica por separado antes de la consulta que la requiera. El acceso con codigo no la sustituye.</dd></div>
+        <div><dt>Documento contractual</dt><dd>{formalizacion?.documento??'Preparacion documental pendiente.'}</dd></div>
+        <div><dt>Firma electronica</dt><dd>{formalizacion?.firmaAcreditada?'Documento firmado y verificado.':formalizacion?'Validacion documental pendiente.':'No hay un documento contractual disponible para firmar.'}</dd></div>
       </dl>
     </section>
-    <section className="ca-document-band" aria-labelledby="ca-linpag-title">
-      <div className="ca-band-heading"><span className="ca-icon-tile ca-icon-tile--green"><Files size={23} aria-hidden="true"/></span>
-        <div><p className="ch-eyebrow">Pagare del credito</p><h3 id="ca-linpag-title">Pagare</h3></div></div>
-      <dl className="ca-authorizations">
-        <div><dt>Aprobacion del credito</dt><dd>{institucion?'Registrada por Congente.':'Sin resultado institucional disponible.'}</dd></div>
-        <div><dt>Firma del pagare</dt><dd>{institucion?'Pendiente al corte institucional; mecanismo de firma por confirmar.':'Sin estado de firma acreditado.'}</dd></div>
-        <div><dt>Estado del pagare</dt><dd>No hay confirmacion disponible de envio, firma, rechazo o vencimiento.</dd></div>
-      </dl>
-      <Aviso>Cuando corresponda firmar el pagare, recibiras las instrucciones por el canal autorizado. No debes firmar documentos duplicados.</Aviso>
-    </section>
-    <p className="ca-notice">No hay una oferta contractual aceptada ni una firma acreditadas en esta vista.</p>
   </div>;
 }
 
@@ -146,6 +134,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
   const siguiente=s?resolverSiguienteAccion(s,acto?.sid===s.referencia?acto.data:null,consultandoActo):null;
   const quote=s?.simulacion,institucion=s?.institucional;
   const estudioFavorable=s?.estudio?.decisionPolitica?.continuidad?.estudioFavorable===true;
+  const puedeConsultarCuota=Boolean(cotizacionHabilitada&&cotizar&&s?.procedencia?.origen==='FUENTE_OPERATIVA');
   const editando=edicionBorrador&&!s?.envio;
   useEffect(()=>{if(s?.envio)setEdicionBorrador(false);},[s?.envio]);
   useEffect(()=>{
@@ -225,6 +214,8 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
                   <ArrowRight size={17} aria-hidden="true"/>Continuar mi solicitud</button>}
               {siguiente?.destino==='evaluacion'&&<button className="btn btn-outline-primary" type="button" disabled={busy} onClick={()=>setVista('evaluacion')}>
                 <BadgeCheck size={17} aria-hidden="true"/>Ver mi estudio</button>}
+              {estudioFavorable&&puedeConsultarCuota&&<button className="btn btn-primary" type="button" disabled={busy} onClick={()=>setVista('simulador')}>
+                <Calculator size={17} aria-hidden="true"/>Revisar cuota y condiciones</button>}
             </section>
           </div>
           <section className="ca-conditions" aria-labelledby="ca-conditions-title">
@@ -317,6 +308,8 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
               'Las validaciones del estudio estan cumplidas. La radicacion y la decision final conservan sus propios requisitos.':
               'No hay una decision institucional acreditada disponible en esta consulta.'}</p>
           </div>
+          {estudioFavorable&&puedeConsultarCuota&&<div className="ca-bottom-actions"><button className="btn btn-primary" type="button"
+            disabled={busy} onClick={()=>setVista('simulador')}><Calculator size={17} aria-hidden="true"/>Revisar cuota y condiciones</button></div>}
           <dl className="ca-metrics"><div><dt>Decision institucional</dt><dd className="ca-metric-text">{institucion?'Aprobada; formalizacion pendiente':estudioFavorable?'Pendiente':'Sin resultado acreditado'}</dd></div>
             <div><dt>Fecha de la decision</dt><dd>{institucion?fechaPublica(institucion.fechaDecision):'No disponible'}</dd></div></dl>
           {institucion&&<p className="ca-notice">{INCIDENCIAS[institucion.incidencias]}</p>}
@@ -364,10 +357,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
             </ol>
           </div>}
           <Pendientes items={s.pendientes}/><Aviso titulo="Para continuar">{s.siguientePaso}</Aviso>
-          {estudioFavorable&&(cotizacionHabilitada&&cotizar&&s.procedencia?.origen==='FUENTE_OPERATIVA'
-            ?<div className="ca-bottom-actions"><button className="btn btn-outline-primary"
-              onClick={()=>setVista('simulador')}><Calculator size={16} aria-hidden="true"/>Revisar condiciones para radicar</button></div>
-            :<Aviso titulo="Condiciones institucionales pendientes">La cuota institucional aun no esta disponible. La radicacion y la firma permanecen pendientes; tu estudio se conserva.</Aviso>)}
+          {estudioFavorable&&!puedeConsultarCuota&&<Aviso titulo="Condiciones institucionales pendientes">La cuota institucional aun no esta disponible. La radicacion y la firma permanecen pendientes; tu estudio se conserva.</Aviso>}
           {s.estudio?.reglas.some(r=>r.codigo==='UNICO_FILA_9'&&r.estadoEvaluacion==='NO_CUMPLE')&&
             <div className="ca-bottom-actions"><a className="btn btn-outline-primary"
               href="https://consulta.congente.coop:8030/home/verificacion_view/."
@@ -375,8 +365,10 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
               <ExternalLink size={16} aria-hidden="true"/>Actualiza tus datos para continuar
             </a></div>}
         </>}
-        {s&&vista==='firma'&&<><Etiqueta tono="warning">{institucion||s.estudio?.decisionPolitica?.continuidad?.firmaContractual==='PENDIENTE'?'Firma pendiente':'Firma no acreditada'}</Etiqueta>
-          <DocumentosAsociado institucion={institucion}/></>}
+        {s&&vista==='firma'&&<><Etiqueta tono={s.formalizacionDocumental?.firmaAcreditada?'success':'warning'}>{s.formalizacionDocumental?.firmaAcreditada?'Documento firmado y verificado':s.formalizacionDocumental?'Validacion documental pendiente':'Preparacion documental pendiente'}</Etiqueta>
+          <DocumentosAsociado formalizacion={s.formalizacionDocumental}/>
+          {estudioFavorable&&puedeConsultarCuota&&!s.formalizacionDocumental&&<button className="btn btn-outline-primary" type="button"
+            disabled={busy} onClick={()=>setVista('simulador')}><Calculator size={17} aria-hidden="true"/>Revisar cuota y condiciones</button>}</>}
         {s&&vista==='historial'&&<>
           <ol className="ca-history">
             <li><span className="ca-history-mark"><Files size={18} aria-hidden="true"/></span><div>
@@ -637,7 +629,10 @@ export function OfertaTitular({sid,operar,horaServidor=Date.now}:{sid:string;ope
     finally{guard.current=false;if(alive.current)setBusy(false);}
   }
   return <section aria-label="Cotizacion y oferta institucional" aria-busy={busy}>
+    {busy&&!data&&<Cargando texto="Consultando cuota y condiciones..."/>}
     {error&&<Aviso tono="warning" titulo="Operacion sin confirmar">{error}</Aviso>}
+    {!data&&!busy&&<button className="btn btn-outline-primary" type="button" onClick={()=>void run('consultar')}>
+      <RefreshCw size={17} aria-hidden="true"/>Consultar condiciones</button>}
     {sim&&<><h3>Cuota y condiciones de tu solicitud</h3><dl className="ca-metrics">
       <div><dt>Monto</dt><dd>{moneda(sim.monto)}</dd></div><div><dt>Cuota calculada</dt><dd>{moneda(sim.cuota)}</dd></div>
       <div><dt>Plazo</dt><dd>{sim.plazoMeses} meses</dd></div><div><dt>Tasa NAMV</dt><dd>{sim.tasaNominalNamv} %</dd></div>

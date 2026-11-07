@@ -11,6 +11,8 @@
 
 
 
+
+
 import hashlib
 import json
 from uuid import UUID,uuid4
@@ -1035,12 +1037,14 @@ def preparar_cotizacion_radicacion_especial(solicitud_id, operador, *, titular=N
     return {'versionContrato': 'credihoy-cuota-preparacion-especial-v1', 'solicitudId': str(s.pk), 'decisionReferencia': decision['operacionId'], 'decisionSha256': decision['sha256'], 'revisionReferencia': decision['revisionReferencia'], 'parametros': payload, 'ofertaContractual': False, 'aceptacionContractual': False, 'ejecutaCuota': False, 'autorizaStart': False, 'autorizaFirma': False, 'autorizaDesembolso': False}
 
 
-def preparar_radicacion_tecnica(solicitud_id, operador, *, cliente=None):
+def preparar_radicacion_tecnica(solicitud_id, operador, *, cliente=None, ejecutar_cuota=True):
     """Existing scoped service preparation; never an intake intention or offer."""
     from django.conf import settings
     from uuid import uuid5, NAMESPACE_URL
     from .funcional import leer_estado_funcional
     from .condicion_comercial import resolver_desde_revision_conservada
+    if type(ejecutar_cuota) is not bool:
+        raise ValueError('COTIZACION_MODO_INVALIDO')
     s = _obtener(solicitud_id, operador, autogestion_tecnica=True)
     state = leer_estado_funcional(s)
     revision = state.get('revisionEstudio', {}).get('versionReferencia')
@@ -1052,6 +1056,7 @@ def preparar_radicacion_tecnica(solicitud_id, operador, *, cliente=None):
     key = str(uuid5(NAMESPACE_URL, 'credihoy-cuota-radicacion-especial:' + str(s.pk) + ':' + revision + ':' + str(selected['seleccionId'])))
     detail, payload = _contexto(s, lock=False)
     stored = _resultado_guardado(detail, payload, key, ejecutar=False)
+    transport_verified = False
     if stored['estado'] == 'SIN_COTIZACION':
         from .funcional import _firma, oferta_custodia_activa
         from ..cotizacion_cliente import ENDPOINT
@@ -1065,7 +1070,8 @@ def preparar_radicacion_tecnica(solicitud_id, operador, *, cliente=None):
         try:
             if response.status_code != 400 or response.headers.get('X-Request-ID') != key:
                 raise ValueError('COTIZACION_CONTRATO_VACIO_NO_ACREDITADO')
+            transport_verified = True
         finally:
             response.close()
-    quote = cotizacion(s.pk, operador, key, ejecutar=True, cliente=cliente, autogestion_tecnica=True)
-    return {'versionContrato': 'credihoy-preparacion-radicacion-tecnica-v1', 'solicitudId': str(s.pk), 'revisionReferencia': revision, 'seleccionId': selected['seleccionId'], 'requestIdCuota': key, 'estadoCuota': quote['estado'], 'cuotaDisponible': quote.get('disponible') is True, 'fuenteCuota': quote.get('fuente'), 'versionCondiciones': quote.get('versionCondiciones'), 'ofertaGenerada': False, 'aceptacionInferida': False, 'intencionCreada': False, 'autorizaStart': False, 'autorizaFirma': False, 'autorizaDesembolso': False}
+    quote = cotizacion(s.pk, operador, key, ejecutar=True, cliente=cliente, autogestion_tecnica=True) if ejecutar_cuota else stored
+    return {'versionContrato': 'credihoy-preparacion-radicacion-tecnica-v1', 'solicitudId': str(s.pk), 'revisionReferencia': revision, 'seleccionId': selected['seleccionId'], 'requestIdCuota': key, 'estadoCuota': quote['estado'], 'cuotaDisponible': quote.get('disponible') is True, 'fuenteCuota': quote.get('fuente'), 'versionCondiciones': quote.get('versionCondiciones'), 'soloVerificacionTransporte': not ejecutar_cuota, 'transporteVerificadoEnEstaEjecucion': transport_verified, 'ofertaGenerada': False, 'aceptacionInferida': False, 'intencionCreada': False, 'autorizaStart': False, 'autorizaFirma': False, 'autorizaDesembolso': False}

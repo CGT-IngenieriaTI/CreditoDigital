@@ -263,6 +263,18 @@ class DigitalDecisionTests(TestCase):
             with self.assertRaisesRegex(ValueError,'RADICACION_ESPECIAL_REQUIERE_ESTUDIO_FAVORABLE'):
                 cotizacion.preparar_cotizacion_radicacion_especial(SID,Mock())
 
+    def test_owner_continuity_projection_needs_no_classifier_module_and_preserves_wire_states(self):
+        import ast,inspect
+        from apps.xcore_consumo.services.credihoy_v2.unico.elegibilidad import continuidad_desde_decision
+        source=inspect.getsource(continuidad_desde_decision)
+        self.assertFalse(any(isinstance(n,(ast.Import,ast.ImportFrom)) for n in ast.walk(ast.parse(source))))
+        namespace={};exec(compile(source,'owner-without-classifier','exec'),namespace)
+        for description,state in [('TRABAJADOR CONGENTE',COLABORADOR),('GRADO CIVIL TRABAJADOR',FAMILIAR)]:
+            c=replace(self.c,clasificacion_estamentos=classify([{'resultado':'SI','tipofamiliar':description}]))
+            result=evaluar_decision_digital(c,ahora=NOW)
+            projection=namespace['continuidad_desde_decision'](result)
+            self.assertTrue(projection['estudioFavorable']);self.assertEqual(projection['clasificacion'],state)
+
     def test_missing_expired_foreign_classification_and_prior_start_do_not_reopen_chain(self):
         for c in (replace(self.c,clasificacion_estamentos=None),replace(self.c,titular_referencia='b'*64)):
             self.assertEqual(evaluar_decision_digital(c,ahora=NOW)['estado'],'BLOQUEO_ESTAMENTOS_SIN_EVIDENCIA')

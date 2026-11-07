@@ -13,6 +13,8 @@
 
 
 
+
+
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -648,7 +650,9 @@ def leer_decision_estudio(s, *, ahora=None):
 
 def continuidad_desde_decision(result):
     """Separate verified historical study fitness from current transport clearance."""
-    from .estamentos import ORDINARIO, FAMILIAR, COLABORADOR
+    ORDINARIO = 'APTO_PARA_AUTOMATIZACION_ORDINARIA'
+    FAMILIAR = 'REQUIERE_COMITE_INSTITUCIONAL_CREDITO'
+    COLABORADOR = 'REQUIERE_CONSEJO_ADMINISTRACION'
     state = result.get('estado')
     special = state in {FAMILIAR, COLABORADOR}
     preparation = result.get('preparacion', {})

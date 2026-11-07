@@ -29,7 +29,14 @@ export interface AutorizacionTitular {versionContrato:'credihoy-autorizacion-tit
   documento:null|{codigo:'COLO-FO.023';version:'10';pdfSha256:string;pdfBase64:string;presentacion:string;operacionId:string;
     proposito:'AUTORIZACION_CENTRALES_PRECONSULTA'};firmado:false;consultasHabilitadas:false;evaluacionHabilitada:false;
   firma?:{operacionId:string;envioHabilitado:false;identidadVerificada:boolean};complemento?:ComplementoPersonalGuardado;centrales?:CentralesPersonal}
+export interface SimulacionAceptable {version:'credihoy-simulacion-aceptable-v1';solicitudId:string;sha256:string;
+  revisionReferencia:string;versionCondiciones:string;calculadoEn:string;vigenteHasta:string;fuente:'CREDIHOY_CALCULO_PROPIO';
+  monto:string;plazoMeses:number;tasaNominalNamv:string;periodicidad:'MENSUAL';cuota:string;seguroMensualPorcentaje:string;
+  baseSeguro:'SALDO_INICIAL_PERIODO';unidadRedondeo:'1';versionMotor:string;versionParametros:string;planAproximado:true;
+  amortizacion:{periodo:number;saldoInicial:string;capital:string;intereses:string;seguro:string;otros:string;cuota:string;saldoFinal:string}[];
+  totales:{capital:string;intereses:string;seguro:string;cuotas:string};autorizaStart:false;firmaContractual:false;aprobacionInstitucional:false}
 export interface CotizacionTitular {versionContrato:'credihoy-cotizacion-titular-v1';solicitudId:string;estado:string;cuota:string|null;
+  simulacion?:SimulacionAceptable;aceptacionSimulacion?:{aceptada:boolean;fecha:string|null};
   oferta:null|{sha256:string;monto:string;plazoMeses:number;periodicidad:'MENSUAL';tasaNominalNamv:string;
     tasaEA:string|null;primerVencimiento:string|null;vigenteHasta:string;condicionesCompletas:boolean;seguroIncluidoPorMotor:true;
     calendarioPago?:null|{versionRegla:string;diaPago:number;fechaBaseDesembolso:string;tipoBase:'PROYECTADO'|'EFECTIVO';
@@ -38,9 +45,42 @@ export interface CotizacionTitular {versionContrato:'credihoy-cotizacion-titular
 export function validarCotizacionTitular(raw:unknown,sid:string,now=Date.now()):CotizacionTitular {
   const p=obj(raw),a=obj(p.aceptacion),o=p.oferta===null?null:obj(p.oferta);
   const amount=(v:unknown)=>typeof v==='string'&&/^\d{1,12}(\.\d{1,8})?$/.test(v)&&Number(v)>0;
-  if(Object.keys(p).sort().join(',')!=='aceptacion,autorizaDesembolso,autorizaStart,cuota,estado,oferta,solicitudId,versionContrato'
+  const own=p.estado==='SIMULACION_PROPIA';
+  if(own){
+    const hash=/^[a-f0-9]{64}$/;
+    const s=obj(p.simulacion),a=obj(p.aceptacionSimulacion),rows=s.amortizacion;
+    const keys='amortizacion,aprobacionInstitucional,autorizaStart,baseSeguro,calculadoEn,cuota,firmaContractual,fuente,monto,periodicidad,planAproximado,plazoMeses,revisionReferencia,seguroMensualPorcentaje,sha256,solicitudId,tasaNominalNamv,totales,unidadRedondeo,version,versionCondiciones,versionMotor,versionParametros,vigenteHasta';
+    if(Object.keys(s).sort().join(',')!==keys||s.version!=='credihoy-simulacion-aceptable-v1'||s.solicitudId!==sid
+      ||s.fuente!=='CREDIHOY_CALCULO_PROPIO'||s.planAproximado!==true||s.autorizaStart!==false||s.firmaContractual!==false
+      ||s.aprobacionInstitucional!==false||s.periodicidad!=='MENSUAL'||s.baseSeguro!=='SALDO_INICIAL_PERIODO'||s.unidadRedondeo!=='1'
+      ||s.versionMotor!=='credihoy-plan-decimal-v1'||typeof s.versionParametros!=='string'||!s.versionParametros
+      ||!uuid.test(String(s.revisionReferencia))||!hash.test(String(s.sha256))||!hash.test(String(s.versionCondiciones))
+      ||!amount(s.monto)||!amount(s.cuota)||!amount(s.tasaNominalNamv)||Number(s.tasaNominalNamv)>100
+      ||typeof s.seguroMensualPorcentaje!=='string'||!/^\d+(\.\d+)?$/.test(s.seguroMensualPorcentaje)||Number(s.seguroMensualPorcentaje)>100
+      ||!Number.isInteger(s.plazoMeses)||Number(s.plazoMeses)<1||Number(s.plazoMeses)>48
+      ||![s.calculadoEn,s.vigenteHasta].every(v=>typeof v==='string'&&/(?:Z|[+-]\d{2}:\d{2})$/.test(v)&&Number.isFinite(Date.parse(v)))
+      ||Date.parse(String(s.calculadoEn))>now||Date.parse(String(s.vigenteHasta))<=now
+      ||!Array.isArray(rows)||rows.length!==s.plazoMeses||Object.keys(a).sort().join(',')!=='aceptada,fecha'
+      ||typeof a.aceptada!=='boolean'||(a.aceptada?(typeof a.fecha!=='string'||!Number.isFinite(Date.parse(a.fecha))
+        ||Date.parse(a.fecha)>now||Date.parse(a.fecha)<Date.parse(String(s.calculadoEn))):a.fecha!==null))fail();
+    let balance=Number(s.monto);const totals={capital:0,intereses:0,seguro:0,cuotas:0};
+    const planRows=rows as unknown[];
+    planRows.forEach((raw,index)=>{const r=obj(raw),money=(v:unknown)=>typeof v==='string'&&/^\d{1,15}(\.\d{1,8})?$/.test(v);
+      if(Object.keys(r).sort().join(',')!=='capital,cuota,intereses,otros,periodo,saldoFinal,saldoInicial,seguro'||r.periodo!==index+1
+        ||!['capital','cuota','intereses','otros','saldoFinal','saldoInicial','seguro'].every(k=>money(r[k]))
+        ||Number(r.capital)<=0||Number(r.otros)!==0||Math.abs(Number(r.saldoInicial)-balance)>.001
+        ||Math.abs(Number(r.saldoFinal)-(balance-Number(r.capital)))>.001
+        ||Number(r.cuota)!==Number(r.capital)+Number(r.intereses)+Number(r.seguro)
+        ||index<planRows.length-1&&Number(r.cuota)!==Number(s.cuota))fail();
+      balance=Number(r.saldoFinal);totals.capital+=Number(r.capital);totals.intereses+=Number(r.intereses);
+      totals.seguro+=Number(r.seguro);totals.cuotas+=Number(r.cuota);});
+    const t=obj(s.totales);
+    if(balance!==0||Math.abs(totals.capital-Number(s.monto))>.001||Object.keys(t).sort().join(',')!=='capital,cuotas,intereses,seguro'
+      ||Object.entries(totals).some(([k,v])=>typeof t[k]!=='string'||Math.abs(Number(t[k])-v)>.001))fail();
+  }
+  if(Object.keys(p).sort().join(',')!==(own?'aceptacion,aceptacionSimulacion,autorizaDesembolso,autorizaStart,cuota,estado,oferta,simulacion,solicitudId,versionContrato':'aceptacion,autorizaDesembolso,autorizaStart,cuota,estado,oferta,solicitudId,versionContrato')
     ||p.versionContrato!=='credihoy-cotizacion-titular-v1'||p.solicitudId!==sid||!uuid.test(sid)
-    ||!['DISPONIBLE_PARCIAL','SIN_COTIZACION','NO_HABILITADA','REQUIERE_CONCILIACION','DESACTUALIZADA',
+    ||!['SIMULACION_PROPIA','DISPONIBLE_PARCIAL','SIN_COTIZACION','NO_HABILITADA','REQUIERE_CONCILIACION','DESACTUALIZADA',
       'PARAMETROS_EXPEDIENTE_INCOMPLETOS','PARAMETROS_FALTANTES','NO_DISPONIBLE','ERROR_TEMPORAL'].includes(String(p.estado))
     ||p.autorizaStart!==false||p.autorizaDesembolso!==false||Object.keys(a).sort().join(',')!=='aceptada,fecha'
     ||typeof a.aceptada!=='boolean')fail();
@@ -458,13 +498,15 @@ export class AccesoAsociadoClient {
     if(this.acceso!==grant||p.sesionReferencia!==grant)fail();
     return validarAutorizacionTitular(p.autorizacion,body.solicitudId,this.ahoraServidor());
   }
-  async cotizacion(sid:string,operacion:'consultar'|'cotizar'|'aceptar',ofertaSha256?:string,diaPago?:number):Promise<CotizacionTitular>{
+  async cotizacion(sid:string,operacion:'consultar'|'cotizar'|'aceptar'|'aceptar_simulacion',ofertaSha256?:string,diaPago?:number):Promise<CotizacionTitular>{
     if(!this.acceso)throw new AccesoPublicoError(401);
-    if(!uuid.test(sid)||(operacion==='aceptar'&&!/^[a-f0-9]{64}$/.test(ofertaSha256??'')))fail();
+    if(!uuid.test(sid)||(['aceptar','aceptar_simulacion'].includes(operacion)&&!/^[a-f0-9]{64}$/.test(ofertaSha256??'')))fail();
     if(diaPago!==undefined&&(operacion!=='cotizar'||!Number.isInteger(diaPago)||diaPago<1||diaPago>20))fail();
     const grant=this.acceso;
     const p=await this.request('cotizacion/',{solicitudId:sid,operacion,
-      ...(operacion==='aceptar'?{ofertaSha256,acepta:true}:{}),...(diaPago!==undefined?{diaPago}:{})},crypto.randomUUID());
+      ...(operacion==='aceptar'?{ofertaSha256,acepta:true}:{}),
+      ...(operacion==='aceptar_simulacion'?{simulacionSha256:ofertaSha256,acepta:true}:{}),
+      ...(diaPago!==undefined?{diaPago}:{})},crypto.randomUUID());
     if(this.acceso!==grant)fail();
     return validarCotizacionTitular(p,sid,this.responseNow);
   }

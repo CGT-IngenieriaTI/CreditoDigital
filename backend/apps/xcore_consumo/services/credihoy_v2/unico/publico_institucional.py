@@ -15,6 +15,8 @@
 
 
 
+
+
 import hashlib
 import hmac
 import json
@@ -284,55 +286,72 @@ def project_progress_notice(row):
 
 def project_quote(row):
     """Explicit allowlist: never expose holder hashes, XML, actors or core IDs."""
-    from datetime import date,datetime,timezone
+    from datetime import date, datetime, timezone
     from decimal import Decimal
     try:
-        fields={'versionContrato','solicitudId','estado','cuota','oferta','aceptacion','autorizaStart','autorizaDesembolso'}
-        if (type(row) is not dict or set(row)!=fields or row['versionContrato']!='credihoy-cotizacion-titular-v1'
-                or str(UUID(row['solicitudId']))!=row['solicitudId'] or row['autorizaStart'] is not False
-                or row['autorizaDesembolso'] is not False or row['estado'] not in {
-                    'DISPONIBLE_PARCIAL','SIN_COTIZACION','NO_HABILITADA','REQUIERE_CONCILIACION',
-                    'DESACTUALIZADA','PARAMETROS_EXPEDIENTE_INCOMPLETOS','PARAMETROS_FALTANTES','NO_DISPONIBLE','ERROR_TEMPORAL'}):raise ValueError()
-        offer=row['oferta'];accept=row['aceptacion']
-        if set(accept)!={'aceptada','fecha'} or type(accept['aceptada']) is not bool:raise ValueError()
+        fields = {'versionContrato', 'solicitudId', 'estado', 'cuota', 'oferta', 'aceptacion', 'autorizaStart', 'autorizaDesembolso'}
+        own = type(row) is dict and row.get('estado') == 'SIMULACION_PROPIA'
+        if own:
+            fields |= {'simulacion', 'aceptacionSimulacion'}
+            validar_simulacion_propia(row['simulacion'], row['solicitudId'])
+            a = row['aceptacionSimulacion']
+            if type(a) is not dict or set(a) != {'aceptada', 'fecha'} or type(a['aceptada']) is not bool:
+                raise ValueError()
+            if a['aceptada']:
+                t = datetime.fromisoformat(a['fecha'])
+                if t.utcoffset() is None or not datetime.fromisoformat(row['simulacion']['calculadoEn']) <= t <= datetime.now(timezone.utc):
+                    raise ValueError()
+            elif a['fecha'] is not None:
+                raise ValueError()
+        if type(row) is not dict or set(row) != fields or row['versionContrato'] != 'credihoy-cotizacion-titular-v1' or (str(UUID(row['solicitudId'])) != row['solicitudId']) or (row['autorizaStart'] is not False) or (row['autorizaDesembolso'] is not False) or (row['estado'] not in {'SIMULACION_PROPIA', 'DISPONIBLE_PARCIAL', 'SIN_COTIZACION', 'NO_HABILITADA', 'REQUIERE_CONCILIACION', 'DESACTUALIZADA', 'PARAMETROS_EXPEDIENTE_INCOMPLETOS', 'PARAMETROS_FALTANTES', 'NO_DISPONIBLE', 'ERROR_TEMPORAL'}):
+            raise ValueError()
+        offer = row['oferta']
+        accept = row['aceptacion']
+        if set(accept) != {'aceptada', 'fecha'} or type(accept['aceptada']) is not bool:
+            raise ValueError()
         if offer is None:
-            if row['cuota'] is not None or accept!={'aceptada':False,'fecha':None}:raise ValueError()
+            if row['cuota'] is not None or accept != {'aceptada': False, 'fecha': None}:
+                raise ValueError()
         else:
-            expected={'sha256','monto','plazoMeses','periodicidad','tasaNominalNamv','tasaEA',
-                    'primerVencimiento','vigenteHasta','condicionesCompletas','seguroIncluidoPorMotor'}
-            if 'calendarioPago' in offer:expected.add('calendarioPago')
-            if (set(offer)!=expected
-                    or not re.fullmatch('[a-f0-9]{64}',offer['sha256']) or offer['periodicidad']!='MENSUAL'
-                    or type(offer['plazoMeses']) is not int or not 1<=offer['plazoMeses']<=48
-                    or type(offer['condicionesCompletas']) is not bool or offer['seguroIncluidoPorMotor'] is not True):raise ValueError()
-            for number in (row['cuota'],offer['monto'],offer['tasaNominalNamv'],offer['tasaEA']):
-                if number is not None and (type(number) is not str or not re.fullmatch(r'[0-9]{1,12}(\.[0-9]{1,8})?',number)
-                        or Decimal(number)<=0):raise ValueError()
-            if row['cuota'] is None or offer['monto'] is None or offer['tasaNominalNamv'] is None:raise ValueError()
-            end=datetime.fromisoformat(offer['vigenteHasta'])
-            if end.utcoffset() is None or end<=datetime.now(timezone.utc):raise ValueError()
+            expected = {'sha256', 'monto', 'plazoMeses', 'periodicidad', 'tasaNominalNamv', 'tasaEA', 'primerVencimiento', 'vigenteHasta', 'condicionesCompletas', 'seguroIncluidoPorMotor'}
+            if 'calendarioPago' in offer:
+                expected.add('calendarioPago')
+            if set(offer) != expected or not re.fullmatch('[a-f0-9]{64}', offer['sha256']) or offer['periodicidad'] != 'MENSUAL' or (type(offer['plazoMeses']) is not int) or (not 1 <= offer['plazoMeses'] <= 48) or (type(offer['condicionesCompletas']) is not bool) or (offer['seguroIncluidoPorMotor'] is not True):
+                raise ValueError()
+            for number in (row['cuota'], offer['monto'], offer['tasaNominalNamv'], offer['tasaEA']):
+                if number is not None and (type(number) is not str or not re.fullmatch('[0-9]{1,12}(\\.[0-9]{1,8})?', number) or Decimal(number) <= 0):
+                    raise ValueError()
+            if row['cuota'] is None or offer['monto'] is None or offer['tasaNominalNamv'] is None:
+                raise ValueError()
+            end = datetime.fromisoformat(offer['vigenteHasta'])
+            if end.utcoffset() is None or end <= datetime.now(timezone.utc):
+                raise ValueError()
             if offer['primerVencimiento'] is not None:
                 from datetime import date
-                if date.fromisoformat(offer['primerVencimiento']).isoformat()!=offer['primerVencimiento']:raise ValueError()
-            complete=offer['primerVencimiento'] is not None and offer['tasaEA'] is not None
+                if date.fromisoformat(offer['primerVencimiento']).isoformat() != offer['primerVencimiento']:
+                    raise ValueError()
+            complete = offer['primerVencimiento'] is not None and offer['tasaEA'] is not None
             if 'calendarioPago' in offer:
-                c=offer['calendarioPago'];complete=complete and c is not None
+                c = offer['calendarioPago']
+                complete = complete and c is not None
                 if c is not None:
-                    from .condiciones_producto import preparar_calendario,CALENDARIO_VERSION
-                    if set(c)!={'versionRegla','diaPago','fechaBaseDesembolso','tipoBase','primerVencimiento','interesesAnticipados'}:
+                    from .condiciones_producto import preparar_calendario, CALENDARIO_VERSION
+                    if set(c) != {'versionRegla', 'diaPago', 'fechaBaseDesembolso', 'tipoBase', 'primerVencimiento', 'interesesAnticipados'}:
                         raise ValueError()
-                    computed=preparar_calendario(date.fromisoformat(c['fechaBaseDesembolso']),c['diaPago'],
-                        medio_pago='VENTANILLA',tipo_base=c['tipoBase'])
-                    if (c['versionRegla']!=CALENDARIO_VERSION or c['primerVencimiento']!=offer['primerVencimiento']
-                            or c['primerVencimiento']!=computed['primerVencimientoProyectado']
-                            or c['interesesAnticipados']!={k:computed['interesesAnticipados'][k] for k in ('desde','hasta','importe')}):raise ValueError()
-            if offer['condicionesCompletas']!=complete:raise ValueError()
+                    computed = preparar_calendario(date.fromisoformat(c['fechaBaseDesembolso']), c['diaPago'], medio_pago='VENTANILLA', tipo_base=c['tipoBase'])
+                    if c['versionRegla'] != CALENDARIO_VERSION or c['primerVencimiento'] != offer['primerVencimiento'] or c['primerVencimiento'] != computed['primerVencimientoProyectado'] or (c['interesesAnticipados'] != {k: computed['interesesAnticipados'][k] for k in ('desde', 'hasta', 'importe')}):
+                        raise ValueError()
+            if offer['condicionesCompletas'] != complete:
+                raise ValueError()
             if accept['aceptada']:
-                when=datetime.fromisoformat(accept['fecha'])
-                if when.utcoffset() is None or when>datetime.now(timezone.utc) or not offer['condicionesCompletas']:raise ValueError()
-            elif accept['fecha'] is not None:raise ValueError()
+                when = datetime.fromisoformat(accept['fecha'])
+                if when.utcoffset() is None or when > datetime.now(timezone.utc) or (not offer['condicionesCompletas']):
+                    raise ValueError()
+            elif accept['fecha'] is not None:
+                raise ValueError()
         return json.loads(json.dumps(row))
-    except (KeyError,TypeError,ValueError,AttributeError,ArithmeticError):raise NoDisponible from None
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        raise NoDisponible from None
 
 
 def project_draft(row):
@@ -603,3 +622,52 @@ def project_study_decision(result):
         continuity = continuidad_desde_decision(result)
         projection['continuidad'] = {'version': 'credihoy-continuidad-publica-v1', 'estudioFavorable': continuity['estudioFavorable'], 'estadoRadicacion': 'PREPARACION_PENDIENTE', 'decisionInstitucional': 'PENDIENTE', 'firmaContractual': 'PENDIENTE', 'radicacionHabilitada': False, 'firmaHabilitada': False}
     return projection
+
+
+def validar_simulacion_propia(value, sid, *, ahora=None):
+    """Validate the persisted approximate plan without treating it as a signed offer."""
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    import hashlib
+    try:
+        fields = {'version', 'solicitudId', 'revisionReferencia', 'versionCondiciones', 'calculadoEn', 'vigenteHasta', 'fuente', 'monto', 'plazoMeses', 'tasaNominalNamv', 'periodicidad', 'cuota', 'seguroMensualPorcentaje', 'baseSeguro', 'unidadRedondeo', 'versionMotor', 'versionParametros', 'planAproximado', 'amortizacion', 'totales', 'autorizaStart', 'firmaContractual', 'aprobacionInstitucional', 'sha256'}
+        if type(value) is not dict or set(value) != fields or value['solicitudId'] != str(UUID(sid)) or (value['version'] != 'credihoy-simulacion-aceptable-v1') or (value['fuente'] != 'CREDIHOY_CALCULO_PROPIO') or (str(UUID(value['revisionReferencia'])) != value['revisionReferencia']) or (value['planAproximado'] is not True) or (value['autorizaStart'] is not False) or (value['firmaContractual'] is not False) or (value['aprobacionInstitucional'] is not False) or (value['periodicidad'] != 'MENSUAL') or (type(value['plazoMeses']) is not int) or (not 1 <= value['plazoMeses'] <= 48) or (value['baseSeguro'] != 'SALDO_INICIAL_PERIODO') or (value['unidadRedondeo'] != '1') or (value['versionMotor'] != 'credihoy-plan-decimal-v1') or (type(value['versionParametros']) is not str) or (not value['versionParametros']):
+            raise ValueError()
+        for k in ('sha256', 'versionCondiciones'):
+            if type(value[k]) is not str or not re.fullmatch('[a-f0-9]{64}', value[k]):
+                raise ValueError()
+        body = {k: v for k, v in value.items() if k != 'sha256'}
+        if hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest() != value['sha256']:
+            raise ValueError()
+        now = ahora or datetime.now(timezone.utc)
+        start, end = (datetime.fromisoformat(value[k]) for k in ('calculadoEn', 'vigenteHasta'))
+        if start.utcoffset() is None or end.utcoffset() is None or (not start <= now < end) or (not 60 <= (end - start).total_seconds() <= 86400):
+            raise ValueError()
+
+        def money(v):
+            if type(v) is not str or not re.fullmatch('[0-9]{1,15}(\\.[0-9]{1,8})?', v):
+                raise ValueError()
+            return Decimal(v)
+        amount = money(value['monto'])
+        quota = money(value['cuota'])
+        if amount <= 0 or quota <= 0 or (not 0 <= money(value['tasaNominalNamv']) <= 100) or (not 0 <= money(value['seguroMensualPorcentaje']) <= 100):
+            raise ValueError()
+        rows = value['amortizacion']
+        totals = {k: Decimal(0) for k in ('capital', 'intereses', 'seguro', 'cuotas')}
+        if type(rows) is not list or len(rows) != value['plazoMeses']:
+            raise ValueError()
+        balance = amount
+        for n, row in enumerate(rows, 1):
+            if type(row) is not dict or set(row) != {'periodo', 'saldoInicial', 'capital', 'intereses', 'seguro', 'otros', 'cuota', 'saldoFinal'}:
+                raise ValueError()
+            v = {k: money(row[k]) for k in row if k != 'periodo'}
+            if type(row['periodo']) is not int or row['periodo'] != n or v['saldoInicial'] != balance or (v['capital'] <= 0) or (v['otros'] != 0) or (v['saldoFinal'] != balance - v['capital']) or (v['cuota'] != v['capital'] + v['intereses'] + v['seguro']) or (n < len(rows) and v['cuota'] != quota):
+                raise ValueError()
+            for k in totals:
+                totals[k] += v['cuota' if k == 'cuotas' else k]
+            balance = v['saldoFinal']
+        if balance != 0 or totals['capital'] != amount or type(value['totales']) is not dict or (set(value['totales']) != set(totals)) or any((money(value['totales'][k]) != v for k, v in totals.items())):
+            raise ValueError()
+        return json.loads(json.dumps(value))
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        raise ValueError('SIMULACION_PROPIA_NO_VIGENTE_O_INVALIDA') from None

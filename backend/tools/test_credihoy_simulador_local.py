@@ -15,6 +15,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient, APIRequestFactory
 from apps.solicitudes.models import Solicitud
 from apps.usuarios.models import Solicitante
+from apps.utils.models import AuditLog
 from apps.xcore_consumo.models import SolicitudConsumo, EvaluacionConsumo, ConsentimientoConsumo
 from apps.xcore_consumo.tasas_models import (PerfilTasasCredihoy, TasaComercialCredihoy,
     AsignacionTarifaCredihoy, EventoTasasCredihoy, SeleccionTarifaCredihoy)
@@ -30,6 +31,142 @@ from apps.xcore_consumo.services.credihoy_v2.unico.condicion_comercial import re
 LIMITS={'version':'SYNTHETIC_ONLY','referencia':'NOT_REAL_POLICY','modalidad':'111',
     'montoMinimo':'400000','montoMaximo':'10000000','cuotasMinimas':1,'cuotasMaximas':48}
 BASE='/api/v1/credihoy/publico/'
+
+
+class OwnQuoteTests(TransactionTestCase):
+    def setUp(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import cotizacion
+        self.q=cotizacion
+        h=Solicitante.objects.create(tipo_identificacion='CC',numero_identificacion='0000000099',
+            primer_apellido='SYNTHETIC',celular='0000000000',email='test@example.test',fecha_expedicion='2000-01-01')
+        self.s=Solicitud.objects.create(solicitante=h,producto=wire.PRODUCTO,metadatos={'modo':'AUTOGESTION_ENVIADA'})
+        self.detail=SolicitudConsumo.objects.create(solicitud=self.s,orchestration_data={'conservar':'original'})
+        self.ref=str(uuid4())
+        self.context={'solicitudId':str(self.s.pk),'versionCondiciones':'a'*64,'condiciones':{
+            'producto':'390','modalidad':'111','destinacion':'CFA','monto':'800000','numeroCuotas':6,
+            'tasaNominalNamv':'25.410000','periodicidad':'MENSUAL'}}
+        self.identity={'numeroDocumento':'0000000099','_sesionReferencia':str(uuid4()),
+            '_sesionExpiraAt':(timezone.now()+timedelta(minutes=10)).isoformat()}
+        self.study={'referenciaVersion':self.ref,'decisionPolitica':{'continuidad':{'estudioFavorable':True}}}
+        self.actor=get_user_model().objects.create(username='svc_synthetic')
+        self.real_obtener=self.q._obtener
+        def context(s,**kw):
+            query=SolicitudConsumo.objects.select_for_update() if kw.get('lock',True) else SolicitudConsumo.objects
+            return query.get(solicitud=s),deepcopy(self.context)
+        for mock in (patch.object(self.q,'_obtener',return_value=self.s),patch.object(self.q,'_contexto',side_effect=context),
+                patch.object(funcional,'leer_estado_funcional',return_value={'revisionEstudio':{'versionReferencia':self.ref}}),
+                patch('apps.xcore_consumo.services.credihoy_v2.unico.autoservicio._estudio_publico_personal',side_effect=lambda *a:self.study),
+                patch('requests.sessions.Session.request',side_effect=AssertionError('NETWORK_FORBIDDEN'))):
+            mock.start();self.addCleanup(mock.stop)
+        settings=self.settings(CREDIHOY_COTIZACION_MOTOR='PROPIO_390_111_CFA')
+        settings.enable();self.addCleanup(settings.disable)
+
+    def calculate(self):return self.q.calcular_simulacion_propia(self.s.pk,self.actor)
+
+    def operate(self,**extra):
+        return self.q._operacion_titular(self.identity,{'solicitudId':str(self.s.pk),'operacion':'consultar',**extra},str(uuid4()))
+
+    def test_calculation_persistence_idempotency_and_read_projection(self):
+        first=self.calculate();second=self.calculate()
+        self.assertEqual(first,second);self.assertEqual(first['cuota'],'143822')
+        self.assertEqual(AuditLog.objects.filter(event='CREDIHOY_SIMULACION_PROPIA_CALCULADA').count(),1)
+        p=wire.project_quote(self.operate());self.assertEqual(p['simulacion'],first)
+        self.assertEqual(p['aceptacionSimulacion'],{'aceptada':False,'fecha':None})
+        self.detail.refresh_from_db();self.assertEqual(self.detail.orchestration_data['conservar'],'original')
+
+    def test_personal_acceptance_is_distinct_idempotent_and_no_financial_authority(self):
+        sim=self.calculate()
+        args={'operacion':'aceptar_simulacion','simulacionSha256':sim['sha256'],'acepta':True}
+        accepted=self.operate(**args);again=self.operate(**args)
+        self.assertEqual(accepted,again);self.assertTrue(wire.project_quote(accepted)['aceptacionSimulacion']['aceptada'])
+        self.assertFalse(accepted['aceptacion']['aceptada']);self.assertFalse(accepted['autorizaStart'])
+        self.assertEqual(AuditLog.objects.filter(event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR').count(),1)
+        self.detail.refresh_from_db()
+        receipt=self.detail.orchestration_data[self.q.KEY]['aceptacionesSimulacion'][sim['sha256']]
+        self.assertEqual(receipt['sesionReferencia'],self.identity['_sesionReferencia']);self.assertFalse(receipt['firmaContractual'])
+
+    def test_reject_cross_holder_changed_revision_changed_catalog_and_payload_injection(self):
+        sim=self.calculate()
+        self.identity['numeroDocumento']='0000000088'
+        with self.assertRaises(ValueError):self.operate()
+        self.identity['numeroDocumento']='0000000099';self.study['referenciaVersion']=str(uuid4())
+        with self.assertRaises(ValueError):self.operate()
+        self.study['referenciaVersion']=self.ref;self.context['versionCondiciones']='b'*64
+        with self.assertRaises(ValueError):self.operate()
+        self.context['versionCondiciones']='a'*64
+        for args in ({'monto':'1'},{'operacion':'aceptar_simulacion','simulacionSha256':'f'*64,'acepta':True},
+                {'operacion':'aceptar_simulacion','simulacionSha256':sim['sha256'],'acepta':False}):
+            with self.assertRaises(ValueError):self.operate(**args)
+        self.assertFalse(AuditLog.objects.filter(event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR').exists())
+
+    def test_tamper_expiry_and_non_favorable_study_fail_closed(self):
+        sim=self.calculate()
+        for change in (lambda p:p.update(cuota='1'),lambda p:p['amortizacion'][0].update(capital='1'),
+                lambda p:p.update(autorizaStart=True),lambda p:p.update(vigenteHasta=p['calculadoEn'])):
+            bad=deepcopy(sim);change(bad);bad['sha256']=self.q._huella_simulacion({k:v for k,v in bad.items() if k!='sha256'})
+            with self.assertRaises(ValueError):wire.validar_simulacion_propia(bad,str(self.s.pk))
+        with self.assertRaises(ValueError):wire.validar_simulacion_propia(sim,str(self.s.pk),ahora=timezone.now()+timedelta(hours=2))
+        self.study['decisionPolitica']['continuidad']['estudioFavorable']=False
+        with self.assertRaises(ValueError):self.operate()
+
+    def test_postgresql_role_guard_allows_only_personal_append(self):
+        import sys
+        from pathlib import Path
+        from django.db import connection,transaction,DatabaseError
+        if connection.vendor!='postgresql':self.skipTest('PostgreSQL required')
+        sys.path.insert(0,str(Path(__file__).resolve().parents[3]/'api_data_v1/tools'))
+        from credihoy_oa01_ensamblaje import own_quote_guard_sql
+        sim=self.calculate()
+        with connection.cursor() as c:
+            c.execute("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='credihoy_titular_cotizacion') THEN CREATE ROLE credihoy_titular_cotizacion NOLOGIN; END IF; END $$")
+            c.execute('GRANT USAGE ON SCHEMA public TO credihoy_titular_cotizacion')
+            c.execute('GRANT SELECT,UPDATE ON public.xcore_consumo_solicitudconsumo TO credihoy_titular_cotizacion')
+            c.execute('GRANT SELECT ON public.usuarios_solicitante,public.solicitudes_solicitud TO credihoy_titular_cotizacion')
+            c.execute('GRANT INSERT,SELECT ON public.utils_auditlog TO credihoy_titular_cotizacion')
+            c.execute('GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO credihoy_titular_cotizacion')
+            c.execute(own_quote_guard_sql())
+        try:
+            with transaction.atomic():
+                with connection.cursor() as c:c.execute('SET LOCAL ROLE credihoy_titular_cotizacion')
+                accepted=self.operate(operacion='aceptar_simulacion',simulacionSha256=sim['sha256'],acepta=True)
+                self.assertTrue(accepted['aceptacionSimulacion']['aceptada'])
+            for mutation in ('drop','rewrite','form'):
+                with self.assertRaises(DatabaseError),transaction.atomic():
+                    with connection.cursor() as c:c.execute('SET LOCAL ROLE credihoy_titular_cotizacion')
+                    detail=SolicitudConsumo.objects.get(solicitud=self.s)
+                    data=deepcopy(detail.orchestration_data)
+                    if mutation=='drop':data.pop(self.q.KEY)
+                    elif mutation=='rewrite':data[self.q.KEY]['simulacion']['cuota']='1'
+                    else:data['conservar']='changed'
+                    detail.orchestration_data=data;detail.save(update_fields=['orchestration_data'])
+        finally:
+            with connection.cursor() as c:
+                c.execute('DROP TRIGGER credihoy_simulacion_aceptacion_guard ON public.xcore_consumo_solicitudconsumo')
+                c.execute('DROP FUNCTION public.credihoy_simulacion_aceptacion_guard()')
+
+    def test_existing_intake_context_receives_quota_not_contractual_acceptance(self):
+        from dataclasses import fields
+        from apps.xcore_consumo.services.credihoy_v2.unico.elegibilidad import ContextoElegibilidad
+        args={f.name:None for f in fields(ContextoElegibilidad)}
+        args.update(solicitud_id=str(self.s.pk),titular_referencia=sha256(self.identity['numeroDocumento'].encode()).hexdigest())
+        context=ContextoElegibilidad(**args);sim=self.calculate()
+        with self.assertRaises(ValueError):self.q.aplicar_simulacion_aceptada_a_contexto(context,self.s)
+        self.operate(operacion='aceptar_simulacion',simulacionSha256=sim['sha256'],acepta=True)
+        linked=self.q.aplicar_simulacion_aceptada_a_contexto(context,self.s)
+        self.assertEqual(linked.cuota_contractual,sim['cuota']);self.assertIsNone(linked.oferta_referencia)
+        self.assertIsNone(linked.aceptacion_referencia);self.assertIsNone(linked.decision_autorizada)
+
+    def test_real_holder_scope_and_expiration_checks_are_preserved(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import autoservicio
+        with override_settings(CREDIHOY_COTIZACION_TITULAR_ENABLED=True,CREDIHOY_COTIZACION_ENABLED=True,
+                CREDIHOY_TITULAR_FUENTE_ENABLED=True,CREDIHOY_SEGUIMIENTO_DB_ALIAS='default',
+                CREDIHOY_SEGUIMIENTO_SOURCE_REFERENCE='SYNTHETIC',CREDIHOY_PUBLICO_ENSAYO={'solicitudes':[str(self.s.pk)]}),\
+                patch.object(autoservicio,'validar_vinculo_consumo'):
+            self.assertEqual(self.real_obtener(self.s.pk,None,titular=self.identity).pk,self.s.pk)
+            with self.assertRaises(Http404):self.real_obtener(uuid4(),None,titular=self.identity)
+            with self.assertRaises(Http404):self.real_obtener(self.s.pk,None,titular={**self.identity,'numeroDocumento':'0000000088'})
+            with self.assertRaises(wire.NoDisponible):self.real_obtener(self.s.pk,None,titular={**self.identity,
+                '_sesionExpiraAt':(timezone.now()-timedelta(seconds=1)).isoformat()})
 
 
 class DecimalPlanTests(SimpleTestCase):

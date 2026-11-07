@@ -13,6 +13,8 @@
 
 
 
+
+
 import hashlib
 import json
 from uuid import UUID,uuid4
@@ -50,8 +52,8 @@ def _obtener(sid, operador, *, lock=False, titular=None, autogestion_tecnica=Fal
         from .elegibilidad import leer_decision_estudio, continuidad_desde_decision
         case = obtener_para_evaluacion(sid, operador, autogestion=True, revision_conservada=True, lock=lock)
         decision = leer_decision_estudio(case)
-        if decision is None or decision['resultado']['estado'] not in {'REQUIERE_CONSEJO_ADMINISTRACION', 'REQUIERE_COMITE_INSTITUCIONAL_CREDITO'} or (not continuidad_desde_decision(decision['resultado'])['estudioFavorable']):
-            raise ValueError('COTIZACION_TECNICA_SOLO_RADICACION_ESPECIAL')
+        if decision is None or decision['resultado']['estado'] not in {'APROBADO', 'REQUIERE_CONSEJO_ADMINISTRACION', 'REQUIERE_COMITE_INSTITUCIONAL_CREDITO'} or (not continuidad_desde_decision(decision['resultado'])['estudioFavorable']):
+            raise ValueError('COTIZACION_TECNICA_REQUIERE_ESTUDIO_FAVORABLE')
         return case
     if titular is None:
         from .consentimiento_real import obtener
@@ -557,71 +559,65 @@ def operacion_titular(identity,payload,rid,*,cliente=None):
         return _operacion_titular(identity,payload,rid,cliente=cliente)
 
 
-def _operacion_titular(identity,payload,rid,*,cliente=None):
+def _operacion_titular(identity, payload, rid, *, cliente=None):
     """Called only by the authenticated owner delegation, never with staff identity."""
-    if type(payload) is not dict or payload.get('operacion') not in {'consultar','cotizar','aceptar'}:
+    from django.conf import settings
+    if type(payload) is dict and getattr(settings, 'CREDIHOY_COTIZACION_MOTOR', '') == 'PROPIO_390_111_CFA':
+        return _operacion_simulacion_propia(identity, payload, rid)
+    if type(payload) is not dict or payload.get('operacion') not in {'consultar', 'cotizar', 'aceptar'}:
         raise ValueError('PETICION_COTIZACION_INVALIDA')
-    expected={'solicitudId','operacion'}
-    if payload['operacion']=='aceptar':expected|={'ofertaSha256','acepta'}
-    if payload['operacion']=='cotizar' and 'diaPago' in payload:expected.add('diaPago')
-    if set(payload)!=expected:raise ValueError('PETICION_COTIZACION_INVALIDA')
-    sid=str(UUID(payload['solicitudId']));rid=str(UUID(rid))
-    s=_obtener(sid,None,titular=identity)
-    if payload['operacion']=='cotizar' and 'diaPago' in payload:
-        _guardar_dia_titular(s,identity,payload['diaPago'],rid)
-    if payload['operacion']=='cotizar':cotizacion(sid,None,rid,ejecutar=True,cliente=cliente,titular=identity)
+    expected = {'solicitudId', 'operacion'}
+    if payload['operacion'] == 'aceptar':
+        expected |= {'ofertaSha256', 'acepta'}
+    if payload['operacion'] == 'cotizar' and 'diaPago' in payload:
+        expected.add('diaPago')
+    if set(payload) != expected:
+        raise ValueError('PETICION_COTIZACION_INVALIDA')
+    sid = str(UUID(payload['solicitudId']))
+    rid = str(UUID(rid))
+    s = _obtener(sid, None, titular=identity)
+    if payload['operacion'] == 'cotizar' and 'diaPago' in payload:
+        _guardar_dia_titular(s, identity, payload['diaPago'], rid)
+    if payload['operacion'] == 'cotizar':
+        cotizacion(sid, None, rid, ejecutar=True, cliente=cliente, titular=identity)
     with transaction.atomic(using=alias_cotizacion()):
-        s=_obtener(sid,None,lock=True,titular=identity)
-        detail,context=_contexto(s)
-        q=_resultado_guardado(detail,context,rid,ejecutar=False)
+        s = _obtener(sid, None, lock=True, titular=identity)
+        detail, context = _contexto(s)
+        q = _resultado_guardado(detail, context, rid, ejecutar=False)
         if q['disponible']:
             from ..cotizacion_cliente import validar_respuesta
-            validar_respuesta(q,context,rid)
-        try:offer=leer_oferta_linix(s)
-        except ValueError:offer=None
-        accepted=None
+            validar_respuesta(q, context, rid)
+        try:
+            offer = leer_oferta_linix(s)
+        except ValueError:
+            offer = None
+        accepted = None
         if offer:
-            data=SolicitudConsumo.objects.select_for_update().get(solicitud=s)
-            acceptance=leer_aceptacion_oferta(s)
-            if acceptance:accepted=acceptance
-            if payload['operacion']=='aceptar':
-                if payload['acepta'] is not True or payload['ofertaSha256']!=offer['sha256']:
+            data = SolicitudConsumo.objects.select_for_update().get(solicitud=s)
+            acceptance = leer_aceptacion_oferta(s)
+            if acceptance:
+                accepted = acceptance
+            if payload['operacion'] == 'aceptar':
+                if payload['acepta'] is not True or payload['ofertaSha256'] != offer['sha256']:
                     raise ValueError('ACEPTACION_DE_OTRA_OFERTA')
-                # Scalar alone is not a complete contractual offer. No invented
-                # first payment date or borrowed acceptance from a former session.
-                if (not offer.get('evaluacionSha256') or not offer.get('calendarioPago') or any(offer['condicionesAdicionales'][k] is None
-                        for k in ('tasaEaPorcentaje','primeraFechaPago'))):raise ValueError('CONDICIONES_CONTRACTUALES_PENDIENTES')
+                if not offer.get('evaluacionSha256') or not offer.get('calendarioPago') or any((offer['condicionesAdicionales'][k] is None for k in ('tasaEaPorcentaje', 'primeraFechaPago'))):
+                    raise ValueError('CONDICIONES_CONTRACTUALES_PENDIENTES')
                 from .funcional import leer_estado_funcional
                 from apps.xcore_consumo.models import EvaluacionConsumo
-                if (not EvaluacionConsumo.objects.filter(solicitud=s).exists()
-                        or leer_estado_funcional(s)['resultado'] is None):raise ValueError('EVALUACION_VIGENTE_REQUERIDA')
+                if not EvaluacionConsumo.objects.filter(solicitud=s).exists() or leer_estado_funcional(s)['resultado'] is None:
+                    raise ValueError('EVALUACION_VIGENTE_REQUERIDA')
                 if accepted is None:
-                    accepted={'ofertaSha256':offer['sha256'],'versionCondiciones':offer['versionCondiciones'],
-                        'evaluacionSha256':offer['evaluacionSha256'],'sesionReferencia':identity['_sesionReferencia'],
-                        'titularReferencia':offer['titularReferencia'],'fecha':timezone.now().isoformat(),
-                        'requestId':rid,'acepta':True,'autorizaStart':False,'autorizaDesembolso':False}
-                    accepted['sha256']=hashlib.sha256(json.dumps(accepted,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-                    history=dict(data.orchestration_data.get('credihoy_aceptaciones_oferta_v1',{}));history[offer['sha256']]=accepted
-                    data.orchestration_data={**data.orchestration_data,'credihoy_aceptaciones_oferta_v1':history}
-                    data.save(update_fields=['orchestration_data','updated_at'])
-                    AuditLog.objects.create(solicitud=s,event='CREDIHOY_OFERTA_ACEPTADA_TITULAR',
-                        actor=_actor(None,identity),request_id=rid,payload={'ofertaSha256':offer['sha256'],
-                            'evaluacionSha256':offer['evaluacionSha256'],'autorizaStart':False})
-        elif payload['operacion']=='aceptar':raise ValueError('OFERTA_NO_DISPONIBLE')
-        conditions=offer['condiciones'] if offer else {}
-        return {'versionContrato':'credihoy-cotizacion-titular-v1','solicitudId':sid,
-            'estado':'NO_DISPONIBLE' if q['estado'] in {'DISPONIBLE_HOMOLOGACION','EVIDENCIA_INSTITUCIONAL_MANUAL'} else q['estado'],
-            'cuota':offer['cuotaContractual'] if offer else None,
-            'oferta':({'sha256':offer['sha256'],'monto':conditions['monto'],'plazoMeses':conditions['numeroCuotas'],
-                'periodicidad':conditions['periodicidad'],'tasaNominalNamv':conditions['tasaNominalNamv'],
-                'tasaEA':offer['condicionesAdicionales']['tasaEaPorcentaje']['valor'] if offer['condicionesAdicionales']['tasaEaPorcentaje'] else None,
-                'primerVencimiento':offer['condicionesAdicionales']['primeraFechaPago']['valor'] if offer['condicionesAdicionales']['primeraFechaPago'] else None,
-                'vigenteHasta':offer['hasta'],'condicionesCompletas':bool(offer.get('calendarioPago')) and all(offer['condicionesAdicionales'][k] is not None
-                    for k in ('tasaEaPorcentaje','primeraFechaPago')),
-                'calendarioPago':proyectar_calendario_oferta(offer),
-                'seguroIncluidoPorMotor':True} if offer else None),
-            'aceptacion':{'aceptada':accepted is not None,'fecha':accepted['fecha'] if accepted else None},
-            'autorizaStart':False,'autorizaDesembolso':False}
+                    accepted = {'ofertaSha256': offer['sha256'], 'versionCondiciones': offer['versionCondiciones'], 'evaluacionSha256': offer['evaluacionSha256'], 'sesionReferencia': identity['_sesionReferencia'], 'titularReferencia': offer['titularReferencia'], 'fecha': timezone.now().isoformat(), 'requestId': rid, 'acepta': True, 'autorizaStart': False, 'autorizaDesembolso': False}
+                    accepted['sha256'] = hashlib.sha256(json.dumps(accepted, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+                    history = dict(data.orchestration_data.get('credihoy_aceptaciones_oferta_v1', {}))
+                    history[offer['sha256']] = accepted
+                    data.orchestration_data = {**data.orchestration_data, 'credihoy_aceptaciones_oferta_v1': history}
+                    data.save(update_fields=['orchestration_data', 'updated_at'])
+                    AuditLog.objects.create(solicitud=s, event='CREDIHOY_OFERTA_ACEPTADA_TITULAR', actor=_actor(None, identity), request_id=rid, payload={'ofertaSha256': offer['sha256'], 'evaluacionSha256': offer['evaluacionSha256'], 'autorizaStart': False})
+        elif payload['operacion'] == 'aceptar':
+            raise ValueError('OFERTA_NO_DISPONIBLE')
+        conditions = offer['condiciones'] if offer else {}
+        return {'versionContrato': 'credihoy-cotizacion-titular-v1', 'solicitudId': sid, 'estado': 'NO_DISPONIBLE' if q['estado'] in {'DISPONIBLE_HOMOLOGACION', 'EVIDENCIA_INSTITUCIONAL_MANUAL'} else q['estado'], 'cuota': offer['cuotaContractual'] if offer else None, 'oferta': {'sha256': offer['sha256'], 'monto': conditions['monto'], 'plazoMeses': conditions['numeroCuotas'], 'periodicidad': conditions['periodicidad'], 'tasaNominalNamv': conditions['tasaNominalNamv'], 'tasaEA': offer['condicionesAdicionales']['tasaEaPorcentaje']['valor'] if offer['condicionesAdicionales']['tasaEaPorcentaje'] else None, 'primerVencimiento': offer['condicionesAdicionales']['primeraFechaPago']['valor'] if offer['condicionesAdicionales']['primeraFechaPago'] else None, 'vigenteHasta': offer['hasta'], 'condicionesCompletas': bool(offer.get('calendarioPago')) and all((offer['condicionesAdicionales'][k] is not None for k in ('tasaEaPorcentaje', 'primeraFechaPago'))), 'calendarioPago': proyectar_calendario_oferta(offer), 'seguroIncluidoPorMotor': True} if offer else None, 'aceptacion': {'aceptada': accepted is not None, 'fecha': accepted['fecha'] if accepted else None}, 'autorizaStart': False, 'autorizaDesembolso': False}
 
 
 def proyectar_calendario_oferta(offer):
@@ -1075,3 +1071,117 @@ def preparar_radicacion_tecnica(solicitud_id, operador, *, cliente=None, ejecuta
             response.close()
     quote = cotizacion(s.pk, operador, key, ejecutar=True, cliente=cliente, autogestion_tecnica=True) if ejecutar_cuota else stored
     return {'versionContrato': 'credihoy-preparacion-radicacion-tecnica-v1', 'solicitudId': str(s.pk), 'revisionReferencia': revision, 'seleccionId': selected['seleccionId'], 'requestIdCuota': key, 'estadoCuota': quote['estado'], 'cuotaDisponible': quote.get('disponible') is True, 'fuenteCuota': quote.get('fuente'), 'versionCondiciones': quote.get('versionCondiciones'), 'soloVerificacionTransporte': not ejecutar_cuota, 'transporteVerificadoEnEstaEjecucion': transport_verified, 'ofertaGenerada': False, 'aceptacionInferida': False, 'intencionCreada': False, 'autorizaStart': False, 'autorizaFirma': False, 'autorizaDesembolso': False}
+
+
+def _huella_simulacion(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+
+
+def calcular_simulacion_propia(solicitud_id, operador, *, vigencia_segundos=3600):
+    """Persist the existing calculator's result, without a provider or financial operation."""
+    from datetime import timedelta
+    from decimal import Decimal
+    from .condiciones_producto import parametros_financieros
+    from .funcional import leer_estado_funcional
+    from ...calculadora import calcular_plan_credihoy
+    from .publico_institucional import validar_simulacion_propia
+    if type(vigencia_segundos) is not int or not 60 <= vigencia_segundos <= 86400:
+        raise ValueError('SIMULACION_VIGENCIA_INVALIDA')
+    with transaction.atomic(using=alias_cotizacion()):
+        s = _obtener(solicitud_id, operador, autogestion_tecnica=True, lock=True)
+        detail, context = _contexto(s)
+        revision = leer_estado_funcional(s)['revisionEstudio']
+        c = context['condiciones']
+        policy = parametros_financieros()
+        plan = calcular_plan_credihoy(Decimal(c['monto']), c['numeroCuotas'], Decimal(c['tasaNominalNamv']), perfil=(c['producto'], c['modalidad'], c['destinacion']), periodicidad_meses=1, seguro_mensual_porcentaje=Decimal(policy['seguroVidaPorcentajeMensual']), base_seguro='SALDO_INICIAL_PERIODO', factor_adicional=Decimal('0'), unidad_redondeo=Decimal('1'))
+        now = timezone.now()
+        body = {'version': 'credihoy-simulacion-aceptable-v1', 'solicitudId': str(s.pk), 'revisionReferencia': revision['versionReferencia'], 'versionCondiciones': context['versionCondiciones'], 'calculadoEn': now.isoformat(), 'vigenteHasta': (now + timedelta(seconds=vigencia_segundos)).isoformat(), 'fuente': 'CREDIHOY_CALCULO_PROPIO', 'monto': c['monto'], 'plazoMeses': c['numeroCuotas'], 'tasaNominalNamv': c['tasaNominalNamv'], 'periodicidad': 'MENSUAL', 'cuota': plan['cuotaCalculada'], 'seguroMensualPorcentaje': policy['seguroVidaPorcentajeMensual'], 'baseSeguro': plan['baseSeguro'], 'unidadRedondeo': plan['unidadRedondeo'], 'versionMotor': plan['version'], 'versionParametros': policy['version'], 'planAproximado': True, 'amortizacion': [{k: r[k] for k in ('periodo', 'saldoInicial', 'capital', 'intereses', 'seguro', 'otros', 'cuota', 'saldoFinal')} for r in plan['amortizacion']], 'totales': plan['totales'], 'autorizaStart': False, 'firmaContractual': False, 'aprobacionInstitucional': False}
+        body['sha256'] = _huella_simulacion(body)
+        validar_simulacion_propia(body, str(s.pk))
+        data = detail.orchestration_data
+        prior = data.get(KEY, {})
+        if prior and prior.get('motor') != 'PROPIO_390_111_CFA':
+            raise ValueError('COTIZACION_PREVIA_REQUIERE_CONCILIACION')
+        previous = prior.get('simulacion')
+        if previous and previous['versionCondiciones'] == context['versionCondiciones'] and (previous['revisionReferencia'] == revision['versionReferencia']):
+            try:
+                return validar_simulacion_propia(previous, str(s.pk))
+            except ValueError:
+                raise ValueError('SIMULACION_PREVIA_VENCIDA_O_ALTERADA_CONCILIAR') from None
+        history = dict(prior.get('calculosPropios', {}))
+        history[body['sha256']] = body
+        entry = {**prior, 'motor': 'PROPIO_390_111_CFA', 'versionCondiciones': context['versionCondiciones'], 'titularReferencia': hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest(), 'simulacion': body, 'calculosPropios': history}
+        detail.orchestration_data = {**data, KEY: entry}
+        detail.save(update_fields=['orchestration_data', 'updated_at'])
+        AuditLog.objects.create(solicitud=s, event='CREDIHOY_SIMULACION_PROPIA_CALCULADA', actor=str(operador.pk), request_id=str(uuid4()), payload={'simulacionSha256': body['sha256'], 'versionCondiciones': context['versionCondiciones'], 'revisionReferencia': revision['versionReferencia'], 'autorizaStart': False, 'autorizaDesembolso': False})
+        return body
+
+
+def _operacion_simulacion_propia(identity, payload, rid):
+    """Personal simulation acceptance is not a contractual signature or Council decision."""
+    from .autoservicio import _estudio_publico_personal
+    from .publico_institucional import validar_simulacion_propia
+    op = payload.get('operacion')
+    expected = {'solicitudId', 'operacion'}
+    if op == 'aceptar_simulacion':
+        expected |= {'simulacionSha256', 'acepta'}
+    if set(payload) != expected or op not in {'consultar', 'aceptar_simulacion'}:
+        raise ValueError('PETICION_SIMULACION_INVALIDA')
+    sid = str(UUID(payload['solicitudId']))
+    rid = str(UUID(rid))
+    s = _obtener(sid, None, titular=identity)
+    study = _estudio_publico_personal(s, identity)
+    if not study or not study.get('decisionPolitica', {}).get('continuidad', {}).get('estudioFavorable'):
+        raise ValueError('ESTUDIO_FAVORABLE_REQUERIDO')
+    with transaction.atomic(using=alias_cotizacion()):
+        s = _obtener(sid, None, titular=identity)
+        detail, context = _contexto(s)
+        entry = detail.orchestration_data.get(KEY, {})
+        sim = validar_simulacion_propia(entry.get('simulacion'), sid)
+        holder = hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()
+        if entry.get('motor') != 'PROPIO_390_111_CFA' or entry.get('titularReferencia') != holder or sim['versionCondiciones'] != context['versionCondiciones'] or (sim['revisionReferencia'] != study['referenciaVersion']):
+            raise ValueError('SIMULACION_DESACTUALIZADA_O_DE_OTRO_TITULAR')
+        history = dict(entry.get('aceptacionesSimulacion', {}))
+        accepted = history.get(sim['sha256'])
+        if accepted is not None:
+            _validar_aceptacion_simulacion(sim, accepted, holder)
+        if op == 'aceptar_simulacion':
+            if payload['acepta'] is not True or payload['simulacionSha256'] != sim['sha256']:
+                raise ValueError('ACEPTACION_DE_OTRA_SIMULACION')
+            if accepted is None:
+                accepted = {'solicitudId': sid, 'simulacionSha256': sim['sha256'], 'versionCondiciones': sim['versionCondiciones'], 'revisionReferencia': sim['revisionReferencia'], 'titularReferencia': holder, 'sesionReferencia': identity['_sesionReferencia'], 'fecha': timezone.now().isoformat(), 'requestId': rid, 'acepta': True, 'textoVersion': 'credihoy-aceptacion-simulacion-v1', 'firmaContractual': False, 'autorizaStart': False, 'autorizaDesembolso': False}
+                accepted['sha256'] = _huella_simulacion(accepted)
+                history[sim['sha256']] = accepted
+                detail.orchestration_data = {**detail.orchestration_data, KEY: {**entry, 'aceptacionesSimulacion': history}}
+                detail.save(update_fields=['orchestration_data', 'updated_at'])
+                AuditLog.objects.create(solicitud=s, event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR', actor=_actor(None, identity), request_id=rid, payload={'simulacionSha256': sim['sha256'], 'aceptacionSha256': accepted['sha256'], 'autorizaStart': False, 'autorizaDesembolso': False})
+        return {'versionContrato': 'credihoy-cotizacion-titular-v1', 'solicitudId': sid, 'estado': 'SIMULACION_PROPIA', 'cuota': None, 'oferta': None, 'aceptacion': {'aceptada': False, 'fecha': None}, 'simulacion': sim, 'aceptacionSimulacion': {'aceptada': accepted is not None, 'fecha': accepted['fecha'] if accepted else None}, 'autorizaStart': False, 'autorizaDesembolso': False}
+
+
+def _validar_aceptacion_simulacion(sim, receipt, holder):
+    try:
+        body = {k: v for k, v in receipt.items() if k != 'sha256'}
+        when = datetime.fromisoformat(receipt['fecha'])
+        if set(receipt) != {'solicitudId', 'simulacionSha256', 'versionCondiciones', 'revisionReferencia', 'titularReferencia', 'sesionReferencia', 'fecha', 'requestId', 'acepta', 'textoVersion', 'firmaContractual', 'autorizaStart', 'autorizaDesembolso', 'sha256'} or _huella_simulacion(body) != receipt['sha256'] or receipt['solicitudId'] != sim['solicitudId'] or (receipt['simulacionSha256'] != sim['sha256']) or (receipt['versionCondiciones'] != sim['versionCondiciones']) or (receipt['revisionReferencia'] != sim['revisionReferencia']) or (receipt['titularReferencia'] != holder) or (receipt['acepta'] is not True) or (receipt['textoVersion'] != 'credihoy-aceptacion-simulacion-v1') or any((receipt[k] is not False for k in ('firmaContractual', 'autorizaStart', 'autorizaDesembolso'))) or (str(UUID(receipt['sesionReferencia'])) != receipt['sesionReferencia']) or (str(UUID(receipt['requestId'])) != receipt['requestId']) or (when.utcoffset() is None) or (not datetime.fromisoformat(sim['calculadoEn']) <= when <= timezone.now()):
+            raise ValueError()
+    except (TypeError, ValueError, KeyError, AttributeError):
+        raise ValueError('ACEPTACION_SIMULACION_NO_INTEGRA') from None
+    return receipt
+
+
+def aplicar_simulacion_aceptada_a_contexto(contexto, s):
+    """Feed the existing special-intake gate, without manufacturing a contractual offer."""
+    from dataclasses import replace
+    from .publico_institucional import validar_simulacion_propia
+    from .funcional import leer_estado_funcional
+    detail, context = _contexto(s, lock=False)
+    entry = detail.orchestration_data.get(KEY, {})
+    sim = validar_simulacion_propia(entry.get('simulacion'), str(s.pk))
+    holder = hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest()
+    if contexto.solicitud_id != str(s.pk) or contexto.titular_referencia != holder or entry.get('titularReferencia') != holder or (sim['versionCondiciones'] != context['versionCondiciones']) or (sim['revisionReferencia'] != leer_estado_funcional(s)['revisionEstudio']['versionReferencia']):
+        raise ValueError('CONTEXTO_NO_CORRESPONDE_A_SIMULACION')
+    accepted = entry.get('aceptacionesSimulacion', {}).get(sim['sha256'])
+    if accepted is None:
+        raise ValueError('ACEPTACION_PERSONAL_SIMULACION_REQUERIDA')
+    _validar_aceptacion_simulacion(sim, accepted, holder)
+    return replace(contexto, cuota_contractual=sim['cuota'])

@@ -254,7 +254,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
           </div>
         </div>}
         {s&&vista==='simulador'&&<>
-          {simuladorLocalHabilitado&&simular&&s.procedencia?.origen==='FUENTE_OPERATIVA'&&
+          {simuladorLocalHabilitado&&simular&&(!cotizacionHabilitada||!cotizar)&&s.procedencia?.origen==='FUENTE_OPERATIVA'&&
             <SimuladorLocal key={s.referencia} sid={s.referencia} montoInicial={s.monto} plazoInicial={s.plazoMeses}
               operar={simular} continuar={()=>setVista('evaluacion')}/>}
           {cotizacionHabilitada&&cotizar&&s.procedencia?.origen==='FUENTE_OPERATIVA'&&
@@ -627,22 +627,41 @@ export function OfertaTitular({sid,operar,horaServidor=Date.now}:{sid:string;ope
   const guard=useRef(false),alive=useRef(true);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
   useEffect(()=>{const timer=setInterval(()=>setNow(horaServidor()),1000);return()=>clearInterval(timer);},[horaServidor]);
-  const offer=data?.oferta,vencida=Boolean(offer&&Date.parse(offer.vigenteHasta)<=now);
-  async function run(op:'consultar'|'cotizar'|'aceptar'){
+  const offer=data?.oferta,sim=data?.simulacion,vencida=Boolean((offer||sim)&&Date.parse((offer||sim)!.vigenteHasta)<=now);
+  useEffect(()=>{void run('consultar');},[sid]);
+  async function run(op:'consultar'|'cotizar'|'aceptar'|'aceptar_simulacion'){
     if(guard.current)return;guard.current=true;setBusy(true);setError('');
-    try{const p=await operar(sid,op,offer?.sha256,op==='cotizar'?Number(diaPago):undefined);
+    try{const p=await operar(sid,op,op==='aceptar_simulacion'?sim?.sha256:offer?.sha256,op==='cotizar'?Number(diaPago):undefined);
       if(alive.current){setData(p);setAcepta(false);if(p.oferta?.calendarioPago)setDiaPago(String(p.oferta.calendarioPago.diaPago));}}
     catch{if(alive.current){setData(null);setAcepta(false);setError('No pudimos confirmar esta operacion. Consulta el estado antes de repetir.');}}
     finally{guard.current=false;if(alive.current)setBusy(false);}
   }
   return <section aria-label="Cotizacion y oferta institucional" aria-busy={busy}>
     {error&&<Aviso tono="warning" titulo="Operacion sin confirmar">{error}</Aviso>}
-    <label className="ch-field">Dia mensual de pago<select className="form-select" value={diaPago} disabled={busy}
+    {sim&&<><h3>Cuota y condiciones de tu solicitud</h3><dl className="ca-metrics">
+      <div><dt>Monto</dt><dd>{moneda(sim.monto)}</dd></div><div><dt>Cuota calculada</dt><dd>{moneda(sim.cuota)}</dd></div>
+      <div><dt>Plazo</dt><dd>{sim.plazoMeses} meses</dd></div><div><dt>Tasa NAMV</dt><dd>{sim.tasaNominalNamv} %</dd></div>
+      <div><dt>Periodicidad</dt><dd>Mensual</dd></div><div><dt>Seguro mensual sobre saldo</dt><dd>{sim.seguroMensualPorcentaje} %</dd></div></dl>
+      <p>Este plan de pagos es aproximado. Una vez desembolsado tu crédito, recibirás por correo electrónico el plan de pagos definitivo generado al momento de tu desembolso.</p>
+      <div style={{overflowX:'auto'}} tabIndex={0} aria-label="Plan de pagos aproximado"><table className="table"><thead><tr>
+        <th scope="col">Cuota</th><th scope="col">Capital</th><th scope="col">Intereses</th><th scope="col">Seguro</th><th scope="col">Total</th><th scope="col">Saldo</th>
+      </tr></thead><tbody>{sim.amortizacion.map(r=><tr key={r.periodo}><th scope="row">{r.periodo}</th><td>{moneda(r.capital)}</td>
+        <td>{moneda(r.intereses)}</td><td>{moneda(r.seguro)}</td><td>{moneda(r.cuota)}</td><td>{moneda(r.saldoFinal)}</td></tr>)}</tbody></table></div>
+      {data?.aceptacionSimulacion?.aceptada?<Aviso tono="success" titulo="Simulación aceptada">
+        Tu aceptación quedó registrada. La preparación de radicación conserva sus requisitos; la firma contractual y la decisión institucional están pendientes.
+      </Aviso>:<><label><input type="checkbox" checked={acepta} disabled={busy||vencida} onChange={e=>setAcepta(e.target.checked)}/>
+        {' '}He revisado y acepto la cuota y las condiciones de la simulación presentada.</label>
+        <button className="btn btn-brand" type="button" disabled={busy||vencida||!acepta} onClick={()=>void run('aceptar_simulacion')}>
+          <CheckCircle2 size={17} aria-hidden="true"/> Aceptar cuota y continuar</button></>}
+      {vencida&&<p role="status">Las condiciones vencieron. Consulta el estado actualizado antes de aceptar.</p>}
+    </>}
+    {!sim&&data&&<><label className="ch-field">Dia mensual de pago<select className="form-select" value={diaPago} disabled={busy}
       onChange={e=>{setDiaPago(e.target.value);setData(null);setAcepta(false);}}>
       <option value="">Seleccionar</option>{Array.from({length:20},(_,i)=><option key={i+1} value={i+1}>{i+1}</option>)}
     </select></label>
     <button className="btn btn-outline-primary" type="button" disabled={busy} onClick={()=>void run('consultar')}><RefreshCw size={17} aria-hidden="true"/> Consultar oferta</button>
-    <button className="btn btn-brand" type="button" disabled={busy||Boolean(error)||!diaPago} onClick={()=>void run('cotizar')}><Calculator size={17} aria-hidden="true"/> Cotizar condiciones guardadas</button>
+    <button className="btn btn-brand" type="button" disabled={busy||Boolean(error)||!diaPago} onClick={()=>void run('cotizar')}><Calculator size={17} aria-hidden="true"/> Cotizar condiciones guardadas</button></>}
+    {sim&&<button className="btn btn-outline-primary" type="button" disabled={busy} onClick={()=>void run('consultar')}><RefreshCw size={17} aria-hidden="true"/> Consultar condiciones</button>}
     {offer&&<><dl className="ca-metrics"><div><dt>Monto</dt><dd>{moneda(offer.monto)}</dd></div>
       <div><dt>Cuota institucional</dt><dd>{data?.cuota?moneda(data.cuota):'No disponible'}</dd></div><div><dt>Plazo</dt><dd>{offer.plazoMeses} meses</dd></div>
       <div><dt>Tasa NAMV</dt><dd>{offer.tasaNominalNamv} %</dd></div><div><dt>Tasa EA</dt><dd>{offer.tasaEA??'Por confirmar'}</dd></div>

@@ -2,6 +2,8 @@
 
 No activa rutas en procesos ya desplegados. Requiere custodia y rol lector propios.
 """
+
+
 import ipaddress
 import json
 import os
@@ -65,144 +67,102 @@ def configurar_otp_contractual(environ, databases, *, session_key, delegation_ke
 def configurar_propietario(config):
     """Valida referencias tecnicas; no crea usuarios, bases, endpoints o expedientes."""
     try:
-        fields = {'host', 'redes', 'proxies', 'documentosHmac', 'solicitudes', 'fuenteReferencia',
-            'fuente', 'nonce', 'secretFile', 'delegacionFile', 'vigenteHasta'}
+        fields = {'host', 'redes', 'proxies', 'documentosHmac', 'solicitudes', 'fuenteReferencia', 'fuente', 'nonce', 'secretFile', 'delegacionFile', 'vigenteHasta'}
         enabled = config.get('fuenteHabilitada', True) if type(config) is dict else None
-        optional={'fuenteHabilitada','autoservicioHabilitado','autoservicioAlcance','borradores','promotoresCatalogo','historico','progresoTemporal','cotizacion','autorizacionHabilitada','autorizacionSolicitudes','autorizacionCifradoFile','centralesOtpHabilitado'}
+        optional = {'fuenteHabilitada', 'autoservicioHabilitado', 'autoservicioAlcance', 'borradores', 'promotoresCatalogo', 'historico', 'progresoTemporal', 'cotizacion', 'autorizacionHabilitada', 'autorizacionSolicitudes', 'autorizacionCifradoFile', 'centralesOtpHabilitado'}
         optional.update({'admisionEnsayo', 'disponibilidad'})
         availability = config.get('disponibilidad', 'PILOT_WINDOW')
-        if (availability not in ('PILOT_WINDOW', 'PERMANENT_PRIVATE_V1')
-                or availability != os.environ.get('CREDIHOY_PERFIL_DISPONIBILIDAD', 'PILOT_WINDOW')
-                or availability == 'PERMANENT_PRIVATE_V1' and config.get('admisionEnsayo')):
+        if availability not in ('PILOT_WINDOW', 'PERMANENT_PRIVATE_V1') or availability != os.environ.get('CREDIHOY_PERFIL_DISPONIBILIDAD', 'PILOT_WINDOW') or (availability == 'PERMANENT_PRIVATE_V1' and config.get('admisionEnsayo')):
             raise ValueError
-        if (type(config) is not dict or not fields<=set(config) or set(config)-fields-optional
-                or type(enabled) is not bool
-                or type(config['fuenteReferencia']) is not str or not config['fuenteReferencia'].strip()
-                or not re.fullmatch(r'[A-Za-z0-9.-]+', config['host'])
-                or not 1 <= len(config['documentosHmac']) <= 2
-                or not all(re.fullmatch(r'[a-f0-9]{64}', v) for v in config['documentosHmac'])
-                or type(config['solicitudes']) is not list
-                or (not 1 <= len(config['solicitudes']) <= 2 if enabled and 'historico' not in config
-                    else config['solicitudes'] != [])
-                or len(set(config['solicitudes'])) != len(config['solicitudes'])
-                or not all(str(UUID(v)) == v for v in config['solicitudes'])):
+        if type(config) is not dict or not fields <= set(config) or set(config) - fields - optional or (type(enabled) is not bool) or (type(config['fuenteReferencia']) is not str) or (not config['fuenteReferencia'].strip()) or (not re.fullmatch('[A-Za-z0-9.-]+', config['host'])) or (not 1 <= len(config['documentosHmac']) <= 2) or (not all((re.fullmatch('[a-f0-9]{64}', v) for v in config['documentosHmac']))) or (type(config['solicitudes']) is not list) or (not 1 <= len(config['solicitudes']) <= 2 if enabled and 'historico' not in config else config['solicitudes'] != []) or (len(set(config['solicitudes'])) != len(config['solicitudes'])) or (not all((str(UUID(v)) == v for v in config['solicitudes']))):
             raise ValueError
         until = parse_datetime(config['vigenteHasta'])
-        # Expired access stays denied by middleware; offline cleanup must still boot.
-        if (config['vigenteHasta'] != '' if availability == 'PERMANENT_PRIVATE_V1'
-                else not until or not timezone.is_aware(until)):
+        if config['vigenteHasta'] != '' if availability == 'PERMANENT_PRIVATE_V1' else not until or not timezone.is_aware(until):
             raise ValueError
         for key in ('redes', 'proxies'):
-            if not config[key] or not all(ipaddress.ip_network(v, strict=True).prefixlen == 32 for v in config[key]):
+            if not config[key] or not all((ipaddress.ip_network(v, strict=True).prefixlen == 32 for v in config[key])):
                 raise ValueError
         databases = {}
         for key, alias in (('fuente', 'default'), ('nonce', 'nonce')):
             db = config[key]
-            if (set(db) != {'host', 'puerto', 'nombre', 'usuario', 'passwordFile'}
-                    or type(db['puerto']) is not int or not 1 <= db['puerto'] <= 65535
-                    or not all(type(db[k]) is str and db[k].strip() for k in ('host','nombre','usuario'))):
+            if set(db) != {'host', 'puerto', 'nombre', 'usuario', 'passwordFile'} or type(db['puerto']) is not int or (not 1 <= db['puerto'] <= 65535) or (not all((type(db[k]) is str and db[k].strip() for k in ('host', 'nombre', 'usuario')))):
                 raise ValueError
             if key == 'fuente':
                 if db['usuario'] != 'credihoy_titular_lector' or db['nombre'] != 'credito_digital':
                     raise ValueError
             elif db['usuario'] != 'credihoy_9a_nonce' or db['nombre'] != 'credihoy_9a':
                 raise ValueError
-            databases[alias] = {'ENGINE': 'django.db.backends.postgresql', 'HOST': db['host'],
-                'PORT': db['puerto'], 'NAME': db['nombre'], 'USER': db['usuario'],
-                'PASSWORD': privado(db['passwordFile']), 'CONN_MAX_AGE': 0,
-                'OPTIONS': {'connect_timeout': 5, **({'options': '-c default_transaction_read_only=on'}
-                    if key == 'fuente' else {})}}
-        writing=config.get('autoservicioHabilitado',False)
-        if type(writing) is not bool or (writing and 'borradores' not in config):raise ValueError
-        progress=config.get('progresoTemporal')
-        if 'progresoTemporal' in config and progress is None:raise ValueError
-        if writing and progress is None:raise ValueError
+            databases[alias] = {'ENGINE': 'django.db.backends.postgresql', 'HOST': db['host'], 'PORT': db['puerto'], 'NAME': db['nombre'], 'USER': db['usuario'], 'PASSWORD': privado(db['passwordFile']), 'CONN_MAX_AGE': 0, 'OPTIONS': {'connect_timeout': 5, **({'options': '-c default_transaction_read_only=on'} if key == 'fuente' else {})}}
+        writing = config.get('autoservicioHabilitado', False)
+        if type(writing) is not bool or (writing and 'borradores' not in config):
+            raise ValueError
+        progress = config.get('progresoTemporal')
+        if 'progresoTemporal' in config and progress is None:
+            raise ValueError
+        if writing and progress is None:
+            raise ValueError
         if progress is not None:
             import base64
             from apps.xcore_consumo.services.credihoy_v2.unico import progreso_privacidad as notice
-            if (type(progress) is not dict or set(progress)!={'claveCifradoFile','validacion'}
-                    or progress['claveCifradoFile'] in {config['secretFile'],config['delegacionFile'],
-                        config['fuente']['passwordFile'],config['nonce']['passwordFile']}):raise ValueError
-            if len(base64.b64decode(privado(progress['claveCifradoFile']),validate=True))!=32:raise ValueError
-            v=progress['validacion']
-            if (type(v) is not dict or v.get('version')!=notice.VERSION or v.get('sha256')!=notice.SHA256
-                    or not v.get('consistenciaPoliticaReferencia') or not v.get('respaldoCustodiaReferencia')
-                    or type(v.get('limpiezaMaxSegundos')) is not int or not 1<=v['limpiezaMaxSegundos']<=60):raise ValueError
-        # Provision and validate the dedicated alias before exposing write actions.
+            if type(progress) is not dict or set(progress) != {'claveCifradoFile', 'validacion'} or progress['claveCifradoFile'] in {config['secretFile'], config['delegacionFile'], config['fuente']['passwordFile'], config['nonce']['passwordFile']}:
+                raise ValueError
+            if len(base64.b64decode(privado(progress['claveCifradoFile']), validate=True)) != 32:
+                raise ValueError
+            v = progress['validacion']
+            if type(v) is not dict or v.get('version') != notice.VERSION or v.get('sha256') != notice.SHA256 or (not v.get('consistenciaPoliticaReferencia')) or (not v.get('respaldoCustodiaReferencia')) or (type(v.get('limpiezaMaxSegundos')) is not int) or (not 1 <= v['limpiezaMaxSegundos'] <= 60):
+                raise ValueError
         if 'borradores' in config:
-            db=config['borradores'];source=config['fuente']
-            if (set(db)!=set(source) or db['usuario']!='credihoy_titular_borrador'
-                    or source['nombre']!='credito_digital'
-                    or any(db[k]!=source[k] for k in ('host','puerto','nombre'))
-                    or db['passwordFile'] in {source['passwordFile'],config['nonce']['passwordFile']}):raise ValueError
-            databases['borradores']={'ENGINE':'django.db.backends.postgresql','HOST':db['host'],
-                'PORT':db['puerto'],'NAME':db['nombre'],'USER':db['usuario'],'PASSWORD':privado(db['passwordFile']),
-                'CONN_MAX_AGE':0,'OPTIONS':{'connect_timeout':5}}
+            db = config['borradores']
+            source = config['fuente']
+            if set(db) != set(source) or db['usuario'] != 'credihoy_titular_borrador' or source['nombre'] != 'credito_digital' or any((db[k] != source[k] for k in ('host', 'puerto', 'nombre'))) or (db['passwordFile'] in {source['passwordFile'], config['nonce']['passwordFile']}):
+                raise ValueError
+            databases['borradores'] = {'ENGINE': 'django.db.backends.postgresql', 'HOST': db['host'], 'PORT': db['puerto'], 'NAME': db['nombre'], 'USER': db['usuario'], 'PASSWORD': privado(db['passwordFile']), 'CONN_MAX_AGE': 0, 'OPTIONS': {'connect_timeout': 5}}
         if 'historico' in config:
-            historical=config['historico']; db=historical['conexion']
-            cases=historical['solicitudes']
-            if (set(historical)!={'conexion','solicitudes','referencia'}
-                    or config['fuente']['nombre']!='credito_digital'
-                    or type(historical['referencia']) is not str or not historical['referencia'].strip()
-                    or type(cases) is not list or not 1<=len(cases)<=2 or len(set(cases))!=len(cases)
-                    or any(type(v) is not str or str(UUID(v))!=v for v in cases)
-                    or set(db)!={'host','puerto','nombre','usuario','passwordFile'}
-                    or db['nombre']!='credihoy_validacion' or db['usuario']!='credihoy_titular_historico'
-                    or type(db['host']) is not str or not db['host'].strip()
-                    or type(db['puerto']) is not int or not 1<=db['puerto']<=65535
-                    or db['passwordFile'] in {config['fuente']['passwordFile'],config['nonce']['passwordFile'],
-                        config.get('borradores',{}).get('passwordFile')}):raise ValueError
-            # A separate, custodian-provisioned identity sees scoped views only.
-            # Never replace default or the operative draft connection.
-            databases['historico']={'ENGINE':'django.db.backends.postgresql','HOST':db['host'],
-                'PORT':db['puerto'],'NAME':db['nombre'],'USER':db['usuario'],'PASSWORD':privado(db['passwordFile']),
-                'CONN_MAX_AGE':0,'OPTIONS':{'connect_timeout':5,
-                    'options':'-c default_transaction_read_only=on -c search_path=credihoy_lectura,pg_catalog'}}
+            historical = config['historico']
+            db = historical['conexion']
+            cases = historical['solicitudes']
+            if set(historical) != {'conexion', 'solicitudes', 'referencia'} or config['fuente']['nombre'] != 'credito_digital' or type(historical['referencia']) is not str or (not historical['referencia'].strip()) or (type(cases) is not list) or (not 1 <= len(cases) <= 2) or (len(set(cases)) != len(cases)) or any((type(v) is not str or str(UUID(v)) != v for v in cases)) or (set(db) != {'host', 'puerto', 'nombre', 'usuario', 'passwordFile'}) or (db['nombre'] != 'credihoy_validacion') or (db['usuario'] != 'credihoy_titular_historico') or (type(db['host']) is not str) or (not db['host'].strip()) or (type(db['puerto']) is not int) or (not 1 <= db['puerto'] <= 65535) or (db['passwordFile'] in {config['fuente']['passwordFile'], config['nonce']['passwordFile'], config.get('borradores', {}).get('passwordFile')}):
+                raise ValueError
+            databases['historico'] = {'ENGINE': 'django.db.backends.postgresql', 'HOST': db['host'], 'PORT': db['puerto'], 'NAME': db['nombre'], 'USER': db['usuario'], 'PASSWORD': privado(db['passwordFile']), 'CONN_MAX_AGE': 0, 'OPTIONS': {'connect_timeout': 5, 'options': '-c default_transaction_read_only=on -c search_path=credihoy_lectura,pg_catalog'}}
         if 'cotizacion' in config:
-            quote=config['cotizacion'];source=config['fuente']
-            required={'habilitada','conexion','solicitudes','referencia'}
-            if (type(quote) is not dict or not required<=set(quote) or set(quote)-required-{'apiData','custodiaEstudioHabilitada'}
-                    or type(quote['habilitada']) is not bool or not isinstance(quote['referencia'],str)
-                    or not quote['referencia'].strip() or type(quote['solicitudes']) is not list
-                    or not (1 if quote['habilitada'] else 0)<=len(quote['solicitudes'])<=2
-                    or len(set(quote['solicitudes']))!=len(quote['solicitudes'])
-                    or any(type(v) is not str or str(UUID(v))!=v for v in quote['solicitudes'])):raise ValueError
-            custody=quote.get('custodiaEstudioHabilitada',False)
-            if type(custody) is not bool or custody and not quote['habilitada']:raise ValueError
-            db=quote['conexion'];api=quote.get('apiData')
-            if (set(db)!=set(source) or db['usuario']!='credihoy_titular_cotizacion'
-                    or any(db[k]!=source[k] for k in ('host','puerto','nombre'))
-                    or db['passwordFile'] in {source['passwordFile'],config['nonce']['passwordFile'],
-                        config.get('borradores',{}).get('passwordFile'),
-                        config.get('historico',{}).get('conexion',{}).get('passwordFile'),
-                        config['secretFile'],config['delegacionFile']}):raise ValueError
-            if quote['habilitada'] and api is None:raise ValueError
+            quote = config['cotizacion']
+            source = config['fuente']
+            required = {'habilitada', 'conexion', 'solicitudes', 'referencia'}
+            if type(quote) is not dict or not required <= set(quote) or set(quote) - required - {'apiData', 'custodiaEstudioHabilitada', 'motor'} or (type(quote['habilitada']) is not bool) or (not isinstance(quote['referencia'], str)) or (not quote['referencia'].strip()) or (type(quote['solicitudes']) is not list) or (not (1 if quote['habilitada'] else 0) <= len(quote['solicitudes']) <= 2) or (len(set(quote['solicitudes'])) != len(quote['solicitudes'])) or any((type(v) is not str or str(UUID(v)) != v for v in quote['solicitudes'])):
+                raise ValueError
+            custody = quote.get('custodiaEstudioHabilitada', False)
+            if type(custody) is not bool or (custody and (not quote['habilitada'])):
+                raise ValueError
+            db = quote['conexion']
+            api = quote.get('apiData')
+            if set(db) != set(source) or db['usuario'] != 'credihoy_titular_cotizacion' or any((db[k] != source[k] for k in ('host', 'puerto', 'nombre'))) or (db['passwordFile'] in {source['passwordFile'], config['nonce']['passwordFile'], config.get('borradores', {}).get('passwordFile'), config.get('historico', {}).get('conexion', {}).get('passwordFile'), config['secretFile'], config['delegacionFile']}):
+                raise ValueError
+            motor = quote.get('motor', 'LINIX')
+            if motor not in {'LINIX', 'PROPIO_390_111_CFA'}:
+                raise ValueError
+            if quote['habilitada'] and api is None and (motor != 'PROPIO_390_111_CFA'):
+                raise ValueError
             if 'apiData' in quote:
-                if type(api) is not dict or set(api)!={'origen','tokenFile','timeout'}:raise ValueError
-                origin=urlsplit(api['origen'])
-                if (origin.scheme!='https' or not origin.hostname or origin.username or origin.password
-                        or origin.path not in ('','/') or origin.query or origin.fragment
-                        or type(api['timeout']) is not int or not 1<=api['timeout']<=30
-                        or api['tokenFile'] in {db['passwordFile'],source['passwordFile'],config['nonce']['passwordFile'],
-                            config['secretFile'],config['delegacionFile']}):raise ValueError
-                token=privado(api['tokenFile'])
-                if not token or any(v.isspace() for v in token):raise ValueError
-            databases['cotizacion']={'ENGINE':'django.db.backends.postgresql','HOST':db['host'],
-                'PORT':db['puerto'],'NAME':db['nombre'],'USER':db['usuario'],'PASSWORD':privado(db['passwordFile']),
-                'CONN_MAX_AGE':0,'OPTIONS':{'connect_timeout':5}}
-        authorization=config.get('autorizacionHabilitada',False)
-        centrales_otp=config.get('centralesOtpHabilitado',False)
-        if type(centrales_otp) is not bool or centrales_otp and not authorization:raise ValueError
-        cases=config.get('autorizacionSolicitudes',[])
-        if (type(authorization) is not bool or type(cases) is not list
-                or len(cases)>1 or any(type(v) is not str or str(UUID(v))!=v for v in cases)
-                or authorization and (len(cases)!=1 or 'cotizacion' not in databases or not enabled
-                    or config.get('autorizacionCifradoFile')!='/run/owner/documentos/otp-aes')):
+                if type(api) is not dict or set(api) != {'origen', 'tokenFile', 'timeout'}:
+                    raise ValueError
+                origin = urlsplit(api['origen'])
+                if origin.scheme != 'https' or not origin.hostname or origin.username or origin.password or (origin.path not in ('', '/')) or origin.query or origin.fragment or (type(api['timeout']) is not int) or (not 1 <= api['timeout'] <= 30) or (api['tokenFile'] in {db['passwordFile'], source['passwordFile'], config['nonce']['passwordFile'], config['secretFile'], config['delegacionFile']}):
+                    raise ValueError
+                token = privado(api['tokenFile'])
+                if not token or any((v.isspace() for v in token)):
+                    raise ValueError
+            databases['cotizacion'] = {'ENGINE': 'django.db.backends.postgresql', 'HOST': db['host'], 'PORT': db['puerto'], 'NAME': db['nombre'], 'USER': db['usuario'], 'PASSWORD': privado(db['passwordFile']), 'CONN_MAX_AGE': 0, 'OPTIONS': {'connect_timeout': 5}}
+        authorization = config.get('autorizacionHabilitada', False)
+        centrales_otp = config.get('centralesOtpHabilitado', False)
+        if type(centrales_otp) is not bool or (centrales_otp and (not authorization)):
             raise ValueError
-        secret, delegation = privado(config['secretFile']), privado(config['delegacionFile'])
+        cases = config.get('autorizacionSolicitudes', [])
+        if type(authorization) is not bool or type(cases) is not list or len(cases) > 1 or any((type(v) is not str or str(UUID(v)) != v for v in cases)) or (authorization and (len(cases) != 1 or 'cotizacion' not in databases or (not enabled) or (config.get('autorizacionCifradoFile') != '/run/owner/documentos/otp-aes'))):
+            raise ValueError
+        secret, delegation = (privado(config['secretFile']), privado(config['delegacionFile']))
         if len(secret) < 50 or len(delegation) < 48 or secret == delegation:
             raise ValueError
-        return databases, secret, delegation
+        return (databases, secret, delegation)
     except (KeyError, ValueError, TypeError, AttributeError):
         raise ImproperlyConfigured('CONFIGURACION_PROPIETARIA_INVALIDA') from None
 
@@ -302,3 +262,5 @@ try:
     CREDIHOY_AUTENTIC_SELLO_REGISTRO_FILE,CREDIHOY_AUTENTIC_SELLO_AUTORIDAD_FILE=referencias_registro_sello(os.environ)
 except ValueError as error:
     raise ImproperlyConfigured(str(error)) from None
+
+CREDIHOY_COTIZACION_MOTOR=_quote.get('motor','LINIX')

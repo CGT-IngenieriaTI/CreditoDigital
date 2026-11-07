@@ -27,7 +27,7 @@ export interface SeguimientoAsociadoProps { solicitudes:SolicitudPublica[]|null;
   cotizacionHabilitada?:boolean;horaServidor?:()=>number;
   simuladorLocalHabilitado?:boolean;simular?:OperarSimulacion;
   autorizacionHabilitada?:boolean;centralesHabilitadas?:boolean;autorizar?:(body:PeticionAutorizacion)=>Promise<AutorizacionTitular>;
-  cotizar?:(sid:string,operacion:'consultar'|'cotizar'|'aceptar',sha?:string,diaPago?:number)=>Promise<CotizacionTitular> }
+  cotizar?:(sid:string,operacion:'consultar'|'cotizar'|'aceptar'|'aceptar_simulacion',sha?:string,diaPago?:number)=>Promise<CotizacionTitular> }
 
 export function CredihoyAccesoAsociado({seguimiento}:{seguimiento?:(props:SeguimientoAsociadoProps)=>ReactNode}={}){
   const api=useRef(new AccesoAsociadoClient()),guard=useRef(false),generation=useRef(0);

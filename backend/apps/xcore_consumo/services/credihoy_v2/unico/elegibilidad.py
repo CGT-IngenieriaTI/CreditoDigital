@@ -9,6 +9,8 @@
 
 
 
+
+
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -568,6 +570,21 @@ def continuar_decision_estudio(solicitud_id, operador):
         raise ValueError('DECISION_REQUIERE_REVISION_VERIFICADA')
     now = timezone.now()
     context = contexto_desde_estudio(case, state['resultado'], ahora=now)
+    from .estamentos import BLOQUEADO, actualizar_estamentos
+    if context.clasificacion_estamentos.get('estado') == BLOQUEADO:
+        from apps.xcore_consumo.models import ConsultaEstamentoOracle
+        observed = ConsultaEstamentoOracle.objects.filter(solicitud=case, created_at__lte=now).order_by('-created_at', '-pk').first()
+        expired = False
+        if observed is not None and observed.estado == 'OK':
+            try:
+                when = datetime.fromisoformat(observed.response_payload['fechaConsulta'])
+                expired = when.utcoffset() is not None and (now - when).total_seconds() > 300
+            except (KeyError, TypeError, ValueError):
+                pass
+        if expired:
+            actualizar_estamentos(case.pk, actor=operador, autogestion=True, revision_conservada=True)
+            now = timezone.now()
+            context = contexto_desde_estudio(case, state['resultado'], ahora=now)
     reference = hashlib.sha256(json.dumps({'revision': revision['versionReferencia'], 'contexto': asdict(context), 'politica': politica_digital()}, sort_keys=True, default=str).encode()).hexdigest()
     key = str(uuid5(NAMESPACE_URL, 'credihoy-decision-revision:' + str(case.pk) + ':' + reference))
     return registrar_decision_digital(case.pk, operador=operador, contexto=context, snapshot_clave=None, clave_idempotencia=key, ahora=now, autogestion=True, revision_referencia=revision['versionReferencia'])

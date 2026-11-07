@@ -10,7 +10,7 @@ from uuid import uuid4
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.http import Http404
-from django.test import TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient, APIRequestFactory
 from apps.solicitudes.models import Solicitud
@@ -30,6 +30,68 @@ from apps.xcore_consumo.services.credihoy_v2.unico.condicion_comercial import re
 LIMITS={'version':'SYNTHETIC_ONLY','referencia':'NOT_REAL_POLICY','modalidad':'111',
     'montoMinimo':'400000','montoMaximo':'10000000','cuotasMinimas':1,'cuotasMaximas':48}
 BASE='/api/v1/credihoy/publico/'
+
+
+class DecimalPlanTests(SimpleTestCase):
+    def plan(self,amount='800000',term=6,rate='25.41',**changes):
+        from apps.xcore_consumo.services.calculadora import calcular_plan_credihoy
+        args={'perfil':('390','111','CFA'),'periodicidad_meses':1,
+            'seguro_mensual_porcentaje':Decimal('0.090'),'base_seguro':'SALDO_INICIAL_PERIODO',
+            'factor_adicional':Decimal(0),'unidad_redondeo':Decimal(1)}
+        return calcular_plan_credihoy(Decimal(amount),term,Decimal(rate),**{**args,**changes})
+
+    def test_two_historical_observations_match_model_without_claiming_general_parity(self):
+        for amount,term,rate,payment in [('800000',6,'25.41','143822'),('400000',2,'16.67','204448')]:
+            plan=self.plan(amount,term,rate)
+            self.assertEqual(plan['cuotaCalculada'],payment)
+            self.assertFalse(plan['paridadGeneralLinixAcreditada']);self.assertFalse(plan['ofertaContractual'])
+            self.assertFalse(plan['fechasContractualesAcreditadas'])
+
+    def test_schedule_conserves_capital_and_each_period_without_duplicate_insurance(self):
+        for term in (1,2,6,12,36,48):
+            plan=self.plan(term=term);rows=plan['amortizacion'];balance=Decimal('800000')
+            totals={k:Decimal(0) for k in ('capital','intereses','seguro','cuota')}
+            for row in rows:
+                self.assertEqual(Decimal(row['saldoInicial']),balance)
+                for key in totals:totals[key]+=Decimal(row[key])
+                self.assertEqual(sum(Decimal(row[k]) for k in ('capital','intereses','seguro','otros')),Decimal(row['cuota']))
+                balance-=Decimal(row['capital']);self.assertEqual(balance,Decimal(row['saldoFinal']))
+                self.assertGreaterEqual(balance,0)
+            self.assertEqual(balance,0);self.assertEqual(totals['capital'],Decimal('800000'))
+            self.assertEqual(totals['cuota'],sum(totals[k] for k in ('capital','intereses','seguro')))
+
+    def test_insurance_basis_is_explicit_and_not_inferred_from_examples(self):
+        variable=self.plan();fixed=self.plan(base_seguro='CAPITAL_INICIAL')
+        self.assertNotEqual(variable['cuotaCalculada'],fixed['cuotaCalculada'])
+        self.assertEqual(len({r['seguro'] for r in fixed['amortizacion']}),1)
+        self.assertGreater(len({r['seguro'] for r in variable['amortizacion']}),1)
+
+    def test_historical_examples_are_not_rate_configuration(self):
+        payments=[Decimal(self.plan(rate=rate)['cuotaSinRedondear']) for rate in ('10.123456','18.234567','29.345678')]
+        self.assertTrue(payments[0]<payments[1]<payments[2])
+
+    def test_decimal_precision_zero_rate_cents_and_last_installment_adjustment(self):
+        from decimal import localcontext
+        expected=self.plan(unidad_redondeo=Decimal('.01'))
+        with localcontext() as context:
+            context.prec=8
+            self.assertEqual(self.plan(unidad_redondeo=Decimal('.01')),expected)
+        plan=self.plan(amount='400000.01',term=3,rate='0',seguro_mensual_porcentaje=Decimal(0),unidad_redondeo=Decimal('.01'))
+        self.assertEqual(Decimal(plan['saldoFinal']),0)
+        self.assertEqual(Decimal(plan['totales']['capital']),Decimal('400000.01'))
+        self.assertNotEqual(plan['ultimaCuota'],plan['cuotaCalculada'])
+
+    def test_unsupported_financial_parameters_do_not_silently_become_zero(self):
+        for changed in ({'factor_adicional':Decimal('.09')},{'periodicidad_meses':2},
+                {'seguro_mensual_porcentaje':0.09},{'unidad_redondeo':Decimal('.05')},
+                {'base_seguro':'UNKNOWN'},{'perfil':('390','127','PSC')}):
+            with self.assertRaises(ValueError):self.plan(**changed)
+        for value in ('NaN','Infinity','-1'):
+            with self.assertRaises(ValueError):self.plan(amount=value)
+
+    def test_existing_calculator_for_other_products_is_unchanged(self):
+        from apps.xcore_consumo.services.calculadora import calcular_valor_cuota
+        self.assertEqual(calcular_valor_cuota(800000,6,25.41,0,0),143387.50)
 
 
 @override_settings(ROOT_URLCONF='core.urls_credihoy_publico',CREDIHOY_PUBLICO_ENABLED=True,DEBUG=False,
@@ -206,7 +268,8 @@ class SimuladorLocalTests(TransactionTestCase):
 
     def test_inactive_catalog_is_closed_and_historical_study_does_not_gate_generic_estimate(self):
         with override_settings(CREDIHOY_TASAS_ENABLED=False):
-            self.assertIsNotNone(self.operate()['resultado'])
+            with self.assertRaisesRegex(ValueError,'PAGADURIA_O_TARIFA_SIMULACION_NO_ACREDITADA'):
+                self.operate()
         e=EvaluacionConsumo.objects.get(solicitud=self.s)
         e.resultados[funcional.KEY]['reglas'][0]['evidencia']['hecho']['fecha_corte']='2001-01-01'
         e.save()
@@ -216,10 +279,14 @@ class SimuladorLocalTests(TransactionTestCase):
         original_count=SeleccionTarifaCredihoy.objects.filter(solicitud=self.s).count()
         no_selection=patch.object(SeleccionTarifaCredihoy.objects,'filter',return_value=SeleccionTarifaCredihoy.objects.none())
         before=deepcopy(SolicitudConsumo.objects.get(solicitud=self.s).orchestration_data)
-        with no_selection,override_settings(CREDIHOY_SIMULADOR_LIMITES=None,CREDIHOY_TASAS_ENABLED=False):
+        with no_selection,override_settings(CREDIHOY_SIMULADOR_LIMITES=None):
             for line,rate in [('LIBRANZA','16.670000'),('VENTANILLA','17.690000')]:
                 body=self.body();body['escenario']['linea']=line
-                p=self.operate(body)
+                rid=str(uuid4());queried=timezone.now().isoformat()
+                evidence={'codigo':'100' if line=='LIBRANZA' else '999','tipo':'N' if line=='LIBRANZA' else 'V',
+                    'activa':True,'estado':'DISPONIBLE','fuente':FUENTE,'fechaConsulta':queried,'requestId':rid}
+                with patch.object(sim,'_pagaduria_identidad',return_value=adaptar_pagaduria(evidence,request_id=rid,fecha_consulta=queried)):
+                    p=self.operate(body)
                 self.assertEqual(p['tasa']['linea'],line);self.assertEqual(p['tasa']['valor'],rate)
                 self.assertFalse(p['ofertable']);self.assertFalse(p['autorizaDecision'])
         self.assertEqual(SeleccionTarifaCredihoy.objects.filter(solicitud=self.s).count(),original_count)

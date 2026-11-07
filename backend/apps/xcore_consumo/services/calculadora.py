@@ -1,4 +1,6 @@
-﻿import base64
+
+
+import base64
 import math
 import unicodedata
 from decimal import Decimal
@@ -1044,3 +1046,59 @@ def encode_pdf_base64(pdf_bytes: bytes) -> str:
     return base64.b64encode(pdf_bytes).decode("utf-8")
 
 
+
+
+def calcular_plan_credihoy(monto, plazo, tasa_namv, *, perfil, periodicidad_meses, seguro_mensual_porcentaje, base_seguro, factor_adicional, unidad_redondeo):
+    """Decimal annuality model in the existing calculator, not a LINIX response.
+
+    The principal/interest equation is the existing end-period PMT equation.
+    Insurance basis and monetary rounding are explicit inputs, not inferred
+    from two matching observations. This function does not accredit a method,
+    payment dates, contractual conditions or an institutional decision.
+    """
+    from decimal import Decimal, ROUND_HALF_UP, localcontext
+    if perfil != ('390', '111', 'CFA'):
+        raise ValueError('CALCULO_PROPIO_PERFIL_NO_ADMITIDO')
+    values = (monto, tasa_namv, seguro_mensual_porcentaje, factor_adicional, unidad_redondeo)
+    if any((type(v) is not Decimal or not v.is_finite() for v in values)):
+        raise ValueError('CALCULO_PROPIO_REQUIERE_DECIMAL_FINITO')
+    if not Decimal(0) < monto < Decimal('1e15') or not Decimal(0) <= tasa_namv <= Decimal(100) or (not Decimal(0) <= seguro_mensual_porcentaje <= Decimal(100)) or (type(plazo) is not int) or (not 1 <= plazo <= 48):
+        raise ValueError('CALCULO_PROPIO_ENTRADA_INVALIDA')
+    if type(periodicidad_meses) is not int or periodicidad_meses != 1:
+        raise ValueError('CALCULO_PROPIO_PERIODICIDAD_NO_IMPLEMENTADA')
+    if base_seguro not in {'SALDO_INICIAL_PERIODO', 'CAPITAL_INICIAL'}:
+        raise ValueError('CALCULO_PROPIO_BASE_SEGURO_NO_IMPLEMENTADA')
+    if factor_adicional != 0:
+        raise ValueError('CALCULO_PROPIO_FACTOR_ADICIONAL_NO_IMPLEMENTADO')
+    if unidad_redondeo not in (Decimal('1'), Decimal('0.01')):
+        raise ValueError('CALCULO_PROPIO_REDONDEO_NO_IMPLEMENTADO')
+    unit = Decimal('1') if unidad_redondeo == 1 else Decimal('0.01')
+    with localcontext() as context:
+        context.prec = 60
+        if monto.quantize(unit, rounding=ROUND_HALF_UP) != monto:
+            raise ValueError('CALCULO_PROPIO_CAPITAL_NO_REPRESENTABLE')
+        interes = tasa_namv / Decimal(1200)
+        seguro = seguro_mensual_porcentaje / Decimal(100)
+        tasa_total = interes + seguro if base_seguro == 'SALDO_INICIAL_PERIODO' else interes
+        exact = monto / Decimal(plazo) if tasa_total == 0 else monto * tasa_total / (1 - (1 + tasa_total) ** (-plazo))
+        fixed_premium = (monto * seguro).quantize(unit, rounding=ROUND_HALF_UP) if base_seguro == 'CAPITAL_INICIAL' else Decimal(0)
+        payment = exact.quantize(unit, rounding=ROUND_HALF_UP) + fixed_premium
+        if payment <= 0:
+            raise ValueError('CALCULO_PROPIO_CUOTA_NO_REPRESENTABLE')
+        balance = monto
+        rows = []
+        total_interest = total_insurance = total_payment = Decimal(0)
+        for number in range(1, plazo + 1):
+            start = balance
+            interest = (start * interes).quantize(unit, rounding=ROUND_HALF_UP)
+            premium = (start * seguro).quantize(unit, rounding=ROUND_HALF_UP) if base_seguro == 'SALDO_INICIAL_PERIODO' else fixed_premium
+            principal = balance if number == plazo else payment - interest - premium
+            if principal <= 0 or principal > balance:
+                raise ValueError('CALCULO_PROPIO_PLAN_NO_AMORTIZABLE_CON_REDONDEO')
+            current = principal + interest + premium
+            balance -= principal
+            total_interest += interest
+            total_insurance += premium
+            total_payment += current
+            rows.append({'periodo': number, 'saldoInicial': format(start, 'f'), 'capital': format(principal, 'f'), 'intereses': format(interest, 'f'), 'seguro': format(premium, 'f'), 'otros': '0', 'cuota': format(current, 'f'), 'saldoFinal': format(balance, 'f')})
+        return {'version': 'credihoy-plan-decimal-v1', 'perfil': list(perfil), 'modelo': 'ANUALIDAD_VENCIDA_SEGURO_' + base_seguro, 'monto': format(monto, 'f'), 'plazo': plazo, 'periodicidadMeses': periodicidad_meses, 'tasaNamvPorcentaje': format(tasa_namv, 'f'), 'seguroMensualPorcentaje': format(seguro_mensual_porcentaje, 'f'), 'baseSeguro': base_seguro, 'factorAdicional': format(factor_adicional, 'f'), 'precisionDecimal': 60, 'unidadRedondeo': format(unit, 'f'), 'redondeo': 'ROUND_HALF_UP', 'cuotaSinRedondear': format(exact + (monto * seguro if base_seguro == 'CAPITAL_INICIAL' else Decimal(0)), 'f'), 'cuotaCalculada': format(payment, 'f'), 'ultimaCuota': rows[-1]['cuota'], 'saldoFinal': format(balance, 'f'), 'amortizacion': rows, 'totales': {'capital': format(monto, 'f'), 'intereses': format(total_interest, 'f'), 'seguro': format(total_insurance, 'f'), 'cuotas': format(total_payment, 'f')}, 'paridadGeneralLinixAcreditada': False, 'ofertaContractual': False, 'fechasContractualesAcreditadas': False}

@@ -1,6 +1,8 @@
 """Proyeccion financiera cifrada externa, solo lectura y sin datos de identidad."""
 
 
+
+
 from pathlib import Path
 import json
 
@@ -19,20 +21,17 @@ def es_simulacion(payload):
 
 
 def _seguro(monto):
-    from decimal import Decimal
-    from apps.xcore_consumo.services.calculadora import calcular_vida_deudores
+    from decimal import Decimal, ROUND_HALF_UP, localcontext
     raw = getattr(settings, 'CREDIHOY_SIMULADOR_SEGURO_MENSUAL', '0.0009')
     if type(raw) is not str:
         raise ValueError('SEGURO_MENSUAL_INVALIDO')
     factor = Decimal(raw)
     if not factor.is_finite() or not Decimal(0) <= factor <= Decimal('0.01'):
         raise ValueError('SEGURO_MENSUAL_INVALIDO')
-    value = (calcular_vida_deudores(monto) if factor == Decimal('0.0009')
-        else round(float(monto) * float(factor), 2))
-    return {'tasaMensualDecimal': format(factor, 'f'), 'base': 'CAPITAL_INICIAL',
-        'baseCOP': format(monto, '.2f'), 'valorMensualEstimado': format(Decimal(str(value)), '.2f'),
-        'fuente': 'calculadora.calcular_vida_deudores',
-        'comparacionLinix': 'BASE_Y_REDONDEO_NO_CONCILIADOS'}
+    with localcontext() as context:
+        context.prec = 60
+        value = (monto * factor).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    return {'tasaMensualDecimal': format(factor, 'f'), 'base': 'CAPITAL_INICIAL', 'baseCOP': format(monto, '.2f'), 'valorMensualEstimado': format(Decimal(str(value)), '.2f'), 'fuente': 'calculadora.calcular_plan_credihoy', 'comparacionLinix': 'BASE_Y_REDONDEO_NO_CONCILIADOS'}
 
 
 def _limites():
@@ -166,40 +165,23 @@ def operar_simulacion(identity, payload, rid):
 
 def orientar_simulacion(subtotal):
     """Expand the existing PMT subtotal, without producing a native payment plan."""
-    from decimal import Decimal, ROUND_HALF_UP
+    from decimal import Decimal
     from django.utils import timezone
     from .condiciones_producto import exigir_plazo_por_monto, convertir_namv_a_ea
-    amount, term = Decimal(subtotal['monto']), subtotal['plazoMeses']
+    amount, term = (Decimal(subtotal['monto']), subtotal['plazoMeses'])
     plazo = exigir_plazo_por_monto(amount, term, fecha=timezone.now())
     rate = Decimal(subtotal['tasa']['valor']) / Decimal(1200)
     payment = Decimal(subtotal['cuotaCapitalInteres'])
     insurance = _seguro(amount)
     premium = Decimal(insurance['valorMensualEstimado'])
-    balance, total_interest = amount, Decimal(0)
+    from apps.xcore_consumo.services.calculadora import calcular_plan_credihoy
+    plan = calcular_plan_credihoy(amount, term, Decimal(subtotal['tasa']['valor']), perfil=('390', '111', 'CFA'), periodicidad_meses=1, seguro_mensual_porcentaje=Decimal(insurance['tasaMensualDecimal']) * 100, base_seguro='CAPITAL_INICIAL', factor_adicional=Decimal(0), unidad_redondeo=Decimal('0.01'))
     rows = []
     money = lambda value: format(value, '.2f')
-    for number in range(1, term + 1):
-        interest = (balance * rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-        capital = balance if number == term else payment - interest
-        end = balance - capital
-        if capital <= 0 or end < 0:
-            raise ValueError('AMORTIZACION_ORIENTATIVA_INVALIDA')
-        rows.append({'numero': number, 'saldoInicial': money(balance), 'capital': money(capital),
-            'intereses': money(interest), 'subtotalCapitalInteres': money(capital + interest),
-            'seguroEstimado': money(premium), 'cuotaEstimada': money(capital + interest + premium),
-            'saldoFinal': money(end)})
-        balance = end
-        total_interest += interest
-    return {'estado': 'ORIENTATIVA', 'unidad': 'COP', 'monto': money(amount), 'plazoMeses': term,
-        'periodicidad': 'MENSUAL', 'tasaMensualDecimal': format(rate, 'f'),
-        'tasaEaPorcentaje': convertir_namv_a_ea(Decimal(subtotal['tasa']['valor']))['tasaEaPorcentaje'],
-        'plazoMaximoParaMonto': plazo['plazoMaximo'],
-        'cuotaCapitalInteres': money(payment), 'seguro': insurance,
-        'cuotaEstimada': money(payment + premium), 'totalCapital': money(amount),
-        'totalIntereses': money(total_interest), 'totalSeguroEstimado': money(premium * term),
-        'totalEstimado': money(amount + total_interest + premium * term), 'amortizacion': rows,
-        'conceptosNoAcreditados': CONCEPTOS_PENDIENTES, 'fuente': subtotal['fuente'],
-        'precision': 'PMT_LEGACY_2_DECIMALES_INTERES_HALF_UP_AJUSTE_ULTIMA_CUOTA_NO_CONTRACTUAL'}
+    for row in plan['amortizacion']:
+        rows.append({'numero': row['periodo'], 'saldoInicial': money(Decimal(row['saldoInicial'])), 'capital': money(Decimal(row['capital'])), 'intereses': money(Decimal(row['intereses'])), 'subtotalCapitalInteres': money(Decimal(row['capital']) + Decimal(row['intereses'])), 'seguroEstimado': money(Decimal(row['seguro'])), 'cuotaEstimada': money(Decimal(row['cuota'])), 'saldoFinal': money(Decimal(row['saldoFinal']))})
+    total_interest = Decimal(plan['totales']['intereses'])
+    return {'estado': 'ORIENTATIVA', 'unidad': 'COP', 'monto': money(amount), 'plazoMeses': term, 'periodicidad': 'MENSUAL', 'tasaMensualDecimal': format(rate, 'f'), 'tasaEaPorcentaje': convertir_namv_a_ea(Decimal(subtotal['tasa']['valor']))['tasaEaPorcentaje'], 'plazoMaximoParaMonto': plazo['plazoMaximo'], 'cuotaCapitalInteres': money(payment), 'seguro': insurance, 'cuotaEstimada': money(payment + premium), 'totalCapital': money(amount), 'totalIntereses': money(total_interest), 'totalSeguroEstimado': money(premium * term), 'totalEstimado': money(amount + total_interest + premium * term), 'amortizacion': rows, 'conceptosNoAcreditados': CONCEPTOS_PENDIENTES, 'fuente': subtotal['fuente'], 'precision': 'DECIMAL_60_2_DECIMALES_HALF_UP_AJUSTE_ULTIMA_CUOTA_NO_CONTRACTUAL'}
 
 from django.conf import settings
 from apps.xcore_consumo.services.otp_crypto import decrypt_text, OTPCryptoError
@@ -227,45 +209,22 @@ def orientar_capital_interes(monto, plazo_meses, *, tarifa, fecha):
     """
     from datetime import date
     from decimal import Decimal
-    import math
     import re
     from . import tasas
     from apps.xcore_consumo.tasas_models import TasaComercialCredihoy
-
-    if (type(monto) is not Decimal or not monto.is_finite() or monto <= 0
-            or type(plazo_meses) is not int or not 1 <= plazo_meses <= 48
-            or type(fecha) is not date):
+    if type(monto) is not Decimal or not monto.is_finite() or monto <= 0 or (type(plazo_meses) is not int) or (not 1 <= plazo_meses <= 48) or (type(fecha) is not date):
         raise ValueError('ENTRADA_ORIENTATIVA_INVALIDA')
-    if (not isinstance(tarifa,TasaComercialCredihoy) or not tarifa.pk
-            or tarifa.perfil.producto!='390' or tarifa.perfil.modalidad!='111'
-            or not tasas.vigente(tarifa,fecha)):
+    if not isinstance(tarifa, TasaComercialCredihoy) or not tarifa.pk or tarifa.perfil.producto != '390' or (tarifa.perfil.modalidad != '111') or (not tasas.vigente(tarifa, fecha)):
         raise ValueError('TARIFA_ORIENTATIVA_NO_ACREDITADA')
-    support=tasas.condiciones_aprobadas(tarifa)
-    if (type(support) is not dict or not all(isinstance(support.get(k),str) and support[k].strip()
-            for k in ('documento','versionDocumento','referencia'))
-            or not isinstance(support.get('soporteSha256'),str)
-            or not re.fullmatch('[a-f0-9]{64}',support['soporteSha256'])
-            or type(tarifa.tasa_namv) is not Decimal
-            or not tarifa.tasa_namv.is_finite() or tarifa.tasa_namv<=0):
+    support = tasas.condiciones_aprobadas(tarifa)
+    if type(support) is not dict or not all((isinstance(support.get(k), str) and support[k].strip() for k in ('documento', 'versionDocumento', 'referencia'))) or (not isinstance(support.get('soporteSha256'), str)) or (not re.fullmatch('[a-f0-9]{64}', support['soporteSha256'])) or (type(tarifa.tasa_namv) is not Decimal) or (not tarifa.tasa_namv.is_finite()) or (tarifa.tasa_namv <= 0):
         raise ValueError('TARIFA_ORIENTATIVA_NO_ACREDITADA')
-    from apps.xcore_consumo.services.calculadora import calcular_valor_cuota
-    # The legacy argument is named EA, but its implemented unit is NAMV / 12.
-    subtotal=calcular_valor_cuota(monto,plazo_meses,tarifa.tasa_namv,0,0)
-    if not math.isfinite(subtotal) or subtotal<=0:
+    from apps.xcore_consumo.services.calculadora import calcular_plan_credihoy
+    plan = calcular_plan_credihoy(monto, plazo_meses, tarifa.tasa_namv, perfil=('390', '111', 'CFA'), periodicidad_meses=1, seguro_mensual_porcentaje=Decimal(0), base_seguro='CAPITAL_INICIAL', factor_adicional=Decimal(0), unidad_redondeo=Decimal('0.01'))
+    subtotal = Decimal(plan['cuotaCalculada'])
+    if not subtotal.is_finite() or subtotal <= 0:
         raise ValueError('SUBTOTAL_ORIENTATIVO_INVALIDO')
-    return {'estado':'ORIENTATIVA_PARCIAL','unidad':'COP',
-        'monto':format(monto,'f'),'plazoMeses':plazo_meses,'periodicidad':'MENSUAL',
-        'cuotaCapitalInteres':format(Decimal(str(subtotal)),'.2f'),
-        'cuotaTotal':None,'cuotaContractual':None,'capacidadPago':None,
-        'tasa':{'valor':str(tarifa.tasa_namv),'unidad':'PORCENTAJE_NAMV',
-            'tarifaId':tarifa.pk,'version':tarifa.numero_version,
-            **{k:support[k] for k in ('documento','versionDocumento','referencia','soporteSha256')}},
-        'corte':fecha.isoformat(),
-        'fuente':'calculadora.calcular_valor_cuota/numpy_financial.pmt',
-        'precision':'REDONDEO_ORIENTATIVO_LEGACY_2_DECIMALES_NO_CONTRACTUAL',
-        'incluyeSeguroYCargos':False,'ofertable':False,'autorizaDecision':False,
-        'faltantes':['SEGURO_VIDA_CREDIHOY','CAPITALIZACION_APORTES_APLICABLE',
-            'OTROS_CONCEPTOS_APLICABLES','CUOTA_CONTRACTUAL_LINIX_CONCILIADA']}
+    return {'estado': 'ORIENTATIVA_PARCIAL', 'unidad': 'COP', 'monto': format(monto, 'f'), 'plazoMeses': plazo_meses, 'periodicidad': 'MENSUAL', 'cuotaCapitalInteres': format(Decimal(str(subtotal)), '.2f'), 'cuotaTotal': None, 'cuotaContractual': None, 'capacidadPago': None, 'tasa': {'valor': str(tarifa.tasa_namv), 'unidad': 'PORCENTAJE_NAMV', 'tarifaId': tarifa.pk, 'version': tarifa.numero_version, **{k: support[k] for k in ('documento', 'versionDocumento', 'referencia', 'soporteSha256')}}, 'corte': fecha.isoformat(), 'fuente': 'calculadora.calcular_plan_credihoy', 'precision': 'DECIMAL_60_2_DECIMALES_NO_CONTRACTUAL', 'incluyeSeguroYCargos': False, 'ofertable': False, 'autorizaDecision': False, 'faltantes': ['SEGURO_VIDA_CREDIHOY', 'CAPITALIZACION_APORTES_APLICABLE', 'OTROS_CONCEPTOS_APLICABLES', 'CUOTA_CONTRACTUAL_LINIX_CONCILIADA']}
 
 
 def _pagaduria_identidad(identity, request_id):

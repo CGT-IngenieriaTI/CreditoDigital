@@ -26,6 +26,8 @@
 
 
 
+
+
 from decimal import Decimal
 from dataclasses import replace
 import hashlib
@@ -132,18 +134,18 @@ def clave_funcional(s):
 
 def _firma(s):
     c = s.consentimiento_consumo
-    if s.metadatos.get('modo')=='AUTOGESTION_ENVIADA':
+    if s.metadatos.get('modo') == 'AUTOGESTION_ENVIADA':
         from .centrales_personal import verificar_autorizacion_centrales_personal
-        verificar_autorizacion_centrales_personal(s,c)
+        from django.conf import settings
+        if getattr(settings, 'CREDIHOY_TITULAR_ENABLED', False) is True:
+            verificar_autorizacion_centrales_personal(s, c, owner=True)
+        else:
+            verificar_autorizacion_centrales_personal(s, c)
         return c
     validar_documento(s, c)
     o = c.otp
-    if (not c.firmado or not c.aceptado or o is None or o.solicitud_id != s.pk
-            or o.estado != "VALIDADA" or o.provider != "twilio_verify" or o.verificado_at is None
-            or o.canal != c.canal or not o.transaction_uuid
-            or not hmac.compare_digest(c.text_hash, build_consent_hash(c.version, c.text_snapshot,
-                o.transaction_uuid, o.canal, o.verificado_at))):
-        raise ValueError("CONSENTIMIENTO_FIRMADO_VERIFICABLE_REQUERIDO")
+    if not c.firmado or not c.aceptado or o is None or (o.solicitud_id != s.pk) or (o.estado != 'VALIDADA') or (o.provider != 'twilio_verify') or (o.verificado_at is None) or (o.canal != c.canal) or (not o.transaction_uuid) or (not hmac.compare_digest(c.text_hash, build_consent_hash(c.version, c.text_snapshot, o.transaction_uuid, o.canal, o.verificado_at))):
+        raise ValueError('CONSENTIMIENTO_FIRMADO_VERIFICABLE_REQUERIDO')
     return c
 
 

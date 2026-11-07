@@ -701,3 +701,27 @@ class CentralesPersonalTests(SimpleTestCase):
         with self.assertRaisesMessage(ValueError, 'SNAPSHOT_NO_CORRESPONDE_AL_PDF'):
             self.present()
         self.detail.save.assert_not_called()
+
+
+    def test_owner_uses_existing_key_without_documentary_signature_or_mutation(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import funcional
+        self.confirm()
+        self.case.consentimiento_consumo = self.consent
+        before = deepcopy(self.detail.orchestration_data)
+        with override_settings(CREDIHOY_TITULAR_ENABLED=True, CREDIHOY_CENTRALES_CLAVE_PUBLICA_B64=''):
+            self.assertIs(funcional._firma(self.case), self.consent)
+            self.assertEqual(service.verificar_autorizacion_centrales_personal(self.case, self.consent, owner=True).metodo, 'OTP')
+        self.assertEqual(self.detail.orchestration_data, before)
+        self.assertFalse(self.consent.firmado)
+
+    def test_owner_mode_cannot_bypass_expiration_signature_or_service_boundary(self):
+        self.confirm()
+        with override_settings(CREDIHOY_TITULAR_ENABLED=False), self.assertRaises(OperacionError):
+            service.verificar_autorizacion_centrales_personal(self.case, self.consent, owner=True)
+        with override_settings(CREDIHOY_TITULAR_ENABLED=True, CREDIHOY_CENTRALES_CLAVE_PUBLICA_B64=''):
+            with patch.object(service.timezone, 'now', return_value=self.until), self.assertRaises(OperacionError):
+                service.verificar_autorizacion_centrales_personal(self.case, self.consent, owner=True)
+            proof = self.detail.orchestration_data[service.KEY]['comprobante']
+            proof['firmaBase64'] = base64.b64encode(b'0' * 64).decode()
+            with self.assertRaises(OperacionError):
+                service.verificar_autorizacion_centrales_personal(self.case, self.consent, owner=True)

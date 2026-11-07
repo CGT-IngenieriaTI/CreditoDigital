@@ -123,39 +123,17 @@ class CentralesPersonalTests(SimpleTestCase):
     def setUp(self):
         self.now = timezone.now()
         self.sid, self.operation, self.session, self.document, self.send = [str(uuid4()) for _ in range(5)]
-        self.identity = {'numeroDocumento': '0000000099', '_sesionReferencia': self.session,
-                         '_scopeAutorizacion':'solicitudes:autorizar',
-                         '_sesionExpiraAt': (self.now + timedelta(hours=1)).isoformat()}
+        self.identity = {'numeroDocumento': '0000000099', '_sesionReferencia': self.session, '_scopeAutorizacion': 'solicitudes:autorizar', '_sesionExpiraAt': (self.now + timedelta(hours=1)).isoformat()}
         self.until = self.now + timedelta(hours=2)
         self.enter(override_settings(CREDIHOY_PUBLICO_AUTORIZACION_HASTA=self.until.isoformat()))
         self.enter(patch('socket.socket.connect', side_effect=AssertionError('NETWORK_FORBIDDEN')))
         self.enter(patch('socket.getaddrinfo', side_effect=AssertionError('DNS_FORBIDDEN')))
-        self.pdf, metadata = _diligenciar('COLO-FO.023', {
-            'identificacion': {'valor': self.identity['numeroDocumento'], 'referencia': 'SYNTHETIC', 'verificado': True}})
-        text = '\n'.join(p.extract_text() or '' for p in PdfReader(BytesIO(self.pdf)).pages)
-        self.consent = SimpleNamespace(
-            solicitud_id=self.sid, aceptado=True, firmado=False, otp_id=None,
-            version=service.TEXTO_VERSION, fecha_aceptacion=self.now - timedelta(minutes=1),
-            text_snapshot=text, text_hash=build_consent_hash(service.TEXTO_VERSION, text),
-            tipo_firma='AUTENTIC_PENDIENTE', evidencia={
-                'workflow': 'COLO023_AUTOGESTION_V1', 'proposito': 'AUTORIZACION_CENTRALES_PRECONSULTA',
-                'otp9AReutilizado': False, 'originalSha256': metadata['originalSha256'],
-                'pdfSha256': metadata['pdfSha256'], 'documentoOperacionId': self.document,
-                'claveAceptacion': str(uuid4()), 'sesionReferencia': self.session})
-        data = {
-            autoservicio.VINCULO_CONSUMO: {'version': 1, 'solicitudId': self.sid,
-                'origen': autoservicio.ORIGEN, 'modo': autoservicio.MODO, 'producto': '390',
-                'modalidad': '111', 'destinacion': 'CFA', 'operacionEnvioOriginal': self.send},
-            'credihoy_pdf_oficiales_v1': {self.document: {'metadata': metadata, 'contenidoCifrado': 'SYNTHETIC'}},
-        }
-        self.detail = SimpleNamespace(orchestration_data=data, estado='CONSENTIMIENTO_PENDIENTE',
-                                      form_data={'monto': '400000.00', 'plazoMeses': 2}, save=Mock())
-        self.case = SimpleNamespace(pk=self.sid, asesor_id=None, producto=autoservicio.PRODUCTO,
-            solicitante=SimpleNamespace(numero_identificacion=self.identity['numeroDocumento']),
-            consumo_detail=self.detail, metadatos={
-                'modo': autoservicio.MODO, 'origen': autoservicio.ORIGEN,
-                'productoLinix': '390', 'modalidadLinix': '111', 'destinacionLinix': 'CFA',
-                'envio': {'operacionId': self.send, 'datos': {'monto': '400000.00', 'plazo': 2}}})
+        self.pdf, metadata = _diligenciar('COLO-FO.023', {'identificacion': {'valor': self.identity['numeroDocumento'], 'referencia': 'SYNTHETIC', 'verificado': True}})
+        text = '\n'.join((p.extract_text() or '' for p in PdfReader(BytesIO(self.pdf)).pages))
+        self.consent = SimpleNamespace(solicitud_id=self.sid, aceptado=True, firmado=False, otp_id=None, version=service.TEXTO_VERSION, fecha_aceptacion=self.now - timedelta(minutes=1), text_snapshot=text, text_hash=build_consent_hash(service.TEXTO_VERSION, text), tipo_firma='AUTENTIC_PENDIENTE', evidencia={'workflow': 'COLO023_AUTOGESTION_V1', 'proposito': 'AUTORIZACION_CENTRALES_PRECONSULTA', 'otp9AReutilizado': False, 'originalSha256': metadata['originalSha256'], 'pdfSha256': metadata['pdfSha256'], 'documentoOperacionId': self.document, 'claveAceptacion': str(uuid4()), 'sesionReferencia': self.session, 'vigenteHasta': self.until.isoformat()})
+        data = {autoservicio.VINCULO_CONSUMO: {'version': 1, 'solicitudId': self.sid, 'origen': autoservicio.ORIGEN, 'modo': autoservicio.MODO, 'producto': '390', 'modalidad': '111', 'destinacion': 'CFA', 'operacionEnvioOriginal': self.send}, 'credihoy_pdf_oficiales_v1': {self.document: {'metadata': metadata, 'contenidoCifrado': 'SYNTHETIC'}}}
+        self.detail = SimpleNamespace(orchestration_data=data, estado='CONSENTIMIENTO_PENDIENTE', form_data={'monto': '400000.00', 'plazoMeses': 2}, save=Mock())
+        self.case = SimpleNamespace(pk=self.sid, asesor_id=None, producto=autoservicio.PRODUCTO, solicitante=SimpleNamespace(numero_identificacion=self.identity['numeroDocumento']), consumo_detail=self.detail, metadatos={'modo': autoservicio.MODO, 'origen': autoservicio.ORIGEN, 'productoLinix': '390', 'modalidadLinix': '111', 'destinacionLinix': 'CFA', 'envio': {'operacionId': self.send, 'datos': {'monto': '400000.00', 'plazo': 2}}})
         self.complement()
         self.obtain = self.enter(patch.object(service, 'obtener_autogestion', return_value=(self.case, 'cotizacion')))
         details = Mock()
@@ -169,8 +147,7 @@ class CentralesPersonalTests(SimpleTestCase):
         self.audit = Mock()
         self.enter(patch.object(service.AuditLog.objects, 'using', return_value=self.audit))
         self.atomic = self.enter(patch.object(service.transaction, 'atomic', side_effect=lambda **kw: nullcontext()))
-        self.continuation_event = self.enter(patch(
-            'apps.xcore_consumo.services.credihoy_v2.unico.continuacion_eventos.registrar'))
+        self.continuation_event = self.enter(patch('apps.xcore_consumo.services.credihoy_v2.unico.continuacion_eventos.registrar'))
         self.recover = self.enter(patch.object(service, 'recuperar_formato', return_value=(self.pdf, deepcopy(metadata))))
         self.public_key = service.obtener_clave_publica_owner_b64()
         self.initial = deepcopy((self.case.metadatos, self.detail.form_data, vars(self.consent)))
@@ -723,5 +700,16 @@ class CentralesPersonalTests(SimpleTestCase):
                 service.verificar_autorizacion_centrales_personal(self.case, self.consent, owner=True)
             proof = self.detail.orchestration_data[service.KEY]['comprobante']
             proof['firmaBase64'] = base64.b64encode(b'0' * 64).decode()
+            with self.assertRaises(OperacionError):
+                service.verificar_autorizacion_centrales_personal(self.case, self.consent, owner=True)
+
+
+    def test_owner_retains_permanent_document_lifetime_but_rejects_revocation(self):
+        self.confirm()
+        self.consent.evidencia.pop('vigenteHasta')
+        with override_settings(CREDIHOY_TITULAR_ENABLED=True, CREDIHOY_CENTRALES_CLAVE_PUBLICA_B64=''), patch.object(service.timezone, 'now', return_value=self.until + timedelta(seconds=1)):
+            proof = service.verificar_autorizacion_centrales_personal(self.case, self.consent, owner=True)
+            self.assertIsNone(proof.vigente_hasta)
+            self.consent.evidencia['revocado'] = True
             with self.assertRaises(OperacionError):
                 service.verificar_autorizacion_centrales_personal(self.case, self.consent, owner=True)

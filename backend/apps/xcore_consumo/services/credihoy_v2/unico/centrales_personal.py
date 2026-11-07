@@ -2,6 +2,8 @@
 
 
 
+
+
 import base64
 from copy import deepcopy
 from dataclasses import dataclass
@@ -547,7 +549,9 @@ def verificar_autorizacion_centrales_personal(case, consent, *, owner=False):
     try:
         journal = case.consumo_detail.orchestration_data.get(KEY)
         if type(journal) is dict and journal.get('estado') == 'OTP_CONFIRMADA':
-            return _verificar_comprobante(case, consent, journal, owner=owner)
+            verified = _verificar_comprobante(case, consent, journal, vigente=False, owner=owner)
+            until = _vigencia_consentimiento_documental(case, consent)
+            return AutorizacionCentralesVerificada(metodo=verified.metodo, referencia_verificacion=verified.referencia_verificacion, texto_sha256=verified.texto_sha256, pdf_sha256=verified.pdf_sha256, confirmado_en=verified.confirmado_en, vigente_hasta=until)
         verified = verificar_autorizacion_crediticia_personal(case, consent)
         return AutorizacionCentralesVerificada(metodo='AUTENTIC', referencia_verificacion=verified.referencia_verificacion, texto_sha256=_sha(consent.text_snapshot.encode('utf-8')), pdf_sha256=verified.original_sha256, confirmado_en=verified.firmado_en, vigente_hasta=verified.vigente_hasta)
     except (KeyError, TypeError, ValueError, AttributeError, InvalidSignature):

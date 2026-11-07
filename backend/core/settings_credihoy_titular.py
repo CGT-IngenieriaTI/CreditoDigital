@@ -4,6 +4,8 @@ No activa rutas en procesos ya desplegados. Requiere custodia y rol lector propi
 """
 
 
+
+
 import ipaddress
 import json
 import os
@@ -69,7 +71,9 @@ def configurar_propietario(config):
     try:
         fields = {'host', 'redes', 'proxies', 'documentosHmac', 'solicitudes', 'fuenteReferencia', 'fuente', 'nonce', 'secretFile', 'delegacionFile', 'vigenteHasta'}
         enabled = config.get('fuenteHabilitada', True) if type(config) is dict else None
-        optional = {'fuenteHabilitada', 'autoservicioHabilitado', 'autoservicioAlcance', 'borradores', 'promotoresCatalogo', 'historico', 'progresoTemporal', 'cotizacion', 'autorizacionHabilitada', 'autorizacionSolicitudes', 'autorizacionCifradoFile', 'centralesOtpHabilitado'}
+        optional = {'fuenteHabilitada', 'autoservicioHabilitado', 'autoservicioAlcance', 'borradores', 'promotoresCatalogo', 'historico', 'progresoTemporal', 'cotizacion', 'autorizacionHabilitada', 'autorizacionSolicitudes', 'autorizacionCifradoFile', 'centralesOtpHabilitado', 'simuladorLocalHabilitado'}
+        if type(config.get('simuladorLocalHabilitado', False)) is not bool:
+            raise ValueError
         optional.update({'admisionEnsayo', 'disponibilidad'})
         availability = config.get('disponibilidad', 'PILOT_WINDOW')
         if availability not in ('PILOT_WINDOW', 'PERMANENT_PRIVATE_V1') or availability != os.environ.get('CREDIHOY_PERFIL_DISPONIBILIDAD', 'PILOT_WINDOW') or (availability == 'PERMANENT_PRIVATE_V1' and config.get('admisionEnsayo')):

@@ -1,4 +1,6 @@
 """Institutional quote transport. No direct Oracle connection or retries."""
+
+
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, localcontext
 import re
@@ -132,11 +134,35 @@ def validar_respuesta(p, payload, request_id):
 
 
 class ApiDataCotizacionClient(ApiDataCrediHoyV2Client):
+
+    def vincular_radicacion(self, binding):
+        from uuid import UUID
+        if type(binding) is not dict or set(binding) != {'solicitudId', 'revisionReferencia', 'titularSha256', 'consentimientoSha256', 'versionCondiciones', 'payloadSha256'} or any((type(binding[k]) is not str or str(UUID(binding[k])) != binding[k] for k in ('solicitudId', 'revisionReferencia'))) or any((type(binding[k]) is not str or not re.fullmatch('[a-f0-9]{64}', binding[k]) for k in ('titularSha256', 'consentimientoSha256', 'versionCondiciones', 'payloadSha256'))):
+            raise ValueError('COTIZACION_VINCULO_INVALIDO')
+        self._radicacion_binding = dict(binding)
+        self._cotizacion_cache = None
+
+    def _token_cotizacion(self, payload, request_id):
+        import hashlib, json, time
+        from uuid import UUID
+        binding = getattr(self, '_radicacion_binding', None)
+        if binding is None:
+            return self._token(request_id)
+        if payload.get('solicitudId') != binding['solicitudId'] or type(payload.get('versionCondiciones')) is not str or (not re.fullmatch('[a-f0-9]{64}', payload['versionCondiciones'])) or (str(UUID(request_id)) != request_id):
+            raise ValueError('COTIZACION_VINCULO_INVALIDO')
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        if binding['versionCondiciones'] != payload['versionCondiciones'] or binding['payloadSha256'] != digest:
+            raise ValueError('COTIZACION_VINCULO_INVALIDO')
+        claim = {**binding, 'requestId': request_id}
+        cache = getattr(self, '_cotizacion_cache', None)
+        if cache and cache[0] == claim and (time.monotonic() < cache[2]):
+            return cache[1]
+        token = self._token(request_id, cotizacion=claim)
+        self._cotizacion_cache = (claim, token, time.monotonic() + 20)
+        return token
+
     def cotizar(self, payload, request_id):
-        response = self.session.post(self.configuracion.base_url.rstrip('/') + ENDPOINT,
-            json=payload, headers={'Authorization': 'Bearer ' + self._token(request_id),
-                'X-Request-ID': request_id, 'Accept': 'application/json'},
-            timeout=self.configuracion.timeout, allow_redirects=False, verify=True)
+        response = self.session.post(self.configuracion.base_url.rstrip('/') + ENDPOINT, json=payload, headers={'Authorization': 'Bearer ' + self._token_cotizacion(payload, request_id), 'X-Request-ID': request_id, 'Accept': 'application/json'}, timeout=self.configuracion.timeout, allow_redirects=False, verify=True)
         try:
             if response.status_code not in (200, 503) or response.headers.get('X-Request-ID') != request_id:
                 raise ValueError('COTIZACION_HTTP_NO_DISPONIBLE')

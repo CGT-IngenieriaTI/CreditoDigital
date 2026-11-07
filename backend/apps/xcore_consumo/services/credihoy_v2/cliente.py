@@ -125,18 +125,20 @@ class ApiDataCrediHoyV2Client:
         self._token_temporal = None
         self._token_expira = 0
 
-    def _token(self, request_id, *, estamentos=None):
-        if estamentos is not None and self.configuracion.token:
+    def _token(self, request_id, *, estamentos=None, cotizacion=None):
+        if (estamentos is not None and cotizacion is not None
+                or (estamentos is not None or cotizacion is not None) and self.configuracion.token):
             raise ApiDataCrediHoyV2Error(Codigo.NO_AUTORIZADO)
         if self.configuracion.token:
             return self.configuracion.token
-        if estamentos is None and self._token_temporal is not None and time.monotonic() < self._token_expira:
+        if estamentos is None and cotizacion is None and self._token_temporal is not None and time.monotonic() < self._token_expira:
             return self._token_temporal
         try:
             response = self.session.post(self.configuracion.base_url.rstrip("/") + ENDPOINT_TOKEN,
                 headers={"X-Request-ID": request_id, "Accept": "application/json"},
                 json={"client_id": self.configuracion.client_id, "client_secret": self.configuracion.client_secret,
-                    **({'estamentos':estamentos} if estamentos is not None else {})},
+                    **({'estamentos':estamentos} if estamentos is not None else {}),
+                    **({'cotizacion':cotizacion} if cotizacion is not None else {})},
                 timeout=self.configuracion.timeout, allow_redirects=False, verify=True)
         except requests.Timeout:
             raise ApiDataCrediHoyV2Error(Codigo.TIMEOUT) from None
@@ -153,7 +155,7 @@ class ApiDataCrediHoyV2Client:
                     or any(c.isspace() for c in p["access_token"])
                     or type(p.get("expires_in")) is not int or p["expires_in"] <= 0):
                 raise ApiDataCrediHoyV2Error(Codigo.RESPUESTA_INVALIDA)
-            if estamentos is None:
+            if estamentos is None and cotizacion is None:
                 self._token_temporal = p["access_token"]
                 self._token_expira = time.monotonic() + p["expires_in"]
             return p["access_token"]

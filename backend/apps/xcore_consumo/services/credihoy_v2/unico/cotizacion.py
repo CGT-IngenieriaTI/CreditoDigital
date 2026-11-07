@@ -9,6 +9,8 @@
 
 
 
+
+
 import hashlib
 import json
 from uuid import UUID,uuid4
@@ -1048,5 +1050,22 @@ def preparar_radicacion_tecnica(solicitud_id, operador, *, cliente=None):
         raise ValueError('COTIZACION_NO_HABILITADA_EN_EJECUTOR')
     selected = resolver_desde_revision_conservada(s.pk, operador, revision_referencia=revision, persistir=True)
     key = str(uuid5(NAMESPACE_URL, 'credihoy-cuota-radicacion-especial:' + str(s.pk) + ':' + revision + ':' + str(selected['seleccionId'])))
+    detail, payload = _contexto(s, lock=False)
+    stored = _resultado_guardado(detail, payload, key, ejecutar=False)
+    if stored['estado'] == 'SIN_COTIZACION':
+        from .funcional import _firma, oferta_custodia_activa
+        from ..cotizacion_cliente import ENDPOINT
+        if oferta_custodia_activa():
+            _exigir_decision_ofertable(s, detail)
+        cliente = cliente or ApiDataCotizacionClient(ConfiguracionApiDataV2.desde_settings())
+        if not cliente.configuracion.client_id.startswith('credihoy-hechos-'):
+            raise ValueError('COTIZACION_REQUIERE_CLIENTE_INSTITUCIONAL_ACOTADO')
+        cliente.vincular_radicacion({'solicitudId': str(s.pk), 'revisionReferencia': revision, 'titularSha256': hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest(), 'consentimientoSha256': _firma(s).text_hash, 'versionCondiciones': payload['versionCondiciones'], 'payloadSha256': hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()})
+        response = cliente.session.post(cliente.configuracion.base_url.rstrip('/') + ENDPOINT, json={}, headers={'Authorization': 'Bearer ' + cliente._token_cotizacion(payload, key), 'X-Request-ID': key, 'Accept': 'application/json'}, timeout=cliente.configuracion.timeout, allow_redirects=False, verify=True)
+        try:
+            if response.status_code != 400 or response.headers.get('X-Request-ID') != key:
+                raise ValueError('COTIZACION_CONTRATO_VACIO_NO_ACREDITADO')
+        finally:
+            response.close()
     quote = cotizacion(s.pk, operador, key, ejecutar=True, cliente=cliente, autogestion_tecnica=True)
     return {'versionContrato': 'credihoy-preparacion-radicacion-tecnica-v1', 'solicitudId': str(s.pk), 'revisionReferencia': revision, 'seleccionId': selected['seleccionId'], 'requestIdCuota': key, 'estadoCuota': quote['estado'], 'cuotaDisponible': quote.get('disponible') is True, 'fuenteCuota': quote.get('fuente'), 'versionCondiciones': quote.get('versionCondiciones'), 'ofertaGenerada': False, 'aceptacionInferida': False, 'intencionCreada': False, 'autorizaStart': False, 'autorizaFirma': False, 'autorizaDesembolso': False}

@@ -1220,7 +1220,6 @@ def _simulacion_persistida_para_continuidad(entry,sid,holder):
 
 def comprobante_simulacion_aceptada(s,identity):
     """Owner-only durable evidence. Does not authorize START or human approval."""
-    from .funcional import leer_estado_funcional,oferta_custodia_activa
     holder=hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()
     if s.solicitante.numero_identificacion!=identity['numeroDocumento']:
         raise ValueError('ACEPTACION_DE_OTRO_TITULAR')
@@ -1228,16 +1227,24 @@ def comprobante_simulacion_aceptada(s,identity):
     entry=detail.orchestration_data.get(KEY,{})
     sim,accepted=_simulacion_persistida_para_continuidad(entry,str(s.pk),holder)
     if accepted is None:raise ValueError('ACEPTACION_PERSONAL_SIMULACION_REQUERIDA')
-    state=leer_estado_funcional(s)
-    revision=state['revisionEstudio']['versionReferencia']
+    owner_source=alias_cotizacion()!='default'
+    if owner_source:
+        from .autoservicio import _estudio_publico_personal
+        study=_estudio_publico_personal(s,identity)
+        if study is None:raise ValueError('ESTUDIO_FIRMADO_PERSONAL_REQUERIDO')
+        revision=study['referenciaVersion']
+    else:
+        from .funcional import leer_estado_funcional
+        revision=leer_estado_funcional(s)['revisionEstudio']['versionReferencia']
     if (entry.get('motor')!='PROPIO_390_111_CFA' or entry.get('titularReferencia')!=holder
             or sim['versionCondiciones']!=context['versionCondiciones'] or sim['revisionReferencia']!=revision):
         raise ValueError('CONDICIONES_ACEPTADAS_NO_CORRESPONDEN_AL_EXPEDIENTE')
-    if oferta_custodia_activa():
+    if owner_source:
         with connections[alias_cotizacion()].cursor() as cursor:
-            cursor.execute('SELECT registro_id,actor,payload FROM public.credihoy_simulacion_aceptacion_publica '
+            cursor.execute('SELECT registro_id,actor,payload,decision FROM public.credihoy_simulacion_aceptacion_publica '
                 'WHERE solicitud_id=%s AND request_id=%s LIMIT 2',[str(s.pk),accepted['requestId']])
-            rows=[{'id':row[0],'actor':row[1],'payload':json.loads(row[2]) if type(row[2]) is str else row[2]}
+            rows=[{'id':row[0],'actor':row[1],'payload':json.loads(row[2]) if type(row[2]) is str else row[2],
+                'decision':json.loads(row[3]) if type(row[3]) is str else row[3]}
                 for row in cursor.fetchall()]
     else:
         rows=list(AuditLog.objects.filter(solicitud=s,event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR',
@@ -1246,7 +1253,20 @@ def comprobante_simulacion_aceptada(s,identity):
             or rows[0]['payload']!={'simulacionSha256':sim['sha256'],'aceptacionSha256':accepted['sha256'],
                 'autorizaStart':False,'autorizaDesembolso':False}):
         raise ValueError('ACEPTACION_PERSONAL_SIN_AUDITORIA_VINCULADA')
-    if oferta_custodia_activa():decision=state.get('decisionCustodiada')
+    if owner_source:
+        from .publico_institucional import project_study_decision
+        decision=rows[0]['decision']
+        try:
+            registered=datetime.fromisoformat(decision['registradoEn'])
+            if (decision['solicitudId']!=str(s.pk) or decision['revisionReferencia']!=revision
+                    or str(UUID(decision['operacionId']))!=decision['operacionId']
+                    or registered.utcoffset() is None or registered>timezone.now()
+                    or decision['sha256']!=hashlib.sha256(json.dumps({k:v for k,v in decision.items() if k!='sha256'},
+                        sort_keys=True,default=str).encode()).hexdigest()
+                    or project_study_decision(decision['resultado'])!=study['decisionPolitica']):
+                raise ValueError()
+        except (KeyError,TypeError,ValueError,AttributeError):
+            raise ValueError('DECISION_NO_CONCILIA_ESTUDIO_FIRMADO') from None
     else:
         from .elegibilidad import leer_decision_estudio
         decision=leer_decision_estudio(s)

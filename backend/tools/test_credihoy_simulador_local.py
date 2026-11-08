@@ -148,23 +148,32 @@ class OwnQuoteTests(TransactionTestCase):
         from credihoy_oa01_ensamblaje import personal_intake_acceptance_view_sql
         sim=self.calculate()
         self.operate(operacion='aceptar_simulacion',simulacionSha256=sim['sha256'],acepta=True)
-        other=Solicitud.objects.create(solicitante=self.s.solicitante,producto=wire.PRODUCTO)
+        self.detail.refresh_from_db()
+        other_holder=Solicitante.objects.create(tipo_identificacion='CC',numero_identificacion='0000000088',
+            primer_apellido='OTHER SYNTHETIC',celular='0000000000',email='other@example.test',fecha_expedicion='2000-01-01')
+        other=Solicitud.objects.create(solicitante=other_holder,producto=wire.PRODUCTO)
+        SolicitudConsumo.objects.create(solicitud=other,orchestration_data=deepcopy(self.detail.orchestration_data))
         AuditLog.objects.create(solicitud=other,event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR',
-            actor='titular:'+str(uuid4()),request_id=uuid4(),payload={'notExposed':'OTHER_CASE'})
+            actor='titular:'+str(uuid4()),request_id=uuid4(),payload={'simulacionSha256':sim['sha256'],'notExposed':'OTHER_CASE'})
         AuditLog.objects.create(solicitud=self.s,event='NOT_AN_ACCEPTANCE',actor='service',
             request_id=uuid4(),payload={'notExposed':'OTHER_EVENT'})
+        decision={'operacionId':str(uuid4()),'solicitudId':str(self.s.pk),'registradoEn':timezone.now().isoformat(),
+            'revisionReferencia':self.ref,'resultado':{'estado':'REQUIERE_CONSEJO_ADMINISTRACION',
+                'versionPolitica':'SYNTHETIC_ONLY','causalElegibilidad':[]}}
+        decision['sha256']=sha256(json.dumps(decision,sort_keys=True,default=str).encode()).hexdigest()
+        event=AuditLog.objects.create(solicitud=self.s,event='CREDIHOY_DECISION_DIGITAL_LOCAL',
+            actor='service',request_id=decision['operacionId'],payload=decision)
+        self.study['decisionPolitica']=wire.project_study_decision(decision['resultado'])
         with connection.cursor() as c:
             c.execute("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='credihoy_titular_cotizacion') THEN CREATE ROLE credihoy_titular_cotizacion NOLOGIN; END IF; END $$")
             c.execute('GRANT USAGE ON SCHEMA public TO credihoy_titular_cotizacion')
             c.execute('GRANT SELECT ON public.xcore_consumo_solicitudconsumo TO credihoy_titular_cotizacion')
             c.execute('REVOKE ALL ON public.utils_auditlog FROM credihoy_titular_cotizacion')
             c.execute(personal_intake_acceptance_view_sql([str(self.s.pk)]))
-        decision={'operacionId':str(uuid4()),'sha256':'d'*64,'revisionReferencia':self.ref,
-            'resultado':{'estado':'REQUIERE_CONSEJO_ADMINISTRACION'}}
-        state={'revisionEstudio':{'versionReferencia':self.ref},'decisionCustodiada':decision}
         try:
-            with transaction.atomic(),patch.object(funcional,'oferta_custodia_activa',return_value=True),\
-                    patch.object(funcional,'leer_estado_funcional',return_value=state):
+            with transaction.atomic(),patch.object(self.q,'alias_cotizacion',return_value='cotizacion'),\
+                    patch.object(self.q,'connections',{'cotizacion':connection}),\
+                    patch.object(funcional,'leer_estado_funcional',side_effect=AssertionError('FULL_ENGINE_FORBIDDEN')):
                 with connection.cursor() as c:
                     c.execute('SET LOCAL ROLE credihoy_titular_cotizacion')
                     c.execute('SELECT solicitud_id,payload FROM public.credihoy_simulacion_aceptacion_publica')
@@ -176,6 +185,15 @@ class OwnQuoteTests(TransactionTestCase):
                 self.assertEqual(proof['cuota'],sim['cuota']);self.assertFalse(proof['autorizaStart'])
                 with self.assertRaises(DatabaseError),transaction.atomic():
                     with connection.cursor() as c:c.execute('SELECT payload FROM public.utils_auditlog')
+            changed=deepcopy(decision);changed['resultado']['estado']='APROBADO'
+            changed['sha256']=sha256(json.dumps({k:v for k,v in changed.items() if k!='sha256'},
+                sort_keys=True,default=str).encode()).hexdigest()
+            event.payload=changed;event.save(update_fields=['payload'])
+            with transaction.atomic(),patch.object(self.q,'alias_cotizacion',return_value='cotizacion'),\
+                    patch.object(self.q,'connections',{'cotizacion':connection}):
+                with connection.cursor() as c:c.execute('SET LOCAL ROLE credihoy_titular_cotizacion')
+                with self.assertRaisesRegex(ValueError,'DECISION_NO_CONCILIA_ESTUDIO_FIRMADO'):
+                    self.q.comprobante_simulacion_aceptada(self.s,self.identity)
         finally:
             with connection.cursor() as c:c.execute('DROP VIEW public.credihoy_simulacion_aceptacion_publica')
 

@@ -44,7 +44,9 @@ test('continuidad acreditada separa estudio favorable de decision final sin inve
   continuidad:{version:'credihoy-continuidad-publica-v1',estudioFavorable:true,estadoRadicacion:'PREPARACION_PENDIENTE',
    decisionInstitucional:'PENDIENTE',firmaContractual:'PENDIENTE',radicacionHabilitada:false,firmaHabilitada:false}};
  const html=renderStudy(study);
- assert.match(html,/Estudio favorable/);assert.match(html,/Condiciones institucionales pendientes/);
+ assert.match(html,/Estudio digital aprobado/);assert.match(html,/ca-result ca-result--approved/);
+ assert.match(html,/lucide-badge-check/);assert.match(html,/Condiciones institucionales pendientes/);
+ assert.match(html,/Decision institucional<\/dt><dd class="ca-metric-text">Pendiente/);
  assert.doesNotMatch(html,/Revisar cuota y condiciones/);
  const ready=renderStudy(study,{cotizacionHabilitada:true,cotizar:()=>Promise.reject(new Error('NO_HTTP_IN_SSR'))});
  assert.match(ready,/Revisar cuota y condiciones/);

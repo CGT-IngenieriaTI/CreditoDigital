@@ -308,15 +308,16 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
               'Tu documento firmado esta conservado. La continuacion institucional sigue pendiente.':
               'Congente esta conciliando la evidencia documental. No necesitas repetir la firma.'}</p>
           </Aviso>}
-          <div className={'ca-result'+(institucion?' ca-result--approved':'')}>
-            <span className="ca-icon-tile">{institucion?<BadgeCheck size={27} aria-hidden="true"/>:<Clock3 size={27} aria-hidden="true"/>}</span>
-            <h3>{institucion?'Aprobacion institucional registrada':estudioFavorable?'Estudio favorable':'Resultado institucional por confirmar'}</h3>
+          <div className={'ca-result'+(institucion||estudioFavorable?' ca-result--approved':'')}>
+            <span className="ca-icon-tile">{institucion||estudioFavorable?<BadgeCheck size={27} aria-hidden="true"/>:<Clock3 size={27} aria-hidden="true"/>}</span>
+            <h3>{institucion?'Aprobacion institucional registrada':estudioFavorable?'Estudio digital aprobado':'Resultado institucional por confirmar'}</h3>
             <p>{institucion?'La formalizacion y la firma de tus documentos siguen pendientes.':estudioFavorable?
+              radicada?'Tu solicitud ya fue radicada y se encuentra en revision institucional. La aprobacion final del credito sigue pendiente.':
               'Las validaciones del estudio estan cumplidas. La radicacion y la decision final conservan sus propios requisitos.':
               'No hay una decision institucional acreditada disponible en esta consulta.'}</p>
           </div>
           {estudioFavorable&&puedeConsultarCuota&&<div className="ca-bottom-actions"><button className="btn btn-primary" type="button"
-            disabled={busy} onClick={()=>setVista('simulador')}><Calculator size={17} aria-hidden="true"/>Revisar cuota y condiciones</button></div>}
+            disabled={busy} onClick={()=>setVista(radicada?'estado':'simulador')}><ArrowRight size={17} aria-hidden="true"/>{radicada?'Ver seguimiento de mi solicitud':'Revisar cuota y condiciones'}</button></div>}
           <dl className="ca-metrics"><div><dt>Decision institucional</dt><dd className="ca-metric-text">{institucion?'Aprobada; formalizacion pendiente':estudioFavorable?'Pendiente':'Sin resultado acreditado'}</dd></div>
             <div><dt>Fecha de la decision</dt><dd>{institucion?fechaPublica(institucion.fechaDecision):'No disponible'}</dd></div></dl>
           {institucion&&<p className="ca-notice">{INCIDENCIAS[institucion.incidencias]}</p>}
@@ -325,7 +326,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
             <div className="ca-study-heading"><h3 className="ca-section-title">Estudio de tu solicitud</h3>
               <span>Version {s.estudio.version} - {fechaPublica(s.estudio.fechaEvaluacion)}</span></div>
             {s.estudio.decisionPolitica?<Aviso tono={estudioFavorable||s.estudio.decisionPolitica.estado==='APROBADO'?'success':s.estudio.decisionPolitica.estado==='RECHAZADO'?'error':'warning'}
-              titulo={estudioFavorable?'Estudio favorable':s.estudio.decisionPolitica.estado==='APROBADO'?'Aprobado por la politica de credito':s.estudio.decisionPolitica.estado==='RECHAZADO'?'Solicitud rechazada por la politica de credito':'Solicitud en revision'}>
+              titulo={estudioFavorable?'Estudio digital aprobado':s.estudio.decisionPolitica.estado==='APROBADO'?'Aprobado por la politica de credito':s.estudio.decisionPolitica.estado==='RECHAZADO'?'Solicitud rechazada por la politica de credito':'Solicitud en revision'}>
               {s.estudio.decisionPolitica.motivos.some(m=>m.codigo!=='REVISION_ESTAMENTO_INSTITUCIONAL')&&<ul>{s.estudio.decisionPolitica.motivos.filter(m=>m.codigo!=='REVISION_ESTAMENTO_INSTITUCIONAL').map((m,i)=><li key={i}>{motivoDecision(m.codigo,m.regla)}</li>)}</ul>}
               <p>La oferta contractual, la formalizacion y el registro institucional conservan sus validaciones pendientes.</p>
             </Aviso>:<Aviso tono="warning" titulo={s.estudio.decision==='REQUIERE_SUBSANACION'?'Hay requisitos por subsanar':'Estudio pendiente de revision'}>
@@ -363,7 +364,9 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
               </li>)}
             </ol>
           </div>}
-          <Pendientes items={s.pendientes}/><Aviso titulo="Para continuar">{s.siguientePaso}</Aviso>
+          {!radicada&&<Pendientes items={s.pendientes}/>}
+          <Aviso tono={radicada?'success':'neutral'} titulo={radicada?'Radicacion confirmada':'Para continuar'}>
+            {radicada?'Tu solicitud se encuentra en revision institucional. No necesitas radicarla nuevamente.':s.siguientePaso}</Aviso>
           {estudioFavorable&&!puedeConsultarCuota&&<Aviso titulo="Condiciones institucionales pendientes">La cuota institucional aun no esta disponible. La radicacion y la firma permanecen pendientes; tu estudio se conserva.</Aviso>}
           {s.estudio?.reglas.some(r=>r.codigo==='UNICO_FILA_9'&&r.estadoEvaluacion==='NO_CUMPLE')&&
             <div className="ca-bottom-actions"><a className="btn btn-outline-primary"

@@ -157,14 +157,14 @@ function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;
   </section>;
 }
 
-export function DocumentosAsociado({formalizacion}:{institucion?:InstitucionalPublica|null;formalizacion?:SolicitudPublica['formalizacionDocumental']}){
+export function DocumentosAsociado({formalizacion,staging}:{institucion?:InstitucionalPublica|null;formalizacion?:SolicitudPublica['formalizacionDocumental'];staging?:SolicitudPublica['formalizacionStaging']}){
   return <div className="ca-documents">
     <section className="ca-document-band" aria-labelledby="ca-document-title">
       <div className="ca-band-heading"><span className="ca-icon-tile"><FileCheck2 size={23} aria-hidden="true"/></span>
         <div><p className="ch-eyebrow">Documentos del canal</p><h3 id="ca-document-title">Documentos y firma electronica</h3></div></div>
       <dl className="ca-authorizations">
-        <div><dt>Documento contractual</dt><dd>{formalizacion?.documento??'Preparacion documental pendiente.'}</dd></div>
-        <div><dt>Firma electronica</dt><dd>{formalizacion?.firmaAcreditada?'Documento firmado y verificado.':formalizacion?'Validacion documental pendiente.':'No hay un documento contractual disponible para firmar.'}</dd></div>
+        <div><dt>Documento contractual</dt><dd>{formalizacion?.documento??staging?.documento??'Preparacion documental pendiente.'}</dd></div>
+        <div><dt>Firma electronica</dt><dd>{formalizacion?.firmaAcreditada?'Documento firmado y verificado.':staging?'Recorrido STAGING disponible. La firma productiva sigue pendiente.':formalizacion?'Validacion documental pendiente.':'No hay un documento contractual disponible para firmar.'}</dd></div>
       </dl>
       <p className="ca-notice">La formalizacion de COLO-FO.001 utiliza firma electronica. El pagare se gestiona por el canal institucional en su oportunidad.</p>
     </section>
@@ -460,8 +460,8 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
               <ExternalLink size={16} aria-hidden="true"/>Actualiza tus datos para continuar
             </a></div>}
         </>}
-        {s&&vista==='firma'&&<><Etiqueta tono={s.formalizacionDocumental?.firmaAcreditada?'success':'warning'}>{s.formalizacionDocumental?.firmaAcreditada?'Documento firmado y verificado':s.formalizacionDocumental?'Validacion documental pendiente':'Preparacion documental pendiente'}</Etiqueta>
-          <DocumentosAsociado formalizacion={s.formalizacionDocumental}/>
+        {s&&vista==='firma'&&<><Etiqueta tono={s.formalizacionDocumental?.firmaAcreditada?'success':'warning'}>{s.formalizacionDocumental?.firmaAcreditada?'Documento firmado y verificado':s.formalizacionStaging?'Documento disponible para revision STAGING':s.formalizacionDocumental?'Validacion documental pendiente':'Preparacion documental pendiente'}</Etiqueta>
+          <DocumentosAsociado formalizacion={s.formalizacionDocumental} staging={s.formalizacionStaging}/>
           {s.formalizacionStaging&&contractual&&<FirmaContractualStaging key={s.referencia} solicitud={s} operar={contractual}/>}
           {estudioFavorable&&puedeConsultarCuota&&!s.formalizacionDocumental&&<button className="btn btn-outline-primary" type="button"
             disabled={busy} onClick={()=>setVista('simulador')}><Calculator size={17} aria-hidden="true"/>Revisar cuota y condiciones</button>}</>}

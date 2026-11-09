@@ -289,6 +289,10 @@ class ContractualOTPTests(TransactionTestCase):
                 'codigo':'123456','comprobacionId':str(uuid4())}))
             self.assertTrue(p['otpVerificado']);self.assertFalse(p['firmaProductivaAcreditada'])
             self.assertFalse(p['autorizaDesembolso']);self.assertIsNone(p['firmado'])
+            audits=AuditLog.objects.count()
+            restored=wire.project_contractual(service.operar_contractual(self.identity,{**base,'accion':'contractual_consultar'}))
+            self.assertEqual(restored['documento']['pdfSha256'],self.pdf_sha)
+            self.assertTrue(restored['otpVerificado']);self.assertEqual(AuditLog.objects.count(),audits)
 
     def test_contractual_cohort_expiry_foreign_holder_and_tampered_pdf_fail_before_provider(self):
         from apps.xcore_consumo.services.credihoy_v2.unico import publico_institucional as wire

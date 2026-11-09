@@ -71,7 +71,7 @@ export function CredihoyAccesoAsociado({seguimiento}:{seguimiento?:(props:Seguim
           if(v!==generation.current)return;
           setSolicitudes(null);
           if(e instanceof AccesoPublicoError&&[401,403].includes(e.status))expirarSesion();
-          else setError('No pudimos actualizar tu solicitud. Tu sesion sigue activa; intenta consultar mas tarde.');
+          else setError('No pudimos consultar tu solicitud en este momento.');
         }}}
   }
   useEffect(()=>{

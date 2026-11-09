@@ -133,6 +133,30 @@ class ContractualStagingDocumentTests(TransactionTestCase):
                 forms.custodiar_colo001_staging(self.case.pk,actor=self.actor,fuente=self.source,
                     clave_idempotencia=str(uuid4()),preparacion_anterior=corrected_key)
 
+    def test_official_pdf_custody_preserves_v2_study_inputs_but_keeps_independent_integrity(self):
+        from apps.documentos import formularios_credihoy as forms
+        from apps.xcore_consumo.services.credihoy_v2.unico.funcional import huella_consumo_estudio
+        version='credihoy-estudio-tecnico-firmado-v2'
+        detail=SolicitudConsumo.objects.values().get(pk=self.detail.pk)
+        expected=huella_consumo_estudio(detail,version);old_version=huella_consumo_estudio(detail)
+        operation=str(uuid4())
+        with override_settings(CREDIHOY_AUTENTIC_STAGING_DOCUMENTAL=self.scope):
+            forms.custodiar_colo001_staging(self.case.pk,actor=self.actor,fuente=self.source,clave_idempotencia=operation)
+        updated=SolicitudConsumo.objects.values().get(pk=self.detail.pk)
+        self.assertEqual(huella_consumo_estudio(updated,version),expected)
+        self.assertNotEqual(huella_consumo_estudio(updated),old_version)
+        pdf,meta=forms.recuperar_formato(self.case.pk,actor=self.actor,operacion_id=operation)
+        self.assertEqual(sha256(pdf).hexdigest(),meta['pdfSha256'])
+        for field in ('form_data','core_data','selected_hc2_keys'):
+            altered=deepcopy(updated);altered[field]={'altered':True}
+            self.assertNotEqual(huella_consumo_estudio(altered,version),expected)
+        altered=deepcopy(updated);altered['orchestration_data']['evidence_not_downstream']={'altered':True}
+        self.assertNotEqual(huella_consumo_estudio(altered,version),expected)
+        self.detail.refresh_from_db();data=self.detail.orchestration_data
+        data['credihoy_pdf_oficiales_v1'][operation]['metadata']['pdfSha256']='0'*64
+        self.detail.orchestration_data=data;self.detail.save(update_fields=['orchestration_data'])
+        with self.assertRaises(ValueError):forms.recuperar_formato(self.case.pk,actor=self.actor,operacion_id=operation)
+
     def test_changed_financial_source_cannot_override_accepted_conditions(self):
         from apps.documentos import formularios_credihoy as forms
         for key,value in (('montoSolicitado','1'),('tasaNominalAnual','1'),('cuotaContractual','1')):

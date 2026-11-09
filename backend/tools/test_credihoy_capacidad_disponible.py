@@ -26,8 +26,10 @@ class AvailableCapacityTests(TestCase):
         offer=deepcopy(detail)
         offer['orchestration_data']['credihoy_ofertas_linix_v1']={'SYNTHETIC':'NATIVE-OFFER'}
         offer['orchestration_data']['credihoy_aceptaciones_oferta_v1']={'SYNTHETIC':'PERSONAL'}
+        offer['orchestration_data']['credihoy_pdf_oficiales_v1']={'SYNTHETIC':'ENCRYPTED_DOCUMENT_CUSTODY'}
         offer.update(updated_at='AFTER',estado='OFERTADA')
         self.assertEqual(huella_consumo_estudio(offer,version),original)
+        self.assertNotEqual(huella_consumo_estudio(offer),huella_consumo_estudio(detail))
         for field in ('id','solicitud_id','created_at','form_data','core_data','selected_hc2_keys'):
             altered=deepcopy(offer);altered[field]='ALTERED'
             self.assertNotEqual(huella_consumo_estudio(altered,version),original)

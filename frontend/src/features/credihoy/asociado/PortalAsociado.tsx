@@ -221,7 +221,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
   const radicada=s?.seguimientoRadicacion?.confirmada===true;
   const estudioFavorable=s?.estudio?.decisionPolitica?.continuidad?.estudioFavorable===true;
   const puedeConsultarCuota=Boolean(cotizacionHabilitada&&cotizar&&s?.procedencia?.origen==='FUENTE_OPERATIVA');
-  const editando=edicionBorrador&&!s?.envio;
+  const editando=solicitudes!==null&&edicionBorrador&&!s?.envio;
   useEffect(()=>{if(s?.envio)setEdicionBorrador(false);},[s?.envio]);
   useEffect(()=>{
     if(!inicioPersonal.current&&solicitudes?.length===0&&formularioBorrador&&!busy){
@@ -265,7 +265,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
             <select className="form-select" value={s?.referencia} disabled={busy} onChange={e=>setSeleccion(e.target.value)}>
               {solicitudes!.map(v=><option key={v.referencia} value={v.referencia}>{moneda(v.monto)} - {fechaPublica(v.fechaCreacion)}</option>)}</select></label>}
         </div>
-        {formularioBorrador&&!s?.envio&&vista==='estado'&&<button className="btn btn-primary" type="button" disabled={busy} onClick={()=>{setEdicionBorrador(true);setVista('solicitud');}}>
+        {formularioBorrador&&solicitudes!==null&&!s?.envio&&vista==='estado'&&<button className="btn btn-primary" type="button" disabled={busy} onClick={()=>{setEdicionBorrador(true);setVista('solicitud');}}>
           <UserRound size={17} aria-hidden="true"/>{s?'Crear o retomar mi borrador':'Solicitar mi CrediHoy'}</button>}
         {vista==='solicitud'&&editando&&formularioBorrador}
         {s?.procedencia&&!editando&&<p className="ca-notice" role="status">
@@ -276,8 +276,10 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
         {!seguimientoHabilitado&&<EstadoVacio titulo="Tu acceso esta listo" icono={ShieldCheck}>
           Tu identidad esta verificada. La consulta de solicitudes aun no esta habilitada en este canal.</EstadoVacio>}
         {busy&&<Cargando/>}
-        {seguimientoHabilitado&&solicitudes===null&&!busy&&<EstadoVacio titulo="Tu informacion no esta disponible" icono={Info}>
-          No pudimos confirmar tu informacion. Tus datos guardados no han cambiado.</EstadoVacio>}
+        {seguimientoHabilitado&&solicitudes===null&&!busy&&<EstadoVacio titulo="No pudimos consultar tu solicitud en este momento" icono={Info}>
+          Tus datos guardados no han cambiado.<br/>
+          <button className="btn btn-outline-primary" type="button" disabled={busy} onClick={actualizar}>
+            <RefreshCw size={17} aria-hidden="true"/>Reintentar consulta</button></EstadoVacio>}
         {solicitudes?.length===0&&vista!=='solicitud'&&<EstadoVacio titulo="Inicia tu solicitud CrediHoy" icono={Files}>
           {formularioBorrador?'Selecciona Solicitar mi CrediHoy para completar y guardar tu solicitud.':'Tu identidad esta verificada, pero el inicio de solicitudes no esta disponible en esta sesion. Actualiza el estado o contacta a Congente.'}</EstadoVacio>}
         {s&&vista==='estado'&&<div className="ca-dashboard">

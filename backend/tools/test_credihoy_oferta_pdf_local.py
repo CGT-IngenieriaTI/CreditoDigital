@@ -6,7 +6,7 @@ from io import BytesIO
 from unittest.mock import patch
 from uuid import uuid4
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase,override_settings
 from django.utils import timezone
 from pypdf import PdfReader
 from apps.documentos import formularios_credihoy as documents
@@ -18,6 +18,9 @@ from apps.xcore_consumo.models import SolicitudConsumo
 
 class OfertaPdfLocalTests(TestCase):
     def setUp(self):
+        import base64
+        crypto=override_settings(OTP_AES_KEY_B64=base64.b64encode(b'd'*32).decode())
+        crypto.enable();self.addCleanup(crypto.disable)
         self.actor=get_user_model().objects.create(username='synthetic-pdf',is_staff=True,is_superuser=True)
         holder=Solicitante.objects.create(tipo_identificacion='CC',numero_identificacion='0000000000',
             primer_apellido='SYNTHETIC',fecha_expedicion=date(2000,1,1))

@@ -49,6 +49,9 @@ class SolicitudesTitularView(InstitucionalView):
                 except wire.NoDisponible:continue
                 row['formalizacionStaging']={'ambiente':'STAGING','documento':'COLO-FO.001','version':'13',
                     'paginas':3,'disponibleHasta':scope['venceEn'],'firmaProductivaAcreditada':False}
+                if 'documentoPrueba' in scope:
+                    row['formalizacionStaging'].update(documento=scope['documentoPrueba']['codigo'],
+                        version=scope['documentoPrueba']['version'],paginas=scope['documentoPrueba']['paginas'])
         except Exception as error:
             registrar_rechazo_saneado(request,error,self.rid,started,'operacion')
             if isinstance(error,DatabaseError):raise wire.NoDisponible from None

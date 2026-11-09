@@ -347,9 +347,18 @@ def enviar_formato_custodiado(solicitud_id, *, actor, operacion_id, metadata,
     if titular is not None:
         from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import preparar_envio_autogestion,preparar_envio_contractual,CONTRACTUAL_SCOPE
         contractual=titular.get('_scopeContractual')==CONTRACTUAL_SCOPE
+        independent=document['codigo']=='PRUEBA-FIRMA-STAGING'
+        if independent:
+            from apps.xcore_consumo.services.credihoy_v2.unico.publico_institucional import alcance_contractual
+            scope=alcance_contractual(case.pk,titular)
+            if (not contractual or scope.get('documentoPrueba',{}).get('codigo')!=document['codigo']
+                    or scope['documentoOperacionId']!=str(operacion_id) or scope['pdfSha256']!=document['pdfSha256']
+                    or document.get('ambienteFirma')!='STAGING' or document.get('proposito')!='PRUEBA_INTEGRACION_AUTENTIC'
+                    or document.get('firmaProductivaAcreditada') is not False or document.get('autorizaDesembolso') is not False):
+                raise ValueError('PRUEBA_FIRMA_INDEPENDIENTE_NO_VINCULADA')
         if (not isinstance(registro,RegistroFirmasExpediente) or registro.alias!=alias
                 or str(registro.solicitud_id)!=str(case.pk) or registro.envio_id!=key
-                or registro.seccion!='journalFirma' or document['codigo']!=('COLO-FO.001' if contractual else 'COLO-FO.023')):
+                or registro.seccion!='journalFirma' or document['codigo']!=('PRUEBA-FIRMA-STAGING' if independent else 'COLO-FO.001' if contractual else 'COLO-FO.023')):
             raise ValueError('JOURNAL_PERSONAL_NO_VINCULADO')
         if contractual:
             if autoriza_firma is not True:raise ValueError('ACTO_PERSONAL_DE_FIRMA_REQUERIDO')
@@ -378,7 +387,7 @@ def enviar_formato_custodiado(solicitud_id, *, actor, operacion_id, metadata,
             'codigo':document['codigo'],'pdfSha256':document['pdfSha256'],
             'firmanteReferencia':sha256(metadata['docId'].encode()).hexdigest(),
             'fingerprint':request.fingerprint,'referenciaAutorizacion':referencia_autorizacion}
-        if proof is not None and document['codigo']=='COLO-FO.001':
+        if proof is not None and document['codigo'] in {'COLO-FO.001','PRUEBA-FIRMA-STAGING'}:
             binding.update(aceptacionContractualReferencia=proof['referencia'],
                 secureKeySha256=sha256(metadata['secureKey'].encode()).hexdigest())
         if document.get('ambienteFirma')=='STAGING':
@@ -622,19 +631,22 @@ def _custodiar_pdf(case,*,actor,titular,alias,actor_ref,key,pdf,meta,event):
     from apps.utils.models import AuditLog
     trial_code='CREDIHOY-SIMULACION-ENSAYO'
     if not connections[alias].in_atomic_block:raise ValueError('CUSTODIA_REQUIERE_TRANSACCION')
-    if meta['codigo']==trial_code:
+    if meta['codigo'] in {trial_code,'PRUEBA-FIRMA-STAGING'}:
         history=AuditLog.objects.using(alias).filter(solicitud=case,event=event,request_id=key)
         if history.count()>1:raise ValueError('CUSTODIA_DOCUMENTAL_DUPLICADA')
         if history.exists():
             entry=history.get()
             if entry.payload['metadata']!=meta or entry.actor!=actor_ref:
                 raise ValueError('IDEMPOTENCIA_DOCUMENTO_CONFLICTO')
-            recuperar_formato(case.pk,actor=actor,operacion_id=key)
+            if meta['codigo']==trial_code:recuperar_formato(case.pk,actor=actor,operacion_id=key)
+            else:
+                from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import _documento_contractual
+                _documento_contractual(case,key,historico=True)
             return {**meta,'operacionId':key}
         envelope={'solicitudId':str(case.pk),'operacionId':key,'metadata':meta,
             'pdfBase64':base64.b64encode(pdf).decode('ascii')}
         AuditLog.objects.using(alias).create(solicitud=case,event=event,request_id=key,actor=actor_ref,
-            payload={'codigo':trial_code,'version':meta['version'],'sha256':meta['pdfSha256'],
+            payload={'codigo':meta['codigo'],'version':meta['version'],'sha256':meta['pdfSha256'],
                 'metadata':meta,'contenidoCifrado':encrypt_text(json.dumps(envelope,sort_keys=True))})
         return {**meta,'operacionId':key}
     detail=SolicitudConsumo.objects.using(alias).select_for_update().get(solicitud=case)

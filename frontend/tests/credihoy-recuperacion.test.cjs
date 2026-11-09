@@ -9,7 +9,7 @@ m.require=target=>target.endsWith('.css')?{}:target.endsWith('PdfScrollViewer')?
  target.startsWith('.')?load(path.relative(root,path.resolve(path.dirname(file),target))):require(target);
 m._compile(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,
  target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX}}).outputText,file);
-const {EspacioAsociado,EstadoContractual}=m.exports;
+const {EspacioAsociado,EstadoContractual,FirmaContractualStaging}=m.exports;
 const props={nombre:'SYNTHETIC',busy:false,actualizar:()=>{},salir:()=>{},
  formularioBorrador:React.createElement('form',{'data-testid':'nuevo-borrador'},'SYNTHETIC_DRAFT')};
 test('fallo de lectura no ofrece crear solicitud y conserva reintento sin formulario',()=>{
@@ -46,4 +46,16 @@ test('recibo, conciliacion y rechazo tienen estados veraces sin autorizar reenvi
   const html=renderToStaticMarkup(React.createElement(EstadoContractual,{estado}));
   assert.match(html,text);assert.doesNotMatch(html,new RegExp(estado));
  }
+});
+
+test('documento independiente de una pagina no se presenta como COLO ni como aceptacion financiera',()=>{
+ const original=global.crypto;global.crypto=require('node:crypto').webcrypto;
+ try{
+  const html=renderToStaticMarkup(React.createElement(FirmaContractualStaging,{
+   solicitud:{referencia:'11111111-1111-4111-8111-111111111111',monto:'400000',plazoMeses:2,
+    formalizacionStaging:{documento:'PRUEBA-FIRMA-STAGING',paginas:1}},operar:()=>{throw Error('NO_NETWORK');}}));
+  assert.match(html,/Prueba independiente de firma/);assert.match(html,/Documento independiente, 1 pagina/);
+  assert.match(html,/No formaliza tu credito ni sustituye el envio anterior/);
+  assert.match(html,/Revisar documento de prueba/);assert.doesNotMatch(html,/COLO-FO\.001|Cuota aceptada|Plazo/);
+ }finally{global.crypto=original;}
 });

@@ -6,7 +6,7 @@ export type PeticionContractual={operacion:'autorizacion';solicitudId:string;cla
 export interface ContractualStaging {versionContrato:'credihoy-contractual-staging-v1';solicitudId:string;
   operacionFirmaId:string;ambiente:'STAGING';estado:string;pdfSha256:string;otpProveedor:'TWILIO_VERIFY';
   otpVerificado:boolean;firmaProductivaAcreditada:false;autorizaDesembolso:false;pendientes:string[];
-  documento:null|{solicitudId:string;operacionFirmaId:string;documentoOperacionId:string;codigo:'COLO-FO.001';
+  documento:null|{solicitudId:string;operacionFirmaId:string;documentoOperacionId:string;codigo:'COLO-FO.001'|'PRUEBA-FIRMA-STAGING';
     pdfSha256:string;pdfBase64:string;presentacion:string;proposito:'FIRMA_DOCUMENTO_CONTRACTUAL';ttl:600};
   firmado:null|{pdfBase64:string;pdfSha256:string}}
 export async function validarContractualStaging(raw:unknown,sid:string,key:string):Promise<ContractualStaging>{
@@ -24,7 +24,7 @@ export async function validarContractualStaging(raw:unknown,sid:string,key:strin
   if(p.documento!==null){const d=obj(p.documento);
     if(Object.keys(d).sort().join(',')!=='codigo,documentoOperacionId,operacionFirmaId,pdfBase64,pdfSha256,presentacion,proposito,solicitudId,ttl'
       ||d.solicitudId!==sid||d.operacionFirmaId!==key||!uuid.test(String(d.documentoOperacionId))
-      ||d.pdfSha256!==p.pdfSha256||d.codigo!=='COLO-FO.001'||d.proposito!=='FIRMA_DOCUMENTO_CONTRACTUAL'
+      ||d.pdfSha256!==p.pdfSha256||!['COLO-FO.001','PRUEBA-FIRMA-STAGING'].includes(String(d.codigo))||d.proposito!=='FIRMA_DOCUMENTO_CONTRACTUAL'
       ||d.ttl!==600||typeof d.presentacion!=='string'||!d.presentacion||d.presentacion.length>4096)fail();}
   if(p.firmado!==null&&Object.keys(obj(p.firmado)).sort().join(',')!=='pdfBase64,pdfSha256')fail();
   for(const value of [p.documento,p.firmado]){if(value===null)continue;const d=obj(value);
@@ -217,7 +217,7 @@ export interface SolicitudPublica { referencia:string; titulo:string; monto:stri
   institucional?:InstitucionalPublica|null; estudio?:EstudioPublico|null;
   seguimientoRadicacion?:SeguimientoRadicacion;
   historial?:EventoHistorial[];
-  formalizacionStaging?:{ambiente:'STAGING';documento:'COLO-FO.001';version:'13';paginas:3;disponibleHasta:string;firmaProductivaAcreditada:false};
+  formalizacionStaging?:{ambiente:'STAGING';documento:'COLO-FO.001'|'PRUEBA-FIRMA-STAGING';version:'13'|'1';paginas:number;disponibleHasta:string;firmaProductivaAcreditada:false};
   formalizacionDocumental?:{versionContrato:'credihoy-formalizacion-publica-v1';documento:'COLO-FO.001';
     estado:'DOCUMENTO_VERIFICADO'|'VALIDACION_PENDIENTE';firmaAcreditada:boolean;actualizadoAt:string;
     continuacionInstitucionalPendiente:true};
@@ -499,7 +499,8 @@ export function validarSolicitudPublica(raw:unknown,now=Date.now()):SolicitudPub
   let formalizacionStaging:SolicitudPublica['formalizacionStaging'];
   if(p.formalizacionStaging!==undefined){const f=obj(p.formalizacionStaging);
     if(Object.keys(f).sort().join(',')!=='ambiente,disponibleHasta,documento,firmaProductivaAcreditada,paginas,version'
-      ||f.ambiente!=='STAGING'||f.documento!=='COLO-FO.001'||f.version!=='13'||f.paginas!==3
+      ||f.ambiente!=='STAGING'||!((f.documento==='COLO-FO.001'&&f.version==='13'&&f.paginas===3)
+        ||(f.documento==='PRUEBA-FIRMA-STAGING'&&f.version==='1'&&Number.isInteger(f.paginas)&&Number(f.paginas)>=1&&Number(f.paginas)<=10))
       ||f.firmaProductivaAcreditada!==false||typeof f.disponibleHasta!=='string'
       ||!Number.isFinite(Date.parse(f.disponibleHasta)))fail();
     formalizacionStaging=f as unknown as NonNullable<SolicitudPublica['formalizacionStaging']>;}

@@ -486,8 +486,10 @@ def project_row(row):
         if row.get('formalizacionStaging') is not None:
             p=row['formalizacionStaging']
             if (type(p) is not dict or set(p)!={'ambiente','documento','version','paginas','disponibleHasta','firmaProductivaAcreditada'}
-                    or p['ambiente']!='STAGING' or p['documento']!='COLO-FO.001' or p['version']!='13'
-                    or p['paginas']!=3 or p['firmaProductivaAcreditada'] is not False
+                    or p['ambiente']!='STAGING'
+                    or not ((p['documento']=='COLO-FO.001' and p['version']=='13' and p['paginas']==3)
+                        or (p['documento']=='PRUEBA-FIRMA-STAGING' and p['version']=='1' and type(p['paginas']) is int and 1<=p['paginas']<=10))
+                    or p['firmaProductivaAcreditada'] is not False
                     or datetime.fromisoformat(p['disponibleHasta']).utcoffset() is None):raise ValueError
             clean['formalizacionStaging']=dict(p)
         if row.get('envio') is not None:
@@ -832,11 +834,16 @@ def alcance_contractual(solicitud_id,identity=None):
     from datetime import datetime,timezone
     scope=getattr(settings,'CREDIHOY_CONTRACTUAL_STAGING_ALCANCE',None)
     fields={'version','ambiente','solicitudId','titularReferencia','documentoOperacionId','pdfSha256','venceEn'}
-    if (type(scope) is not dict or set(scope)!=fields or scope['version']!='CREDIHOY_CONTRACTUAL_STAGING_V1'
+    if (type(scope) is not dict or set(scope) not in (fields,fields|{'documentoPrueba'}) or scope['version']!='CREDIHOY_CONTRACTUAL_STAGING_V1'
             or scope['ambiente']!='STAGING' or scope['solicitudId']!=str(solicitud_id)
             or any(type(scope[k]) is not str or not re.fullmatch('[a-f0-9]{64}',scope[k]) for k in ('titularReferencia','pdfSha256'))
             or any(str(UUID(scope[k]))!=scope[k] for k in ('solicitudId','documentoOperacionId'))):
         raise NoDisponible
+    if 'documentoPrueba' in scope:
+        trial=scope['documentoPrueba']
+        if (type(trial) is not dict or set(trial)!={'codigo','version','paginas'}
+                or trial['codigo']!='PRUEBA-FIRMA-STAGING' or trial['version']!='1'
+                or type(trial['paginas']) is not int or not 1<=trial['paginas']<=10):raise NoDisponible
     end=datetime.fromisoformat(scope['venceEn'])
     if end.utcoffset() is None or datetime.now(timezone.utc)>=end:raise NoDisponible
     if identity is not None:
@@ -932,7 +939,7 @@ def project_contractual(row):
         if (type(document) is not dict or set(document)!=keys or document['solicitudId']!=row['solicitudId']
                 or document['operacionFirmaId']!=row['operacionFirmaId'] or document['pdfSha256']!=row['pdfSha256']
                 or str(UUID(document['documentoOperacionId']))!=document['documentoOperacionId']
-                or document['codigo']!='COLO-FO.001' or document['proposito']!='FIRMA_DOCUMENTO_CONTRACTUAL'
+                or document['codigo'] not in {'COLO-FO.001','PRUEBA-FIRMA-STAGING'} or document['proposito']!='FIRMA_DOCUMENTO_CONTRACTUAL'
                 or document['ttl']!=600 or type(document['presentacion']) is not str
                 or not 1<=len(document['presentacion'])<=4096):raise NoDisponible
     for pdf in (document,row['firmado']):

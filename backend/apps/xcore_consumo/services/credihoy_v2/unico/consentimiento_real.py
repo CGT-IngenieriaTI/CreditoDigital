@@ -932,11 +932,24 @@ def _documento_contractual(case, key, *, detail=None, historico=False):
     from apps.integraciones.autentic.contratos import validar_pdf
     try:
         detail = detail if detail is not None else case.consumo_detail
-        stored = detail.orchestration_data['credihoy_pdf_oficiales_v1'][key]
+        independent = _auditorias_contractuales(case,detail._state.db,'credihoy_contractual_documento_prueba_custodiado',key)
+        if len(independent)>1:raise ValueError
+        stored = independent[0] if independent else detail.orchestration_data['credihoy_pdf_oficiales_v1'][key]
         meta = stored['metadata']
+        trial=meta['codigo']=='PRUEBA-FIRMA-STAGING'
+        if trial:
+            if (not independent or meta.get('proposito')!='PRUEBA_INTEGRACION_AUTENTIC'
+                    or meta.get('version')!='1' or meta.get('ambienteFirma')!='STAGING'
+                    or meta.get('firmaProductivaAcreditada') is not False or meta.get('autorizaDesembolso') is not False
+                    or meta.get('originalSha256')!=meta.get('pdfSha256') or not 1<=meta.get('paginas',0)<=10):raise ValueError
+            if not historico:
+                from .publico_institucional import alcance_contractual
+                scope=alcance_contractual(case.pk)
+                if (scope.get('documentoPrueba')!={'codigo':meta['codigo'],'version':'1','paginas':meta['paginas']}
+                        or scope['documentoOperacionId']!=key or scope['pdfSha256']!=meta['pdfSha256']):raise ValueError
         admitted = getattr(settings, 'CREDIHOY_OTP_CONTRACTUAL_DOCUMENTOS', ('COLO-FO.001',))
         if (meta['codigo'] == 'COLO-FO.023'
-                or (not historico and (meta['codigo'] not in admitted or meta['codigo'] not in FORMATOS
+                or (not historico and not trial and (meta['codigo'] not in admitted or meta['codigo'] not in FORMATOS
                     or meta['version'] != FORMATOS[meta['codigo']]['version']
                     or meta['originalSha256'] != FORMATOS[meta['codigo']]['sha256']))
                 or meta['solicitudId'] != str(case.pk)
@@ -947,9 +960,11 @@ def _documento_contractual(case, key, *, detail=None, historico=False):
         if (envelope['solicitudId'] != str(case.pk) or envelope['operacionId'] != key
                 or envelope['metadata'] != meta or validar_pdf(pdf) != meta['pdfSha256']):
             raise ValueError
-        audits = _auditorias_contractuales(case,detail._state.db,'CREDIHOY_PDF_OFICIAL_CUSTODIADO',key)
-        if len(audits) != 1 or audits[0] != {'codigo': meta['codigo'], 'version': meta['version'], 'sha256': meta['pdfSha256']}:
+        audits = independent if trial else _auditorias_contractuales(case,detail._state.db,'CREDIHOY_PDF_OFICIAL_CUSTODIADO',key)
+        expected={'codigo':meta['codigo'],'version':meta['version'],'sha256':meta['pdfSha256']}
+        if len(audits) != 1 or {k:audits[0].get(k) for k in expected}!=expected:
             raise ValueError
+        if not trial and audits[0]!=expected:raise ValueError
         return pdf, dict(meta)
     except Exception:
         raise ValueError('DOCUMENTO_CONTRACTUAL_NO_INTEGRO') from None
@@ -985,7 +1000,7 @@ def _firmante_contractual(case, identity, key, pdf, meta):
         signer = verificar_firmante(identity['_firmanteInstitucional'], identity, solicitud_id=case.pk,
             pdf_sha256=meta['pdfSha256'], clave=key, proposito=CONTRACTUAL_PURPOSE)
         fields = PdfReader(BytesIO(pdf)).get_fields() or {}
-        name = str(fields[MAPA[meta['codigo']]['nombre']]['/V'])
+        name = signer['names']+' '+signer['lastNames'] if meta['codigo']=='PRUEBA-FIRMA-STAGING' else str(fields[MAPA[meta['codigo']]['nombre']]['/V'])
         normalize = lambda value:' '.join(value.split()).casefold()
         surname = normalize(case.solicitante.primer_apellido)
         if (normalize(name) != normalize(signer['names']+' '+signer['lastNames']) or not surname
@@ -1348,7 +1363,7 @@ def operar_contractual(identity,action):
         pdf,meta=_documento_contractual(case,scope['documentoOperacionId'])
         _exigir_auditoria_contractual(case,alias,'presentado',key,{'vinculoSha256':_digest_contractual(record['vinculo'])})
         document={'solicitudId':sid,'operacionFirmaId':key,'documentoOperacionId':scope['documentoOperacionId'],
-            'codigo':'COLO-FO.001','pdfSha256':meta['pdfSha256'],'pdfBase64':base64.b64encode(pdf).decode(),
+            'codigo':meta['codigo'],'pdfSha256':meta['pdfSha256'],'pdfBase64':base64.b64encode(pdf).decode(),
             'presentacion':signing.dumps(record['vinculo'],key=signing_key(),salt=CONTRACTUAL_SALT),
             'proposito':CONTRACTUAL_PURPOSE,'ttl':CONTRACTUAL_TTL}
     history=case.consumo_detail.orchestration_data.get('credihoy_autentic_envios_v1',{})

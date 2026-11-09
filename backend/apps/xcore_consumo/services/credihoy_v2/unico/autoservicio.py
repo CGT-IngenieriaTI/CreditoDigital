@@ -433,6 +433,17 @@ def verificar_custodia_contractual_posterior(detail,body,registrado_en,case=None
             for key,stored in contracts.items():
                 record=_leer_contractual(case,key,detail=SimpleNamespace(orchestration_data=data))
                 binding=record['vinculo'];document=binding['documentoOperacionId']
+                if binding['codigo']=='PRUEBA-FIRMA-STAGING':
+                    from .consentimiento_real import _documento_contractual,_fecha_contractual,_exigir_auditoria_contractual,_digest_contractual
+                    _,meta=_documento_contractual(case,document,historico=True)
+                    _exigir_auditoria_contractual(case,case._state.db,'presentado',key,{'vinculoSha256':_digest_contractual(binding)})
+                    if (binding['versionDocumento']!='1' or binding['pdfSha256']!=meta['pdfSha256']
+                            or binding['originalSha256']!=meta['originalSha256']
+                            or meta.get('proposito')!='PRUEBA_INTEGRACION_AUTENTIC'
+                            or binding['proposito']!='FIRMA_DOCUMENTO_CONTRACTUAL'
+                            or binding['scope']!='solicitudes:firmarContrato'
+                            or _fecha_contractual(meta['preparadoEn'])<=cutoff):return False
+                    continue
                 if document not in removed:previous[key]=stored;continue
                 meta=history[document]['metadata']
                 if (binding['proposito']!='FIRMA_DOCUMENTO_CONTRACTUAL'

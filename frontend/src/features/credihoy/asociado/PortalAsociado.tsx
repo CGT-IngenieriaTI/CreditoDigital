@@ -107,9 +107,11 @@ export function EstadoContractual({estado}:{estado:string}){
   return <p role="status">{textos[estado]??'La formalizacion esta pendiente de revision. Consulta su estado sin repetir el envio.'}</p>;
 }
 
-function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;operar:(body:PeticionContractual)=>Promise<ContractualStaging>}){
+export function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;operar:(body:PeticionContractual)=>Promise<ContractualStaging>}){
+  const prueba=solicitud.formalizacionStaging?.documento==='PRUEBA-FIRMA-STAGING';
+  const paginas=solicitud.formalizacionStaging?.paginas??3;
+  const storage='credihoy_contractual_acto:'+solicitud.referencia+(prueba?':prueba':'');
   const [clave,setClave]=useState(()=>{
-    const storage='credihoy_contractual_acto:'+solicitud.referencia;
     try{const old=sessionStorage.getItem(storage);if(old&&/^[a-f0-9-]{36}$/.test(old))return old;
       const id=crypto.randomUUID();sessionStorage.setItem(storage,id);return id;}catch{return crypto.randomUUID();}});
   const [data,setData]=useState<ContractualStaging|null>(null),[documento,setDocumento]=useState<ContractualStaging['documento']>(null);
@@ -143,28 +145,28 @@ function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;
   function revisarNuevamente(){
     if(!revisionVencida||busy)return;
     const next=crypto.randomUUID();
-    try{sessionStorage.setItem('credihoy_contractual_acto:'+solicitud.referencia,next);}catch{return;}
+    try{sessionStorage.setItem(storage,next);}catch{return;}
     setClave(next);setData(null);setDocumento(null);setAcepta(false);setLeido(false);setConfirma(false);setCodigo('');setError('');setIncierta(false);
   }
   return <section className="ca-document-band" aria-label="Formalizacion contractual STAGING" aria-busy={busy}>
-    <h3>Formalizacion contractual</h3>
+    <h3>{prueba?'Prueba independiente de firma':'Formalizacion contractual'}</h3>
     <Aviso tono="warning" titulo="Validacion de firma en STAGING">
-      Este recorrido valida el servicio de firma en un ambiente de ensayo. No acredita formalizacion productiva,
-      aprobacion institucional ni autoriza desembolsos. El documento oficial no contiene marcas de prueba.
+      {prueba?'Este documento se firma exclusivamente para validar la integracion. No formaliza tu credito ni sustituye el envio anterior.':
+        'Este recorrido valida el servicio de firma en un ambiente de ensayo. No acredita formalizacion productiva, aprobacion institucional ni autoriza desembolsos. El documento oficial no contiene marcas de prueba.'}
     </Aviso>
-    <dl className="ca-authorizations"><div><dt>Documento</dt><dd>COLO-FO.001, version 13, tres paginas</dd></div>
-      <div><dt>Monto</dt><dd>{moneda(solicitud.monto)}</dd></div><div><dt>Plazo</dt><dd>{solicitud.plazoMeses} meses</dd></div>
-      <div><dt>Cuota aceptada</dt><dd>{solicitud.seguimientoRadicacion?.cuotaAceptada?moneda(solicitud.seguimientoRadicacion.cuotaAceptada):'Sin lectura acreditada'}</dd></div></dl>
+    <dl className="ca-authorizations"><div><dt>Documento</dt><dd>{prueba?`Documento independiente, ${paginas} pagina${paginas===1?'':'s'}`:'COLO-FO.001, version 13, tres paginas'}</dd></div>
+      {!prueba&&<><div><dt>Monto</dt><dd>{moneda(solicitud.monto)}</dd></div><div><dt>Plazo</dt><dd>{solicitud.plazoMeses} meses</dd></div>
+      <div><dt>Cuota aceptada</dt><dd>{solicitud.seguimientoRadicacion?.cuotaAceptada?moneda(solicitud.seguimientoRadicacion.cuotaAceptada):'Sin lectura acreditada'}</dd></div></>}</dl>
     {!data&&!incierta&&<button type="button" className="btn btn-primary" disabled={busy} onClick={()=>void enviar({accion:'contractual_presentar'})}>
-      <FileCheck2 size={17} aria-hidden="true"/>Revisar y firmar formalizacion</button>}
-    {url&&pdfFile&&<><PdfScrollViewer file={pdfFile} requiredPages={3} title="COLO-FO.001 v13" onLoad={()=>{setLeido(false);setAcepta(false);}} onReachEnd={()=>setLeido(true)}/>
+      <FileCheck2 size={17} aria-hidden="true"/>{prueba?'Revisar documento de prueba':'Revisar y firmar formalizacion'}</button>}
+    {url&&pdfFile&&<><PdfScrollViewer file={pdfFile} requiredPages={paginas} title={prueba?'Documento independiente de prueba':'COLO-FO.001 v13'} onLoad={()=>{setLeido(false);setAcepta(false);}} onReachEnd={()=>setLeido(true)}/>
       <p className="ca-muted" style={{overflowWrap:'anywhere'}}>SHA-256: {documento?.pdfSha256}</p>
-      <a className="btn btn-outline-primary" href={url} download="COLO-FO.001-v13.pdf"><ExternalLink size={16} aria-hidden="true"/>Abrir documento completo</a></>}
+      <a className="btn btn-outline-primary" href={url} download={prueba?'documento-prueba-independiente.pdf':'COLO-FO.001-v13.pdf'}><ExternalLink size={16} aria-hidden="true"/>Abrir documento completo</a></>}
     {revisionVencida&&<><p role="status">La aceptacion anterior se conserva. Para continuar se requiere una nueva revision y aceptacion personal del documento.</p>
       <button type="button" className="btn btn-primary" disabled={busy} onClick={revisarNuevamente}><RefreshCw size={17} aria-hidden="true"/>Revisar documento nuevamente</button></>}
     {estado==='PRESENTADA'&&!incierta&&!revisionVencida&&<>
       <label className="ca-check"><input type="checkbox" checked={acepta} disabled={busy||!leido} onChange={e=>setAcepta(e.target.checked)}/>
-        He revisado las tres paginas y acepto expresamente el contenido de este documento.</label>
+        {prueba?'He revisado el documento y acepto expresamente firmarlo como prueba independiente en STAGING.':'He revisado las tres paginas y acepto expresamente el contenido de este documento.'}</label>
       <button className="btn btn-primary" type="button" disabled={busy||!leido||!acepta||!documento} onClick={()=>void enviar({accion:'contractual_aceptar',presentacion:documento!.presentacion,acepta:true} as PeticionContractual)}>
         <CheckCircle2 size={17} aria-hidden="true"/>Aceptar documento</button></>}
     {otpCerrado&&<p role="status">El envio del codigo contractual no esta habilitado.</p>}
@@ -188,7 +190,7 @@ function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;
       'TRANSPORTE_FIRMA_STAGING_NO_HABILITADO','RESPUESTA_PROVEEDOR_INCIERTA_NO_REENVIAR',
       'FIRMA_RECHAZADA_DOCUMENTADA_NO_REENVIAR','FIRMA_NO_PROCESADA_CONCILIADA_NO_REENVIAR'].includes(p))?
       <p role="status">La evidencia se conserva. La verificacion documental independiente sigue pendiente; no se acredita una firma productiva.</p>:null}
-    {firmadoUrl&&<a className="btn btn-outline-primary" href={firmadoUrl} download="COLO-FO.001-recuperado-STAGING.pdf">
+    {firmadoUrl&&<a className="btn btn-outline-primary" href={firmadoUrl} download={prueba?'prueba-firma-recuperada-STAGING.pdf':'COLO-FO.001-recuperado-STAGING.pdf'}>
       <ExternalLink size={16} aria-hidden="true"/>Descargar documento recuperado en STAGING</a>}
     {error&&<p role="alert">{error}</p>}
   </section>;

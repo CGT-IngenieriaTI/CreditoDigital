@@ -13,6 +13,24 @@ from django.utils import timezone
 from apps.utils.models import AuditLog
 from apps.xcore_consumo.services.credihoy_v2.unico import cotizacion as q,publico_seguimiento as owner
 from tools.test_credihoy_simulador_local import OwnQuoteTests
+from tools.test_credihoy_titular import RadicationDelegationTests
+
+
+class NativeDelegationCompositionTests(RadicationDelegationTests):
+    def setUp(self):
+        super().setUp()
+        import ast
+        sys.path.insert(0,str(Path(__file__).resolve().parents[3]/'api_data_v1/tools'))
+        from credihoy_source_delivery import APP,git
+        from credihoy_personal_cd6 import add_personal_delegation
+        path='backend/apps/xcore_consumo/services/credihoy_v2/unico/publico_seguimiento.py'
+        old=git(APP,'show','dd1f2db^:'+path)
+        changed=add_personal_delegation(old).decode();namespace=owner.__dict__.copy()
+        for node in ast.parse(changed).body:
+            if isinstance(node,ast.FunctionDef) and node.name in {'consult','authorize'}:
+                exec(compile(ast.get_source_segment(changed,node),'native-delegation-composition','exec'),namespace)
+        for name in ('consult','authorize'):
+            mock=patch.object(owner,name,namespace[name]);mock.start();self.addCleanup(mock.stop)
 
 
 @override_settings(CREDIHOY_RADICACION_TITULAR_ENABLED=True,

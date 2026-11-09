@@ -79,7 +79,10 @@ export function validarCotizacionTitular(raw:unknown,sid:string,now=Date.now()):
       ||typeof s.seguroMensualPorcentaje!=='string'||!/^\d+(\.\d+)?$/.test(s.seguroMensualPorcentaje)||Number(s.seguroMensualPorcentaje)>100
       ||!Number.isInteger(s.plazoMeses)||Number(s.plazoMeses)<1||Number(s.plazoMeses)>48
       ||![s.calculadoEn,s.vigenteHasta].every(v=>typeof v==='string'&&/(?:Z|[+-]\d{2}:\d{2})$/.test(v)&&Number.isFinite(Date.parse(v)))
-      ||Date.parse(String(s.calculadoEn))>now||Date.parse(String(s.vigenteHasta))<=now
+      ||Date.parse(String(s.calculadoEn))>now||Date.parse(String(s.vigenteHasta))<=
+        (a.aceptada===true&&typeof a.fecha==='string'?Date.parse(a.fecha):now)
+      ||Date.parse(String(s.vigenteHasta))-Date.parse(String(s.calculadoEn))<60000
+      ||Date.parse(String(s.vigenteHasta))-Date.parse(String(s.calculadoEn))>86400000
       ||!Array.isArray(rows)||rows.length!==s.plazoMeses||Object.keys(a).sort().join(',')!=='aceptada,fecha'
       ||typeof a.aceptada!=='boolean'||(a.aceptada?(typeof a.fecha!=='string'||!Number.isFinite(Date.parse(a.fecha))
         ||Date.parse(a.fecha)>now||Date.parse(a.fecha)<Date.parse(String(s.calculadoEn))):a.fecha!==null))fail();

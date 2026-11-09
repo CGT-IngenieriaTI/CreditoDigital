@@ -620,7 +620,8 @@ export function OfertaTitular({sid,operar,horaServidor=Date.now,radicar}:{sid:st
   const guard=useRef(false),alive=useRef(true);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
   useEffect(()=>{const timer=setInterval(()=>setNow(horaServidor()),1000);return()=>clearInterval(timer);},[horaServidor]);
-  const offer=data?.oferta,sim=data?.simulacion,vencida=Boolean((offer||sim)&&Date.parse((offer||sim)!.vigenteHasta)<=now);
+  const offer=data?.oferta,sim=data?.simulacion,vencida=Boolean((offer||sim)&&Date.parse((offer||sim)!.vigenteHasta)<=now
+    &&!(sim&&data?.aceptacionSimulacion?.aceptada));
   useEffect(()=>{void run('consultar');},[sid]);
   async function run(op:'consultar'|'cotizar'|'aceptar'|'aceptar_simulacion'){
     if(guard.current)return;guard.current=true;setBusy(true);setError('');

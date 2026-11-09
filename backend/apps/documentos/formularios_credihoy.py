@@ -438,6 +438,8 @@ def enviar_formato_custodiado(solicitud_id, *, actor, operacion_id, metadata,
         if not isinstance(receipt,ReciboFirma):raise AutenticError('RECIBO_AUTENTIC_NO_RECUPERADO')
         encrypted=encrypt_text(json.dumps(asdict(receipt),sort_keys=True))
         state='FIRMA_REPORTADA_NO_VERIFICADA'
+    except AutenticError as error:
+        if error.codigo=='FIRMA_RECHAZADA_DOCUMENTADA':state='FALLO_DEFINITIVO_DOCUMENTADO'
     except Exception:
         pass
     try:
@@ -482,7 +484,7 @@ def recuperar_documento_autentic(solicitud_id, *, actor, envio_id, cliente, refe
     if entry.get('descargaCifrada'):
         envelope=json.loads(decrypt_text(entry['descargaCifrada']))
     else:
-        if entry['estado']!='FIRMA_REPORTADA_NO_VERIFICADA' or not entry.get('reciboCifrado'):
+        if entry['estado'] not in {'FIRMA_REPORTADA_NO_VERIFICADA','CONCILIADA_PROCESADA'} or not entry.get('reciboCifrado'):
             raise ValueError('ENVIO_INDETERMINADO_CONCILIAR')
         receipt=ReciboFirma(**json.loads(decrypt_text(entry['reciboCifrado'])))
         name=binding['codigo']+'.pdf'

@@ -77,7 +77,7 @@ def analizar_firma_documental(*,original,firmado,transaccion,documento_identidad
             result['reciboProveedor']=(receipt['transaccion']==transaccion and receipt['codigo_operacion']==1000
                 and receipt['estado']=='FIRMA_REPORTADA_NO_VERIFICADA'
                 and receipt['tipo_respuesta']=='reply_signature'
-                and contexto['estado']=='FIRMA_REPORTADA_NO_VERIFICADA'
+                and contexto['estado'] in {'FIRMA_REPORTADA_NO_VERIFICADA','CONCILIADA_PROCESADA'}
                 and reply.get('transactionId')==transaccion and reply.get('operationCode')==1000
                 and reply.get('processedDate')==receipt['fecha_proveedor']
                 and reply.get('type')=='reply_signature' and reply.get('urlDocuments')==receipt['url_documentos'])
@@ -206,7 +206,7 @@ def analizar_firma_electronica_contractual(*, original, firmado, contexto, acept
         if (any(v.utcoffset() is None for v in dates) or not
                 aceptacion.aceptado_en <= aceptacion.verificado_en <= prepared <= recovered <= now):
             raise ValueError('CRONOLOGIA_CONTRACTUAL_NO_ACREDITADA')
-        if (contexto['estado'] != 'FIRMA_REPORTADA_NO_VERIFICADA'
+        if (contexto['estado'] not in {'FIRMA_REPORTADA_NO_VERIFICADA','CONCILIADA_PROCESADA'}
                 or receipt.tipo_respuesta != 'reply_signature' or reply.get('type') != 'reply_signature'
                 or reply.get('operationCode') != 1000 or reply.get('transactionId') != receipt.transaccion
                 or reply.get('processedDate') != receipt.fecha_proveedor

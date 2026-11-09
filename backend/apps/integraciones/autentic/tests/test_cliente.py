@@ -523,10 +523,10 @@ class AutenticTests(unittest.TestCase):
             c.firmar(request, clave='caso', registro=self.registro, referencia_autorizacion='SOLO-DOBLE')
         self.assertFalse(s.calls)
 
-    def test_estado_no_inventa_endpoint(self):
+    def test_estado_sin_identificador_no_inventa_endpoint_o_identificador(self):
         c, s = self.client()
-        with self.assertRaisesRegex(AutenticError, 'CONSULTA_ESTADO_NO_DOCUMENTADA'):
-            c.consultar_estado('ID-SINTETICO')
+        with self.assertRaisesRegex(AutenticError, 'TRANSACTION_ID_PROVEEDOR_REQUERIDO'):
+            c.consultar_estado(None)
         self.assertFalse(s.calls)
 
     def test_zip_integridad_rutas_y_nombre(self):

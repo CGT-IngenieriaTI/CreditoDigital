@@ -1382,7 +1382,9 @@ def operar_contractual(identity,action):
             entry=case.consumo_detail.orchestration_data['credihoy_autentic_envios_v1'][key]
             if entry.get('vinculo',{}).get('ambienteFirma')!='STAGING':raise ValueError('ENVIO_CONTRACTUAL_DE_OTRO_AMBIENTE')
             if not entry.get('reciboCifrado'):
-                pending=['RESPUESTA_PROVEEDOR_INCIERTA_NO_REENVIAR']
+                pending=[{'FALLO_DEFINITIVO_DOCUMENTADO':'FIRMA_RECHAZADA_DOCUMENTADA_NO_REENVIAR',
+                    'CONCILIADA_NO_PROCESADA':'FIRMA_NO_PROCESADA_CONCILIADA_NO_REENVIAR'}.get(
+                        entry['estado'],'RESPUESTA_PROVEEDOR_INCIERTA_NO_REENVIAR')]
             else:
                 pdf,download=recuperar_documento_autentic(sid,actor=None,titular=identity,envio_id=key,
                     cliente=client,referencia_autorizacion=reference)

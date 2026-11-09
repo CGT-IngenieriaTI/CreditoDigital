@@ -16,8 +16,9 @@ from urllib.parse import urlsplit
 import requests
 
 from .contratos import (AutenticError, ConfiguracionDEV, ConfiguracionSTAGING, ConfiguracionProduccion, SolicitudFirma,
-                        TOKEN_URL, preparar_certificacion, texto, validar_pdf)
+                        TOKEN_URL, preparar_certificacion, preparar_consulta, texto, validar_pdf)
 from .evidencia import EvidenciaPDF, MAX_ZIP, verificar_zip
+from .diagnostico_http import causa_segura, excepcion_redactada, correlacion_redactada
 
 
 def _texto_url(value):
@@ -52,7 +53,7 @@ class ReciboFirma:
             date = respuesta['processedDate']
             if not ('T' in date or ' ' in date):
                 raise ValueError
-            datetime.fromisoformat(date)
+            datetime.fromisoformat(date.replace('Z','+00:00'))
             url = urlsplit(respuesta['urlDocuments'])
             if (url.scheme != 'https' or not url.hostname or url.username or url.password
                     or url.fragment or url.port not in (None, 443)):
@@ -65,8 +66,8 @@ class ReciboFirma:
                 respuesta_original=original, ambiente=ambiente)
             receipt.validar_recuperacion(ambiente)
             return receipt
-        except (KeyError, ValueError, TypeError, AttributeError, AutenticError):
-            raise AutenticError('FIRMA_RESPUESTA_NO_CERTIFICADA') from None
+        except (KeyError, ValueError, TypeError, AttributeError, AutenticError) as exc:
+            raise AutenticError('FIRMA_RESPUESTA_NO_CERTIFICADA') from causa_segura(exc)
 
     def validar_recuperacion(self, ambiente):
         if (self.ambiente != ambiente or ambiente not in {'DEV', 'PRODUCCION'}
@@ -99,6 +100,17 @@ def _constante_invalida(_):
     raise ValueError
 
 
+@dataclass(frozen=True)
+class ConsultaFirma:
+    transaccion: str = field(repr=False)
+    http: int
+    estado: str
+    respuesta: dict = field(repr=False)
+    ambiente: str = 'DEV'
+    autoriza_reenvio: bool = field(default=False, init=False)
+    firma_acreditada: bool = field(default=False, init=False)
+
+
 class AutenticDEVClient:
     def __init__(self, config, *, session=None, reloj=time.monotonic):
         if not isinstance(config, ConfiguracionDEV):
@@ -112,10 +124,15 @@ class AutenticDEVClient:
         self.auditoria_token = {'peticiones': 0, 'http': None, 'tiempoRespuestaMs': None}
         self.auditoria_firma = {'peticiones': 0, 'http': None, 'tiempoRespuestaMs': None, 'codigo': None}
         self.auditoria_descarga={}
+        self.auditoria_consulta={'peticiones':0,'http':None,'tiempoRespuestaMs':None}
         self._diagnosticos_http=[]
         self._evento_http=None
         self._excluir_diagnostico=()
         self._url_recuperacion_en_curso = None
+        self._contexto_operacion={}
+        self._inicio_http=None
+        self._recibo_validado=None
+        self._fallo_documentado_transaccion=''
 
     def close(self):
         self._token = None
@@ -124,16 +141,25 @@ class AutenticDEVClient:
         self.session.close()
         self._diagnosticos_http.clear()
         self._excluir_diagnostico=()
+        self._contexto_operacion={}
+        self._recibo_validado=None
+        self._fallo_documentado_transaccion=''
 
     def diagnostico_cifrado(self,cifrar,*,solicitud_id,operacion_id):
-        return cifrar(json.dumps({'version':'AUTENTIC_HTTP_REDACTADO_V1',
+        from dataclasses import asdict
+        value={'version':'AUTENTIC_HTTP_REDACTADO_V1',
             'solicitudId':str(solicitud_id),'operacionId':str(operacion_id),
-            'eventos':self._diagnosticos_http},sort_keys=True))
+            'contexto':self._contexto_operacion,'eventos':self._diagnosticos_http}
+        if self._recibo_validado is not None:
+            value['reciboValidadoRecuperable']=asdict(self._recibo_validado)
+        return cifrar(json.dumps(value,sort_keys=True))
 
     def _diagnostico(self,raw=b'',*,completo=True,codigo=None):
         from .diagnostico_http import cuerpo_redactado
         if self._evento_http is not None:
-            self._diagnosticos_http.append({**self._evento_http,'codigoLocal':codigo,
+            duration=round((time.monotonic()-self._inicio_http)*1000) if self._inicio_http is not None else None
+            self._diagnosticos_http.append({**self._evento_http,**self._contexto_operacion,
+                'duracionMs':duration,'codigoLocal':codigo,
                 'cuerpo':cuerpo_redactado(raw,completo=completo,excluir=(self.config.client_id,
                     self.config.client_secret,self._token or '',*self._excluir_diagnostico))})
             self._diagnosticos_http=self._diagnosticos_http[-8:]
@@ -166,25 +192,35 @@ class AutenticDEVClient:
             headers["Authorization"] = "Bearer " + self._token
         token_request = method == 'POST' and url == TOKEN_URL
         signing_request = method == 'POST' and url == self.config.base_url + '/v2/signature/'
-        operation='TOKEN' if token_request else 'FIRMA' if signing_request else 'CERTIFICACION' if method=='POST' else 'DESCARGA'
+        consult_request = method == 'POST' and url == self.config.base_url + '/v2/consult/'
+        operation='TOKEN' if token_request else 'FIRMA' if signing_request else 'CONSULTA' if consult_request else 'CERTIFICACION' if method=='POST' else 'DESCARGA'
         self._evento_http={'operacion':operation,'fecha':datetime.now(timezone.utc).isoformat(),
-            'referenciaLocal':str(uuid4()),'http':None}
+            'referenciaLocal':str(uuid4()),'http':None,'respuestaHttpRecibida':False,
+            'timeoutConexion':self.config.timeout[0],'timeoutLectura':self.config.timeout[1]}
         self._excluir_diagnostico=tuple(v for v in (payload or {}).get('metadata',{}).values() if type(v) is str)
         inicio = time.monotonic()
+        self._inicio_http=inicio
         if token_request:
             self.auditoria_token['peticiones'] += 1
         if signing_request:
             self.auditoria_firma['peticiones'] += 1
+        if consult_request:
+            self.auditoria_consulta['peticiones'] += 1
         try:
             response = self.session.request(method, url, json=payload, headers=headers,
                                             timeout=self.config.timeout, verify=True,
                                             allow_redirects=False, stream=True)
             try:
                 self._evento_http['http']=response.status_code
+                self._evento_http['respuestaHttpRecibida']=True
+                self._evento_http['correlacion']=correlacion_redactada(response.headers,
+                    excluir=(self.config.client_id,self.config.client_secret,self._token or '',*self._excluir_diagnostico))
                 if token_request:
                     self.auditoria_token['http'] = response.status_code
                 if signing_request:
                     self.auditoria_firma['http'] = response.status_code
+                if consult_request:
+                    self.auditoria_consulta['http'] = response.status_code
                 if response.status_code not in estados:
                     from .diagnostico_http import MAX_ERROR
                     content=bytearray();complete=True
@@ -195,12 +231,16 @@ class AutenticDEVClient:
                             if len(block)>remaining:complete=False;break
                     except requests.RequestException:complete=False
                     self._diagnostico(bytes(content),completo=complete,codigo='HTTP_NO_EXITOSO')
+                    if signing_request and complete and response.status_code==500:
+                        self._exigir_error_firma_documentado(bytes(content))
                 if response.status_code in (401, 403):
                     self._token = None
                     self._vence = 0
                     raise AutenticError("AUTENTICACION_RECHAZADA")
                 if response.status_code not in estados:
                     raise AutenticError("HTTP_NO_EXITOSO")
+                if consult_request and response.status_code==404:
+                    return b''
                 if response.headers.get('Content-Type', '').split(';')[0].strip().lower() != mime:
                     self._diagnostico(completo=False,codigo='RESPUESTA_INVALIDA')
                     raise AutenticError("RESPUESTA_INVALIDA")
@@ -219,17 +259,21 @@ class AutenticDEVClient:
                 return bytes(content)
             finally:
                 response.close()
-        except requests.Timeout:
+        except requests.Timeout as exc:
+            self._evento_http['excepcion']=excepcion_redactada(exc,http=self._evento_http['http'])
             self._diagnostico(completo=False,codigo='TIMEOUT_SIN_REINTENTO')
-            raise AutenticError("TIMEOUT_SIN_REINTENTO") from None
-        except requests.RequestException:
+            raise AutenticError("TIMEOUT_SIN_REINTENTO") from causa_segura(exc)
+        except requests.RequestException as exc:
+            self._evento_http['excepcion']=excepcion_redactada(exc,http=self._evento_http['http'])
             self._diagnostico(completo=False,codigo='RED_SIN_REINTENTO')
-            raise AutenticError("RED_SIN_REINTENTO") from None
+            raise AutenticError("RED_SIN_REINTENTO") from causa_segura(exc)
         finally:
             if token_request:
                 self.auditoria_token['tiempoRespuestaMs'] = round((time.monotonic() - inicio) * 1000)
             if signing_request:
                 self.auditoria_firma['tiempoRespuestaMs'] = round((time.monotonic() - inicio) * 1000)
+            if consult_request:
+                self.auditoria_consulta['tiempoRespuestaMs'] = round((time.monotonic() - inicio) * 1000)
 
     def _json(self, url, payload, *, bearer=False, limite=1_000_000, estados=(200,)):
         raw = self._request("POST", url, payload=payload, bearer=bearer, limite=limite, estados=estados)
@@ -239,9 +283,29 @@ class AutenticDEVClient:
                 raise ValueError
             if url!=TOKEN_URL:self._diagnostico(raw[:32768],completo=len(raw)<=32768)
             return result
-        except (ValueError, TypeError, UnicodeError, RecursionError):
+        except (ValueError, TypeError, UnicodeError, RecursionError) as exc:
+            self._evento_http['excepcion']={'tipos':[type(exc).__name__],'fase':'CONTRATO_RESPUESTA',
+                'respuestaHttpRecibida':True,'http':self._evento_http['http']}
             self._diagnostico(raw[:32768],completo=len(raw)<=32768,codigo='RESPUESTA_INVALIDA')
-            raise AutenticError("RESPUESTA_INVALIDA") from None
+            raise AutenticError("RESPUESTA_INVALIDA") from causa_segura(exc)
+
+    def _exigir_error_firma_documentado(self, raw):
+        try:
+            value=json.loads(raw,object_pairs_hook=_pares_unicos,parse_constant=_constante_invalida)
+            if (type(value) is not dict or type(value.get('operationCode')) is not int
+                    or value['operationCode']!=2000 or not texto(value.get('operationMsg'))
+                    or value.get('type') not in {'reply','reply_signature'}
+                    or not texto(value.get('transactionId')) or not texto(value.get('processedDate'))):
+                return
+            preparar_consulta(value['transactionId'])
+            datetime.fromisoformat(value['processedDate'].replace('Z','+00:00'))
+        except (TypeError,ValueError,UnicodeError,AutenticError,RecursionError):
+            return
+        from hashlib import sha256
+        self._fallo_documentado_transaccion=value['transactionId']
+        self.auditoria_firma['falloDocumentado']={'transactionIdSha256':sha256(value['transactionId'].encode()).hexdigest(),
+            'operationCode':2000,'processedDate':value['processedDate']}
+        raise AutenticError('FIRMA_RECHAZADA_DOCUMENTADA')
 
     def autenticar(self):
         if self.config.solo_recuperacion:
@@ -289,7 +353,10 @@ class AutenticDEVClient:
         except (KeyError, TypeError, ValueError):
             raise AutenticError("SOLICITUD_FIRMA_INVALIDA") from None
         state = registro.preparar(clave, self._huella_ambiente(solicitud.fingerprint))
-        if state.estado == "FIRMA_REPORTADA_NO_VERIFICADA":
+        from hashlib import sha256
+        self._contexto_operacion={'operacionReferenciaSha256':sha256(clave.encode()).hexdigest(),
+            'fingerprint':self._huella_ambiente(solicitud.fingerprint),'ambiente':self.config.ambiente}
+        if state.estado in {"FIRMA_REPORTADA_NO_VERIFICADA","CONCILIADA_PROCESADA"}:
             if getattr(registro, 'custodia_recibos', False):
                 receipt = registro.recuperar_recibo(clave)
                 if receipt is not None:
@@ -303,23 +370,54 @@ class AutenticDEVClient:
         receipt = None
         try:
             p = self._json(self.config.base_url + "/v2/signature/", checked.payload, bearer=True, estados=(200, 201))
+            self._exigir_error_firma_documentado(json.dumps(p).encode())
             receipt = ReciboFirma.desde_respuesta(p, self.config.ambiente)
+            self._recibo_validado=receipt
             if getattr(registro, 'custodia_recibos', False):
                 registro.terminar(clave, 'FIRMA_REPORTADA_NO_VERIFICADA', receipt.transaccion, recibo=receipt)
             else:
                 registro.terminar(clave, 'FIRMA_REPORTADA_NO_VERIFICADA', receipt.transaccion)
         except Exception as exc:
             self.auditoria_firma['codigo'] = exc.codigo if isinstance(exc, AutenticError) else 'FALLO_INTERNO_DESPUES_DE_RESERVA'
+            if self._evento_http is not None and 'excepcion' not in self._evento_http:
+                self._evento_http['excepcion']=excepcion_redactada(exc,http=self._evento_http['http'])
+                self._evento_http['excepcion']['fase']='CONTRATO_FIRMA' if receipt is None else 'CUSTODIA_RECIBO'
+                if self._diagnosticos_http and self._diagnosticos_http[-1]['referenciaLocal']==self._evento_http['referenciaLocal']:
+                    self._diagnosticos_http[-1]['excepcion']=self._evento_http['excepcion']
+                else:
+                    self._diagnostico(completo=False,codigo=self.auditoria_firma['codigo'])
             try:
-                registro.terminar(clave, "INDETERMINADA", receipt.transaccion if receipt else '')
+                documented=isinstance(exc,AutenticError) and exc.codigo=='FIRMA_RECHAZADA_DOCUMENTADA'
+                transaction=receipt.transaccion if receipt else self._fallo_documentado_transaccion
+                registro.terminar(clave, "FALLO_DEFINITIVO_DOCUMENTADO" if documented else "INDETERMINADA", transaction)
             except Exception:
                 # A failed commit is uncertain too; never reopen ENVIANDO.
                 pass
-            raise AutenticError("ENVIO_INDETERMINADO_NO_REPETIR") from None
+            code='FIRMA_RECHAZADA_DOCUMENTADA' if isinstance(exc,AutenticError) and exc.codigo=='FIRMA_RECHAZADA_DOCUMENTADA' else 'ENVIO_INDETERMINADO_NO_REPETIR'
+            raise AutenticError(code) from causa_segura(exc)
         return receipt
 
     def consultar_estado(self, transaccion):
-        raise AutenticError("CONSULTA_ESTADO_NO_DOCUMENTADA")
+        payload=preparar_consulta(transaccion)
+        if self.config.solo_recuperacion:
+            raise AutenticError('CONSULTA_NO_HABILITADA_EN_PERFIL_SOLO_DESCARGA')
+        from hashlib import sha256
+        self._contexto_operacion={'transaccionReferenciaSha256':sha256(transaccion.encode()).hexdigest(),'ambiente':self.config.ambiente}
+        raw=self._request('POST',self.config.base_url+'/v2/consult/',payload=payload,bearer=True,estados=(200,404))
+        http=self.auditoria_consulta['http']
+        if http==404:
+            self._diagnostico(raw[:32768],completo=len(raw)<=32768,codigo='TRANSACCION_NO_ENCONTRADA_NO_AUTORIZA_REENVIO')
+            return ConsultaFirma(transaccion,404,'NO_ENCONTRADA_NO_AUTORIZA_REENVIO',{},self.config.ambiente)
+        try:
+            result=json.loads(raw,object_pairs_hook=_pares_unicos,parse_constant=_constante_invalida)
+            if (type(result) is not dict or 'transactionId' in result and result['transactionId']!=transaccion):
+                raise ValueError
+        except (ValueError,TypeError,UnicodeError,RecursionError) as exc:
+            self._diagnostico(raw[:32768],completo=len(raw)<=32768,codigo='CONTRATO_CONSULTA_NO_ACREDITADO')
+            raise AutenticError('CONTRATO_CONSULTA_NO_ACREDITADO') from causa_segura(exc)
+        self._diagnostico(raw[:32768],completo=len(raw)<=32768)
+        # The published consult operation specifies no response schema or state enum.
+        return ConsultaFirma(transaccion,200,'RESPUESTA_RECIBIDA_NO_CONCILIADA',result,self.config.ambiente)
 
     def recuperar_documentos(self, recibo, nombres_esperados, *, referencia_autorizacion):
         self.auditoria_descarga = {}
@@ -382,9 +480,12 @@ class AutenticDEVClient:
                 raise AutenticError("CERTIFICACION_NO_DISPONIBLE")
             content = base64.b64decode(p['certificationContent'], validate=True)
             evidence = EvidenciaPDF(validar_pdf(content), content)
-        except Exception:
-            registro.terminar(clave, 'INDETERMINADA', transaccion)
-            raise AutenticError("CERTIFICACION_INDETERMINADA_NO_REPETIR") from None
+        except Exception as exc:
+            try:
+                registro.terminar(clave, 'INDETERMINADA', transaccion)
+            except Exception:
+                pass
+            raise AutenticError("CERTIFICACION_INDETERMINADA_NO_REPETIR") from causa_segura(exc)
         registro.terminar(clave, 'CERTIFICACION_RECUPERADA_NO_VERIFICADA', transaccion)
         return evidence
 

@@ -9,7 +9,7 @@ m.require=target=>target.endsWith('.css')?{}:target.endsWith('PdfScrollViewer')?
  target.startsWith('.')?load(path.relative(root,path.resolve(path.dirname(file),target))):require(target);
 m._compile(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,
  target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX}}).outputText,file);
-const {EspacioAsociado}=m.exports;
+const {EspacioAsociado,EstadoContractual}=m.exports;
 const props={nombre:'SYNTHETIC',busy:false,actualizar:()=>{},salir:()=>{},
  formularioBorrador:React.createElement('form',{'data-testid':'nuevo-borrador'},'SYNTHETIC_DRAFT')};
 test('fallo de lectura no ofrece crear solicitud y conserva reintento sin formulario',()=>{
@@ -25,4 +25,25 @@ test('solo una lista vacia acreditada ofrece iniciar solicitud',()=>{
 test('carga pendiente no muestra error ni inicio de otra solicitud',()=>{
  const html=renderToStaticMarkup(React.createElement(EspacioAsociado,{...props,solicitudes:null,busy:true}));
  assert.doesNotMatch(html,/Solicitar mi CrediHoy|Reintentar consulta|SYNTHETIC_DRAFT/);
+});
+
+test('firma incierta no se presenta como OTP o documento firmado y no muestra codigos internos',()=>{
+ for(const estado of ['ENVIANDO','INDETERMINADA']){
+  const html=renderToStaticMarkup(React.createElement(EstadoContractual,{estado}));
+  assert.match(html,/confirmando|pendiente de confirmacion/);
+  assert.match(html,/No vuelvas a firmar ni solicites otro codigo/);
+  assert.doesNotMatch(html,/Codigo contractual verificado|documento firmado|INDETERMINADA|ENVIANDO/);
+ }
+});
+
+test('recibo, conciliacion y rechazo tienen estados veraces sin autorizar reenvio automatico',()=>{
+ for(const [estado,text] of [['FIRMA_REPORTADA_NO_VERIFICADA',/evidencia aun deben verificarse/],
+   ['CONCILIADA_PROCESADA',/verificacion documental siguen pendientes/],
+   ['CONCILIADA_NO_PROCESADA',/nuevo acto personal/],
+   ['FALLO_DEFINITIVO_DOCUMENTADO',/revisar el resultado antes de otro intento/],
+   ['OTP_VALIDADA',/firma aun requiere tu confirmacion personal/],
+   ['NEW_PRIVATE_DIAGNOSTIC',/Consulta su estado sin repetir el envio/]]){
+  const html=renderToStaticMarkup(React.createElement(EstadoContractual,{estado}));
+  assert.match(html,text);assert.doesNotMatch(html,new RegExp(estado));
+ }
 });

@@ -219,6 +219,48 @@ class ContractRecoveryTests(TransactionTestCase):
         self.assertFalse(result['firmaAcreditada'])
         self.assertEqual(result['START'],0)
 
+    def test_reconciled_receipt_reaches_existing_verifier_without_promoting_unsigned_pdf(self):
+        self.entry['estado']='CONCILIADA_PROCESADA'
+        self.contract()
+        result=self.recover()
+        self.assertEqual(result['estado'],'PENDIENTE_VERIFICACION')
+        self.assertFalse(result['firmaAcreditada'])
+        self.assertEqual(result['START'],0)
+        self.detail.refresh_from_db()
+        self.assertEqual(self.detail.orchestration_data['credihoy_autentic_envios_v1'][self.key]['estado'],'CONCILIADA_PROCESADA')
+
+    def test_native_reconciliation_downloads_existing_receipt_once_without_signature_post(self):
+        from io import BytesIO
+        from zipfile import ZipFile
+        from ..cliente import AutenticDEVClient,ReciboFirma
+        from ..contratos import ConfiguracionDEV
+        from ..operaciones import RegistroFirmasExpediente
+        from .test_cliente import Session,Response
+        from apps.documentos.formularios_credihoy import recuperar_documento_autentic
+        self.entry.update(estado='INDETERMINADA',reciboCifrado=None,
+            journalFirma={'clave':self.key,'fingerprint':'a'*64,'estado':'INDETERMINADA','transaccion':''})
+        self.entry.pop('descargaCifrada',None);self.contract()
+        receipt=ReciboFirma(**self.context['recibo'])
+        evidence={'version':'AUTENTIC_CONCILIACION_V1','clave':self.key,'fingerprint':'a'*64,'ambiente':'DEV',
+            'resultado':'PROCESADA','origen':'CONFIRMACION_AUTENTIC','fuenteReferencia':'SYNTHETIC-TICKET',
+            'evidenciaSha256':'e'*64,'recibidaEn':datetime.now(timezone.utc).isoformat(),
+            'verificadorReferenciaSha256':'f'*64,'transaccionProveedorSha256':sha256(receipt.transaccion.encode()).hexdigest()}
+        RegistroFirmasExpediente(self.case.pk,self.key).conciliar(self.key,evidencia=evidence,
+            verificar_evidencia=lambda _:True,recibo=receipt)
+        stream=BytesIO()
+        with ZipFile(stream,'w') as archive:archive.writestr('COLO-FO.001.pdf',self.pdf)
+        from urllib.parse import urlsplit
+        session=Session(Response(stream.getvalue(),mime='application/zip'))
+        client=AutenticDEVClient(ConfiguracionDEV('SYNTHETIC','SECRET',permitir_documentos=True,
+            hosts_descarga=(urlsplit(receipt.url_documentos).hostname,)),session=session)
+        try:
+            for _ in range(2):
+                content,meta=recuperar_documento_autentic(self.case.pk,actor=self.actor,envio_id=self.key,
+                    cliente=client,referencia_autorizacion='SYNTHETIC-RECOVERY')
+                self.assertEqual(content,self.pdf);self.assertFalse(meta['firmaAcreditada'])
+            self.assertEqual(len(session.calls),1);self.assertEqual(session.calls[0][0],'GET')
+        finally:client.close()
+
     def test_existing_contract_delivery_replays_without_requoting_after_its_original_window(self):
         import sqlite3
         from apps.documentos import formularios_credihoy as forms

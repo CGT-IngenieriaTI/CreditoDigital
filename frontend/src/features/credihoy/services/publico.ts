@@ -17,7 +17,8 @@ export async function validarContractualStaging(raw:unknown,sid:string,key:strin
     ||p.autorizaDesembolso!==false||!/^[a-f0-9]{64}$/.test(String(p.pdfSha256))
     ||!['PRESENTADA','ACEPTADA_PENDIENTE_OTP','OTP_ENVIO_RESERVADO','OTP_ENVIADA','OTP_ENVIO_INDETERMINADO',
       'OTP_COMPROBACION_RESERVADA','OTP_VALIDADA','OTP_BLOQUEADA','OTP_EXPIRADA','OTP_COMPROBACION_INDETERMINADA',
-      'ENVIANDO','INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA'].includes(String(p.estado))
+      'ENVIANDO','INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA','FALLO_DEFINITIVO_DOCUMENTADO',
+      'CONCILIADA_PROCESADA','CONCILIADA_NO_PROCESADA'].includes(String(p.estado))
     ||!Array.isArray(p.pendientes)||p.pendientes.length>30
     ||p.pendientes.some(v=>typeof v!=='string'||!/^[A-Z0-9_]{1,120}$/.test(v)))fail();
   if(p.documento!==null){const d=obj(p.documento);

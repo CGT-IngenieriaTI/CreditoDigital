@@ -86,6 +86,27 @@ export function ProgresoSolicitud({solicitud}:{solicitud:SolicitudPublica}){
   </li>)}</ol>;
 }
 
+export function EstadoContractual({estado}:{estado:string}){
+  const textos:Record<string,string>={
+    PRESENTADA:'Documento disponible para tu revision.',
+    ACEPTADA_PENDIENTE_OTP:'Documento aceptado. Falta verificar el codigo contractual.',
+    OTP_ENVIO_RESERVADO:'Estamos confirmando el envio de tu codigo. Consulta el estado sin solicitar otro.',
+    OTP_ENVIADA:'Codigo contractual enviado. Ingresalo para verificarlo.',
+    OTP_ENVIO_INDETERMINADO:'El envio del codigo esta pendiente de confirmacion. No solicites otro.',
+    OTP_COMPROBACION_RESERVADA:'Estamos confirmando la verificacion de tu codigo.',
+    OTP_VALIDADA:'Codigo contractual verificado. La firma aun requiere tu confirmacion personal.',
+    OTP_BLOQUEADA:'La verificacion del codigo quedo bloqueada. Comunicate con Congente.',
+    OTP_EXPIRADA:'El codigo contractual vencio. No acredita una firma.',
+    OTP_COMPROBACION_INDETERMINADA:'La verificacion del codigo esta pendiente de confirmacion.',
+    ENVIANDO:'Estamos confirmando el envio de tu documento. No vuelvas a firmar ni solicites otro codigo.',
+    INDETERMINADA:'El envio de tu documento esta pendiente de confirmacion. No vuelvas a firmar ni solicites otro codigo.',
+    FIRMA_REPORTADA_NO_VERIFICADA:'Respuesta de firma recibida. El documento y su evidencia aun deben verificarse.',
+    FALLO_DEFINITIVO_DOCUMENTADO:'El servicio informo que la firma no se completo. Congente debe revisar el resultado antes de otro intento.',
+    CONCILIADA_PROCESADA:'El servicio confirmo el procesamiento. La recuperacion y verificacion documental siguen pendientes.',
+    CONCILIADA_NO_PROCESADA:'Se confirmo que este envio no fue procesado. Otro intento requiere habilitacion y un nuevo acto personal.'};
+  return <p role="status">{textos[estado]??'La formalizacion esta pendiente de revision. Consulta su estado sin repetir el envio.'}</p>;
+}
+
 function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;operar:(body:PeticionContractual)=>Promise<ContractualStaging>}){
   const [clave,setClave]=useState(()=>{
     const storage='credihoy_contractual_acto:'+solicitud.referencia;
@@ -158,12 +179,15 @@ function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;
         Confirmo personalmente la firma electronica de este documento en STAGING.</label>
       <button type="button" className="btn btn-primary" disabled={busy||!confirma} onClick={()=>void enviar({accion:'contractual_firmar',confirmaFirma:true} as PeticionContractual)}>
         <FileCheck2 size={17} aria-hidden="true"/>Confirmar firma</button></>}
-    {data&&<p role="status">{data.estado==='FIRMA_REPORTADA_NO_VERIFICADA'?'Respuesta de firma recibida. Verificacion documental pendiente.':
-      data.otpVerificado?'Codigo contractual verificado.':data.estado==='PRESENTADA'?'Documento disponible para tu revision.':data.estado.replace(/_/g,' ')}</p>}
-    {(incierta||data&&['ENVIANDO','INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA'].includes(data.estado))&&
+    {data&&<EstadoContractual estado={data.estado}/>}
+    {(incierta||data&&['ENVIANDO','INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA','FALLO_DEFINITIVO_DOCUMENTADO',
+      'CONCILIADA_PROCESADA','CONCILIADA_NO_PROCESADA'].includes(data.estado))&&
       <button type="button" className="btn btn-outline-primary" disabled={busy} onClick={()=>void enviar({accion:'contractual_consultar'})}>
         <RefreshCw size={16} aria-hidden="true"/>Consultar estado sin reenviar</button>}
-    {data?.pendientes.some(p=>!['REVISION_PERSONAL_CONTRACTUAL_VENCIDA','TRANSPORTE_OTP_CONTRACTUAL_NO_HABILITADO','TRANSPORTE_FIRMA_STAGING_NO_HABILITADO'].includes(p))? <p role="status">La evidencia se conserva. La verificacion documental independiente sigue pendiente; no se acredita una firma productiva.</p>:null}
+    {data?.pendientes.some(p=>!['REVISION_PERSONAL_CONTRACTUAL_VENCIDA','TRANSPORTE_OTP_CONTRACTUAL_NO_HABILITADO',
+      'TRANSPORTE_FIRMA_STAGING_NO_HABILITADO','RESPUESTA_PROVEEDOR_INCIERTA_NO_REENVIAR',
+      'FIRMA_RECHAZADA_DOCUMENTADA_NO_REENVIAR','FIRMA_NO_PROCESADA_CONCILIADA_NO_REENVIAR'].includes(p))?
+      <p role="status">La evidencia se conserva. La verificacion documental independiente sigue pendiente; no se acredita una firma productiva.</p>:null}
     {firmadoUrl&&<a className="btn btn-outline-primary" href={firmadoUrl} download="COLO-FO.001-recuperado-STAGING.pdf">
       <ExternalLink size={16} aria-hidden="true"/>Descargar documento recuperado en STAGING</a>}
     {error&&<p role="alert">{error}</p>}

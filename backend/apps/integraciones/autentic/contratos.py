@@ -24,6 +24,15 @@ class AutenticError(Exception):
         super().__init__(codigo)
 
 
+def preparar_consulta(transaccion):
+    """Signing Core v2 consult accepts a provider transactionId, not a local key."""
+    if (type(transaccion) is not str or not 0 < len(transaccion) <= 1000
+            or transaccion != transaccion.strip()
+            or any(ord(c) < 32 or ord(c) == 127 for c in transaccion)):
+        raise AutenticError('TRANSACTION_ID_PROVEEDOR_REQUERIDO')
+    return {'transactionId': transaccion}
+
+
 def texto(value):
     return type(value) is str and bool(value.strip()) and len(value) <= 1000
 

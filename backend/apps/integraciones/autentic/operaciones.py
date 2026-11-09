@@ -4,8 +4,14 @@ from dataclasses import asdict, dataclass, field
 import json
 import re
 import sqlite3
+from datetime import datetime, timezone
+from hashlib import sha256
 
 from .contratos import AutenticError, _config_unica
+
+CONFIRMADAS={'FIRMA_REPORTADA_NO_VERIFICADA','CONCILIADA_PROCESADA'}
+TERMINALES_ENVIO={'INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA',
+    'CERTIFICACION_RECUPERADA_NO_VERIFICADA','FALLO_DEFINITIVO_DOCUMENTADO'}
 
 
 @dataclass(frozen=True)
@@ -82,7 +88,7 @@ class RegistroFirmas:
         row = self.db.execute('SELECT o.fingerprint, o.estado, o.transaccion, r.cifrado '
             'FROM autentic_operaciones o LEFT JOIN autentic_recibos r ON r.clave=o.clave WHERE o.clave=?',
             (clave,)).fetchone()
-        if row is None or row[1] != 'FIRMA_REPORTADA_NO_VERIFICADA':
+        if row is None or row[1] not in CONFIRMADAS:
             raise AutenticError('RECIBO_JOURNAL_NO_DISPONIBLE_NO_REENVIAR')
         return None if row[3] is None else self._abrir_recibo(clave, row[0], row[2], row[3])
 
@@ -119,7 +125,7 @@ class RegistroFirmas:
             raise AutenticError("REENVIO_BLOQUEADO_REQUIERE_CONCILIACION")
 
     def terminar(self, clave, estado, transaccion="", *, recibo=None):
-        if estado not in {"INDETERMINADA", "FIRMA_REPORTADA_NO_VERIFICADA", "CERTIFICACION_RECUPERADA_NO_VERIFICADA"}:
+        if estado not in TERMINALES_ENVIO:
             raise AutenticError("TRANSICION_INVALIDA")
         try:
             self.db.execute('BEGIN IMMEDIATE')
@@ -136,6 +142,86 @@ class RegistroFirmas:
         except Exception:
             self.db.rollback()
             raise
+
+    def _decision_conciliacion(self, clave, fingerprint, evidencia, verificar_evidencia, recibo):
+        fields={'version','clave','fingerprint','ambiente','resultado','origen','fuenteReferencia',
+                'evidenciaSha256','recibidaEn','verificadorReferenciaSha256','transaccionProveedorSha256'}
+        try:
+            if (not self.custodia_recibos or type(evidencia) is not dict or set(evidencia)!=fields
+                    or evidencia['version']!='AUTENTIC_CONCILIACION_V1' or evidencia['clave']!=clave
+                    or evidencia['fingerprint']!=fingerprint or evidencia['ambiente'] not in {'DEV','PRODUCCION'}
+                    or evidencia['resultado'] not in {'PROCESADA','NO_PROCESADA'}
+                    or evidencia['origen'] not in {'RESPUESTA_AUTENTIC','CONFIRMACION_AUTENTIC'}
+                    or not re.fullmatch('[A-Za-z0-9._:-]{1,160}',evidencia['fuenteReferencia'])
+                    or any(not re.fullmatch('[a-f0-9]{64}',evidencia[k]) for k in ('evidenciaSha256','verificadorReferenciaSha256'))):
+                raise ValueError
+            when=datetime.fromisoformat(evidencia['recibidaEn'].replace('Z','+00:00'))
+            if when.utcoffset() is None or when>datetime.now(timezone.utc):raise ValueError
+            # This is an internal, offline custody-verification boundary, never a frontend flag.
+            if not callable(verificar_evidencia) or verificar_evidencia(dict(evidencia)) is not True:
+                raise ValueError
+            if evidencia['resultado']=='PROCESADA':
+                from .cliente import ReciboFirma
+                if (type(recibo) is not ReciboFirma or not recibo.respuesta_original
+                        or evidencia['transaccionProveedorSha256']!=sha256(recibo.transaccion.encode()).hexdigest()):raise ValueError
+                recibo.validar_recuperacion(evidencia['ambiente'])
+            elif recibo is not None or evidencia['transaccionProveedorSha256']!='':raise ValueError
+            return 'CONCILIADA_'+evidencia['resultado']
+        except (KeyError,TypeError,ValueError,AttributeError,AutenticError):
+            raise AutenticError('EVIDENCIA_CONCILIACION_NO_VERIFICADA') from None
+
+    def _sellar_conciliacion(self, clave, fingerprint, estado_anterior, evidencia, *, transaccion_anterior=''):
+        value={'version':'AUTENTIC_JOURNAL_CONCILIACION_V1','clave':clave,'fingerprint':fingerprint,
+               'contexto':self._contexto_recibo(),'estadoAnterior':estado_anterior,
+               'transaccionAnterior':transaccion_anterior,'evidencia':evidencia}
+        plain=json.dumps(value,sort_keys=True,separators=(',',':'))
+        encrypted=self._cifrar(plain)
+        if type(encrypted) is not str or not encrypted or encrypted==plain or self._descifrar(encrypted)!=plain:
+            raise AutenticError('CONCILIACION_NO_CUSTODIADA')
+        return encrypted
+
+    def _abrir_conciliacion(self, clave, fingerprint, encrypted):
+        try:
+            value=json.loads(self._descifrar(encrypted),object_pairs_hook=_config_unica)
+            if (set(value)!={'version','clave','fingerprint','contexto','estadoAnterior','transaccionAnterior','evidencia'}
+                    or value['version']!='AUTENTIC_JOURNAL_CONCILIACION_V1' or value['clave']!=clave
+                    or value['fingerprint']!=fingerprint or value['contexto']!=self._contexto_recibo()):
+                raise ValueError
+            return value
+        except Exception:
+            raise AutenticError('CONCILIACION_NO_INTEGRA') from None
+
+    def conciliar(self, clave, *, evidencia, verificar_evidencia, recibo=None):
+        """Append a verified external decision; never reopen PREPARADA or invoke HTTP."""
+        if not self.custodia_recibos:raise AutenticError('CIFRADOR_JOURNAL_REQUERIDO')
+        try:
+            self.db.execute('BEGIN IMMEDIATE')
+            row=self.db.execute('SELECT fingerprint,estado,transaccion FROM autentic_operaciones WHERE clave=?',(clave,)).fetchone()
+            if row is None:raise AutenticError('OPERACION_ORIGINAL_REQUERIDA')
+            state=self._decision_conciliacion(clave,row[0],evidencia,verificar_evidencia,recibo)
+            if recibo is not None and row[2] and row[2]!=recibo.transaccion:
+                raise AutenticError('RECIBO_CONCILIACION_TRANSACCION_DIFIERE')
+            transaction=recibo.transaccion if recibo else row[2]
+            # '@' cannot occur in a public operation key; reuse the existing custody table.
+            saved=self.db.execute('SELECT cifrado FROM autentic_recibos WHERE clave=?',('@conciliacion:'+clave,)).fetchone()
+            if saved:
+                old=self._abrir_conciliacion(clave,row[0],saved[0])
+                if old['evidencia']!=evidencia or row[1]!=state or row[2]!=transaction:
+                    raise AutenticError('CONCILIACION_EXISTENTE_CONFLICTO')
+            else:
+                if row[1] not in {'INDETERMINADA','FALLO_DEFINITIVO_DOCUMENTADO'}:
+                    raise AutenticError('CONCILIACION_REQUIERE_ENVIO_INCIERTO_O_FALLO_DOCUMENTADO')
+                encrypted=self._sellar_conciliacion(clave,row[0],row[1],evidencia,transaccion_anterior=row[2])
+                self.db.execute('INSERT INTO autentic_recibos (clave,cifrado) VALUES (?,?)',('@conciliacion:'+clave,encrypted))
+                if recibo is not None:
+                    receipt=self._sellar_recibo(clave,row[0],recibo.transaccion,recibo)
+                    self.db.execute('INSERT INTO autentic_recibos (clave,cifrado) VALUES (?,?)',(clave,receipt))
+                self.db.execute('UPDATE autentic_operaciones SET estado=?,transaccion=? WHERE clave=?',
+                    (state,transaction,clave))
+            self.db.commit()
+            return EstadoFirma(state,transaction)
+        except Exception:
+            self.db.rollback();raise
 
 
 class RegistroFirmasExpediente(RegistroFirmas):
@@ -159,7 +245,7 @@ class RegistroFirmasExpediente(RegistroFirmas):
         return {'tipo': 'JOURNAL_EXPEDIENTE', 'solicitudId': str(self.solicitud_id),
                 'envioId': self.envio_id, 'alias': self.alias, 'seccion': self.seccion}
 
-    def _transicion(self,change):
+    def _transicion(self,change,*,recibo_conciliado=None):
         from django.db import connections,transaction
         from apps.xcore_consumo.models import SolicitudConsumo
         connection=connections[self.alias]
@@ -173,7 +259,25 @@ class RegistroFirmasExpediente(RegistroFirmas):
             current=entry.get(self.seccion)
             new=change(current)
             if new != current:
-                entry[self.seccion]=new;history[self.envio_id]=entry
+                entry[self.seccion]=new
+                if self.seccion=='journalFirma' and new['estado'] in {'CONCILIADA_PROCESADA','CONCILIADA_NO_PROCESADA'}:
+                    if entry['estado']!=current['estado']:
+                        raise AutenticError('CONCILIACION_REQUIERE_ENVIO_FINALIZADO_LOCALMENTE')
+                    entry['estado']=new['estado']
+                    if recibo_conciliado is not None:
+                        if new['estado']!='CONCILIADA_PROCESADA' or recibo_conciliado.transaccion!=new['transaccion']:
+                            raise AutenticError('RECIBO_CONCILIACION_INCOMPATIBLE')
+                        entry['reciboCifrado']=self._cifrar(json.dumps(asdict(recibo_conciliado),sort_keys=True))
+                    from apps.utils.models import AuditLog
+                    evidence=self._abrir_conciliacion(new['clave'],new['fingerprint'],new['conciliacionCifrada'])['evidencia']
+                    expected_environment=entry['vinculo'].get('ambienteProveedor')
+                    if expected_environment is not None and evidence['ambiente']!=expected_environment:
+                        raise AutenticError('CONCILIACION_AMBIENTE_DIFIERE')
+                    AuditLog.objects.using(self.alias).create(solicitud_id=self.solicitud_id,
+                        event='credihoy_contractual_conciliacion_registrada',actor='sistema:autentic:conciliacion',
+                        request_id=self.envio_id,payload={'estado':new['estado'],'evidenciaSha256':evidence['evidenciaSha256'],
+                            'origen':evidence['origen'],'fingerprint':new['fingerprint'],'firmaProductivaAcreditada':False})
+                history[self.envio_id]=entry
                 detail.orchestration_data={**data,'credihoy_autentic_envios_v1':history}
                 detail.save(using=self.alias,update_fields=['orchestration_data','updated_at'])
         return EstadoFirma(new['estado'],new.get('transaccion',''))
@@ -197,7 +301,7 @@ class RegistroFirmasExpediente(RegistroFirmas):
         return self._transicion(start)
 
     def terminar(self,clave,estado,transaccion='',*,recibo=None):
-        if estado not in {'INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA','CERTIFICACION_RECUPERADA_NO_VERIFICADA'}:
+        if estado not in TERMINALES_ENVIO:
             raise AutenticError('TRANSICION_INVALIDA')
         def finish(current):
             if current is None or current['clave']!=clave or current['estado']!='ENVIANDO':raise AutenticError('TRANSICION_INVALIDA')
@@ -211,7 +315,7 @@ class RegistroFirmasExpediente(RegistroFirmas):
     def recuperar_recibo(self, clave):
         saved = []
         def read(current):
-            if current is None or current['clave'] != clave or current['estado'] != 'FIRMA_REPORTADA_NO_VERIFICADA':
+            if current is None or current['clave'] != clave or current['estado'] not in CONFIRMADAS:
                 raise AutenticError('RECIBO_JOURNAL_NO_DISPONIBLE_NO_REENVIAR')
             saved.append(dict(current))
             return current
@@ -220,3 +324,29 @@ class RegistroFirmasExpediente(RegistroFirmas):
         if 'reciboCifrado' not in current:
             return None
         return self._abrir_recibo(clave, current['fingerprint'], current['transaccion'], current['reciboCifrado'])
+
+    def conciliar(self, clave, *, evidencia, verificar_evidencia, recibo=None):
+        if self.seccion!='journalFirma':raise AutenticError('CONCILIACION_SOLO_JOURNAL_FIRMA')
+        if not self.custodia_recibos:raise AutenticError('CIFRADOR_JOURNAL_REQUERIDO')
+        def reconcile(current):
+            if current is None or current['clave']!=clave:raise AutenticError('OPERACION_ORIGINAL_REQUERIDA')
+            state=self._decision_conciliacion(clave,current['fingerprint'],evidencia,verificar_evidencia,recibo)
+            if recibo is not None and current.get('transaccion') and current['transaccion']!=recibo.transaccion:
+                raise AutenticError('RECIBO_CONCILIACION_TRANSACCION_DIFIERE')
+            if recibo is not None and current.get('transaccion') and current['transaccion']!=recibo.transaccion:
+                raise AutenticError('RECIBO_CONCILIACION_TRANSACCION_DIFIERE')
+            transaction=recibo.transaccion if recibo else current.get('transaccion','')
+            if current.get('conciliacionCifrada'):
+                saved=self._abrir_conciliacion(clave,current['fingerprint'],current['conciliacionCifrada'])
+                if saved['evidencia']!=evidencia or current['estado']!=state or current.get('transaccion','')!=transaction:
+                    raise AutenticError('CONCILIACION_EXISTENTE_CONFLICTO')
+                return current
+            if current['estado'] not in {'INDETERMINADA','FALLO_DEFINITIVO_DOCUMENTADO'}:
+                raise AutenticError('CONCILIACION_REQUIERE_ENVIO_INCIERTO_O_FALLO_DOCUMENTADO')
+            updated={**current,'estado':state,'transaccion':transaction,
+                'conciliacionCifrada':self._sellar_conciliacion(clave,current['fingerprint'],current['estado'],evidencia,
+                    transaccion_anterior=current.get('transaccion',''))}
+            if recibo is not None:
+                updated['reciboCifrado']=self._sellar_recibo(clave,current['fingerprint'],recibo.transaccion,recibo)
+            return updated
+        return self._transicion(reconcile,recibo_conciliado=recibo)

@@ -916,7 +916,8 @@ def project_contractual(row):
         'firmado','pendientes','otpProveedor','otpVerificado','firmaProductivaAcreditada','autorizaDesembolso'}
     allowed={'PRESENTADA','ACEPTADA_PENDIENTE_OTP','OTP_ENVIO_RESERVADO','OTP_ENVIADA','OTP_ENVIO_INDETERMINADO',
         'OTP_COMPROBACION_RESERVADA','OTP_VALIDADA','OTP_BLOQUEADA','OTP_EXPIRADA','OTP_COMPROBACION_INDETERMINADA',
-        'ENVIANDO','INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA'}
+        'ENVIANDO','INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA','FALLO_DEFINITIVO_DOCUMENTADO',
+        'CONCILIADA_PROCESADA','CONCILIADA_NO_PROCESADA'}
     if (type(row) is not dict or set(row)!=required or row['ambiente']!='STAGING'
             or row['versionContrato']!='credihoy-contractual-staging-v1' or row['estado'] not in allowed
             or row['otpProveedor']!='TWILIO_VERIFY' or type(row['otpVerificado']) is not bool

@@ -604,6 +604,53 @@ class ContractualOTPTests(TransactionTestCase):
                 presentacion=presented['presentacion']+'tampered', acepta=True, clave=self.send)
         self.assertFalse(AuditLog.objects.filter(event='credihoy_contractual_aceptado').exists())
 
+    def test_expired_unsent_act_requires_new_personal_review_and_preserves_original_acceptance(self):
+        self.accept();self.detail.refresh_from_db()
+        original=deepcopy(self.detail.orchestration_data[service.CONTRACTUAL_HISTORY][self.send])
+        old_key=self.send;now=timezone.now()+timedelta(minutes=21)
+        fresh={**self.identity,'_sesionReferencia':str(uuid4()),'_sesionExpiraAt':(now+timedelta(minutes=15)).isoformat()}
+        base={'operacion':'autorizacion','solicitudId':str(self.case.pk),'clave':old_key,'accion':'contractual_consultar'}
+        with patch.object(service.timezone,'now',return_value=now),override_settings(
+                CREDIHOY_CONTRACTUAL_AMBIENTE='STAGING',CREDIHOY_CONTRACTUAL_STAGING_ALCANCE=self.staging_scope()):
+            before=AuditLog.objects.count()
+            status=service.operar_contractual(fresh,base)
+            self.assertIn('REVISION_PERSONAL_CONTRACTUAL_VENCIDA',status['pendientes'])
+            self.assertIsNone(status['documento']);self.assertEqual(AuditLog.objects.count(),before)
+            new_key=str(uuid4())
+            with patch.object(service,'_firmante_contractual',return_value={'names':'SYNTHETIC','lastNames':'PERSON'}):
+                recovered=service.operar_contractual(fresh,{**base,'accion':'contractual_presentar'})
+                self.assertIn('REVISION_PERSONAL_CONTRACTUAL_VENCIDA',recovered['pendientes'])
+                self.assertIsNone(recovered['documento']);self.assertEqual(AuditLog.objects.count(),before)
+                presented=service.presentar_documento_contractual(self.case.pk,fresh,documento_operacion_id=self.doc,clave=new_key)
+                self.assertFalse(AuditLog.objects.filter(event='credihoy_contractual_aceptado',request_id=new_key).exists())
+                with self.assertRaisesRegex(ValueError,'ACEPTACION_CONTRACTUAL_EXPRESA'):
+                    service.aceptar_documento_contractual(self.case.pk,fresh,presentacion=presented['presentacion'],acepta=False,clave=new_key)
+                service.aceptar_documento_contractual(self.case.pk,fresh,presentacion=presented['presentacion'],acepta=True,clave=new_key)
+                with self.assertRaisesRegex(ValueError,'ACTO_CONTRACTUAL_ACTIVO_O_INCIERTO'):
+                    service.presentar_documento_contractual(self.case.pk,fresh,documento_operacion_id=self.doc,clave=str(uuid4()))
+            with self.assertRaises(Exception):service.operar_contractual({**fresh,'numeroDocumento':'900000002'},base)
+        self.detail.refresh_from_db()
+        self.assertEqual(original,self.detail.orchestration_data[service.CONTRACTUAL_HISTORY][old_key])
+        self.assertEqual(AuditLog.objects.filter(event='credihoy_contractual_aceptado',request_id=old_key).count(),1)
+        self.assertTrue(AuditLog.objects.filter(event='credihoy_contractual_revision_renovada',request_id=new_key).exists())
+        self.assertFalse(OtpChallenge.objects.exists());self.client.start_verification.assert_not_called()
+
+    def test_active_reserved_uncertain_or_provider_claimed_acts_cannot_be_renewed(self):
+        self.accept();record=self.record();case=self.case
+        self.assertFalse(service.puede_renovar_revision_contractual(case,'default',record,self.send))
+        future=timezone.now()+timedelta(minutes=21)
+        with patch.object(service.timezone,'now',return_value=future):
+            self.assertTrue(service.puede_renovar_revision_contractual(case,'default',record,self.send))
+            for change in ({'estado':'OTP_ENVIO_RESERVADO'},{'estado':'OTP_ENVIO_INDETERMINADO'},
+                    {'estado':'OTP_VALIDADA'},{'otpId':'1'},{'serviceSid':SERVICE_SID},{'prueba':{}},
+                    {'confirmacionFirma':{}},{'comprobaciones':{'reserved':{}}}):
+                self.assertFalse(service.puede_renovar_revision_contractual(case,'default',{**record,**change},self.send))
+            with self.assertRaisesRegex(ValueError,'ACEPTACION_CONTRACTUAL_NO_INTEGRA'):
+                service.puede_renovar_revision_contractual(case,'default',{**record,'aceptacionSha256':'f'*64},self.send)
+            AuditLog.objects.create(solicitud=self.case,event='credihoy_contractual_otp_reservado',request_id=self.send,payload={})
+            self.assertFalse(service.puede_renovar_revision_contractual(case,'default',record,self.send))
+        self.client.start_verification.assert_not_called()
+
     def test_session_scope_holder_and_send_are_not_interchangeable(self):
         presented = self.present()
         for changes in ({'_sesionReferencia':str(uuid4())}, {'_scopeContractual':'solicitudes:autorizar'},

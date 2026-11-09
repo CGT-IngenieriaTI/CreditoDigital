@@ -1011,11 +1011,23 @@ def presentar_documento_contractual(solicitud_id, identity, *, documento_operaci
             'firmanteSha256': _digest_contractual(signer)}
         history = case.consumo_detail.orchestration_data.get(CONTRACTUAL_HISTORY, {})
         if key in history:
+            if puede_renovar_revision_contractual(case, alias, _leer_contractual(case, key), key):
+                return None
             if _leer_contractual(case, key)['vinculo'] != binding:
                 raise ValueError('PRESENTACION_CONTRACTUAL_IDEMPOTENCIA_CONFLICTO')
         else:
+            antecedents = []
+            for other in history:
+                previous = _leer_contractual(case, other)
+                if previous['vinculo']['pdfSha256'] == binding['pdfSha256']:
+                    if not puede_renovar_revision_contractual(case, alias, previous, other):
+                        raise ValueError('ACTO_CONTRACTUAL_ACTIVO_O_INCIERTO_NO_DUPLICAR')
+                    antecedents.append(other)
             _guardar_contractual(case, alias, key, {'vinculo': binding, 'firmante': signer,
-                'estado': 'PRESENTADA', 'comprobaciones': {}})
+                'estado': 'PRESENTADA', 'comprobaciones': {}, 'antecedentes': sorted(antecedents)})
+            if antecedents:
+                _auditar_contractual(case, alias, 'revision_renovada', key,
+                    {'antecedentes': sorted(antecedents), 'pdfSha256': binding['pdfSha256']})
         payload = {'vinculoSha256': _digest_contractual(binding)}
         events = _auditorias_contractuales(case,alias,'credihoy_contractual_presentado',key)
         if events:
@@ -1060,7 +1072,8 @@ def aceptar_documento_contractual(solicitud_id, identity, *, presentacion, acept
             return _estado_contractual(existing)
         for other in history:
             if other != key and _leer_contractual(case, other)['vinculo']['pdfSha256'] == binding['pdfSha256']:
-                raise ValueError('DOCUMENTO_CONTRACTUAL_YA_RECLAMADO')
+                if not puede_renovar_revision_contractual(case, alias, _leer_contractual(case, other), other):
+                    raise ValueError('DOCUMENTO_CONTRACTUAL_YA_RECLAMADO')
         record.update(firmante=signer, aceptacionId=str(uuid4()), aceptadoEn=timezone.now().isoformat(),
                       estado='ACEPTADA_PENDIENTE_OTP', comprobaciones={})
         record['aceptacionSha256'] = _digest_contractual({k: record[k] for k in (
@@ -1337,10 +1350,13 @@ def operar_contractual(identity,action):
     elif name=='contractual_comprobar_otp':
         verificar_otp_contractual(sid,identity,clave=key,codigo=action['codigo'],clave_verificacion=action['comprobacionId'])
     case,alias=_contexto_contractual(sid,identity)
-    record=_leer_contractual(case,key);_vinculo_sesion_contractual(record,identity)
+    record=_leer_contractual(case,key)
+    expired_review=name in {'contractual_consultar','contractual_presentar'} and puede_renovar_revision_contractual(case,alias,record,key)
+    if not expired_review:_vinculo_sesion_contractual(record,identity)
     if record['vinculo']['documentoOperacionId']!=scope['documentoOperacionId'] or record['vinculo']['pdfSha256']!=scope['pdfSha256']:
         raise ValueError('DOCUMENTO_CONTRACTUAL_CAMBIO')
-    if name=='contractual_consultar':
+    if expired_review:pending=['REVISION_PERSONAL_CONTRACTUAL_VENCIDA']
+    if name=='contractual_consultar' and not expired_review:
         from django.core import signing
         from .publico_seguimiento import key as signing_key
         pdf,meta=_documento_contractual(case,scope['documentoOperacionId'])
@@ -1393,9 +1409,48 @@ def operar_contractual(identity,action):
     case,alias=_contexto_contractual(sid,identity)
     record=_leer_contractual(case,key)
     sent=case.consumo_detail.orchestration_data.get('credihoy_autentic_envios_v1',{}).get(key)
+    if getattr(settings,'CREDIHOY_OTP_CONTRACTUAL_ENVIO_ENABLED',False) is not True:
+        pending.append('TRANSPORTE_OTP_CONTRACTUAL_NO_HABILITADO')
+    if getattr(settings,'CREDIHOY_AUTENTIC_CONTRACTUAL_STAGING_ENVIO_ENABLED',False) is not True:
+        pending.append('TRANSPORTE_FIRMA_STAGING_NO_HABILITADO')
     return {'versionContrato':'credihoy-contractual-staging-v1','solicitudId':sid,'operacionFirmaId':key,
         'ambiente':'STAGING','estado':sent['estado'] if sent else record['estado'],
         'pdfSha256':scope['pdfSha256'],'documento':document,'firmado':signed,'pendientes':pending,
         'otpProveedor':'TWILIO_VERIFY','otpVerificado':record['estado']=='OTP_VALIDADA',
         'firmaProductivaAcreditada':False,'autorizaDesembolso':False}
+
+
+
+def puede_renovar_revision_contractual(case, alias, record, key):
+    """Only a never-sent, expired personal act can precede another explicit review."""
+    if (record['estado'] not in {'PRESENTADA', 'ACEPTADA_PENDIENTE_OTP'}
+            or record.get('comprobaciones') != {}
+            or any(k in record for k in ('otpId', 'serviceSid', 'prueba', 'confirmacionFirma'))
+            or key in case.consumo_detail.orchestration_data.get('credihoy_autentic_envios_v1', {})):
+        return False
+    binding = record['vinculo']
+    if (binding['proposito'] != CONTRACTUAL_PURPOSE or binding['scope'] != CONTRACTUAL_SCOPE
+            or binding['titularReferencia'] != hashlib.sha256(case.solicitante.numero_identificacion.encode()).hexdigest()):
+        return False
+    now = timezone.now()
+    expired = _fecha_contractual(binding['sesionExpiraAt']) <= now
+    if record['estado'] == 'ACEPTADA_PENDIENTE_OTP':
+        if record.get('aceptacionSha256') != _digest_contractual({k: record[k] for k in (
+                'vinculo', 'firmante', 'aceptacionId', 'aceptadoEn')}):
+            raise ValueError('ACEPTACION_CONTRACTUAL_NO_INTEGRA')
+        _exigir_auditoria_contractual(case, alias, 'aceptado', key, {'aceptacionSha256': record['aceptacionSha256']})
+        expired = expired or now-_fecha_contractual(record['aceptadoEn']) > timedelta(seconds=CONTRACTUAL_TTL)
+    if not expired:
+        return False
+    _exigir_auditoria_contractual(case, alias, 'presentado', key, {'vinculoSha256': _digest_contractual(binding)})
+    if alias == 'cotizacion':
+        from django.db import connections
+        with connections[alias].cursor() as cursor:
+            cursor.execute('SELECT event FROM public.credihoy_auditoria_contractual_publica '
+                'WHERE solicitud_id=%s AND request_id=%s LIMIT 5', [str(case.pk), key])
+            events = [r[0] for r in cursor.fetchall()]
+    else:
+        events = list(AuditLog.objects.using(alias).filter(solicitud_id=case.pk, request_id=key).values_list('event', flat=True)[:5])
+    return bool(events) and set(events) <= {'credihoy_contractual_presentado', 'credihoy_contractual_aceptado',
+        'credihoy_contractual_revision_renovada'} and len(events) <= 3
 

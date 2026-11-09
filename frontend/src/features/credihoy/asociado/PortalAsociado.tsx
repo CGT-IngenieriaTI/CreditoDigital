@@ -87,7 +87,7 @@ export function ProgresoSolicitud({solicitud}:{solicitud:SolicitudPublica}){
 }
 
 function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;operar:(body:PeticionContractual)=>Promise<ContractualStaging>}){
-  const [clave]=useState(()=>{
+  const [clave,setClave]=useState(()=>{
     const storage='credihoy_contractual_acto:'+solicitud.referencia;
     try{const old=sessionStorage.getItem(storage);if(old&&/^[a-f0-9-]{36}$/.test(old))return old;
       const id=crypto.randomUUID();sessionStorage.setItem(storage,id);return id;}catch{return crypto.randomUUID();}});
@@ -116,6 +116,15 @@ function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;
     finally{setCodigo('');guard.current=false;setBusy(false);}
   }
   const estado=data?.estado;
+  const revisionVencida=Boolean(data?.pendientes.includes('REVISION_PERSONAL_CONTRACTUAL_VENCIDA'));
+  const otpCerrado=Boolean(data?.pendientes.includes('TRANSPORTE_OTP_CONTRACTUAL_NO_HABILITADO'));
+  const firmaCerrada=Boolean(data?.pendientes.includes('TRANSPORTE_FIRMA_STAGING_NO_HABILITADO'));
+  function revisarNuevamente(){
+    if(!revisionVencida||busy)return;
+    const next=crypto.randomUUID();
+    try{sessionStorage.setItem('credihoy_contractual_acto:'+solicitud.referencia,next);}catch{return;}
+    setClave(next);setData(null);setDocumento(null);setAcepta(false);setLeido(false);setConfirma(false);setCodigo('');setError('');setIncierta(false);
+  }
   return <section className="ca-document-band" aria-label="Formalizacion contractual STAGING" aria-busy={busy}>
     <h3>Formalizacion contractual</h3>
     <Aviso tono="warning" titulo="Validacion de firma en STAGING">
@@ -130,18 +139,21 @@ function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;
     {url&&pdfFile&&<><PdfScrollViewer file={pdfFile} requiredPages={3} title="COLO-FO.001 v13" onLoad={()=>{setLeido(false);setAcepta(false);}} onReachEnd={()=>setLeido(true)}/>
       <p className="ca-muted" style={{overflowWrap:'anywhere'}}>SHA-256: {documento?.pdfSha256}</p>
       <a className="btn btn-outline-primary" href={url} download="COLO-FO.001-v13.pdf"><ExternalLink size={16} aria-hidden="true"/>Abrir documento completo</a></>}
-    {estado==='PRESENTADA'&&!incierta&&<>
+    {revisionVencida&&<><p role="status">La aceptacion anterior se conserva. Para continuar se requiere una nueva revision y aceptacion personal del documento.</p>
+      <button type="button" className="btn btn-primary" disabled={busy} onClick={revisarNuevamente}><RefreshCw size={17} aria-hidden="true"/>Revisar documento nuevamente</button></>}
+    {estado==='PRESENTADA'&&!incierta&&!revisionVencida&&<>
       <label className="ca-check"><input type="checkbox" checked={acepta} disabled={busy||!leido} onChange={e=>setAcepta(e.target.checked)}/>
         He revisado las tres paginas y acepto expresamente el contenido de este documento.</label>
       <button className="btn btn-primary" type="button" disabled={busy||!leido||!acepta||!documento} onClick={()=>void enviar({accion:'contractual_aceptar',presentacion:documento!.presentacion,acepta:true} as PeticionContractual)}>
         <CheckCircle2 size={17} aria-hidden="true"/>Aceptar documento</button></>}
-    {estado==='ACEPTADA_PENDIENTE_OTP'&&!incierta&&<button type="button" className="btn btn-primary" disabled={busy} onClick={()=>void enviar({accion:'contractual_enviar_otp'})}>
+    {otpCerrado&&<p role="status">El envio del codigo contractual no esta habilitado.</p>}
+    {estado==='ACEPTADA_PENDIENTE_OTP'&&!incierta&&!revisionVencida&&!otpCerrado&&<button type="button" className="btn btn-primary" disabled={busy} onClick={()=>void enviar({accion:'contractual_enviar_otp'})}>
       <ShieldCheck size={17} aria-hidden="true"/>Solicitar codigo contractual</button>}
     {estado==='OTP_ENVIADA'&&!incierta&&<form onSubmit={e=>{e.preventDefault();void enviar({accion:'contractual_comprobar_otp',codigo,comprobacionId:crypto.randomUUID()} as PeticionContractual);}}>
       <label className="ca-field">Codigo contractual<input className="form-control" inputMode="numeric" autoComplete="one-time-code" value={codigo} maxLength={6} disabled={busy}
         onChange={e=>setCodigo(e.target.value.replace(/\D/g,''))}/></label>
       <button type="submit" className="btn btn-primary" disabled={busy||!/^\d{6}$/.test(codigo)}><ShieldCheck size={17} aria-hidden="true"/>Verificar codigo</button></form>}
-    {estado==='OTP_VALIDADA'&&!incierta&&<>
+    {estado==='OTP_VALIDADA'&&!incierta&&!firmaCerrada&&<>
       <label className="ca-check"><input type="checkbox" checked={confirma} disabled={busy} onChange={e=>setConfirma(e.target.checked)}/>
         Confirmo personalmente la firma electronica de este documento en STAGING.</label>
       <button type="button" className="btn btn-primary" disabled={busy||!confirma} onClick={()=>void enviar({accion:'contractual_firmar',confirmaFirma:true} as PeticionContractual)}>
@@ -151,7 +163,7 @@ function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;
     {(incierta||data&&['ENVIANDO','INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA'].includes(data.estado))&&
       <button type="button" className="btn btn-outline-primary" disabled={busy} onClick={()=>void enviar({accion:'contractual_consultar'})}>
         <RefreshCw size={16} aria-hidden="true"/>Consultar estado sin reenviar</button>}
-    {data?.pendientes.length? <p role="status">La evidencia se conserva. La verificacion documental independiente sigue pendiente; no se acredita una firma productiva.</p>:null}
+    {data?.pendientes.some(p=>!['REVISION_PERSONAL_CONTRACTUAL_VENCIDA','TRANSPORTE_OTP_CONTRACTUAL_NO_HABILITADO','TRANSPORTE_FIRMA_STAGING_NO_HABILITADO'].includes(p))? <p role="status">La evidencia se conserva. La verificacion documental independiente sigue pendiente; no se acredita una firma productiva.</p>:null}
     {firmadoUrl&&<a className="btn btn-outline-primary" href={firmadoUrl} download="COLO-FO.001-recuperado-STAGING.pdf">
       <ExternalLink size={16} aria-hidden="true"/>Descargar documento recuperado en STAGING</a>}
     {error&&<p role="alert">{error}</p>}

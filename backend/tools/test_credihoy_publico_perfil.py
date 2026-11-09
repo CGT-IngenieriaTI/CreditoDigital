@@ -14,6 +14,28 @@ from django.test import SimpleTestCase
 
 
 class ProfileTests(SimpleTestCase):
+    def test_explicit_compensated_public_profile_keeps_otp_sessions_and_draft_notice(self):
+        self.env.update(DJANGO_SETTINGS_MODULE='core.settings_credihoy_publico',
+            CREDIHOY_PERFIL_DISPONIBILIDAD='PUBLICO_HTTPS',CREDIHOY_IDENTIDAD_GRANTS_ENABLED='0')
+        self.env.pop('CREDIHOY_PUBLICO_BOT_SECRET_FILE',None)
+        self.env.pop('CREDIHOY_PUBLICO_CELERY_BROKER_URL_FILE',None)
+        self.config.update(origen='https://consulta.congente.coop:18449',disponibilidad='PUBLICO_HTTPS',
+            autorizacionHasta='',identidadesHmac=[],botSitekey='',seguridadCompensatoria={
+                'version':'CREDIHOY_COMPENSACION_LIMITES_V1','referencia':'DECISION_TECNOLOGIA_20261109_PUBLICACION18449',
+                'origen':'https://consulta.congente.coop:18449','revisionPrevista':'2026-11-10',
+                'turnstilePendiente':True,'avisoPendiente':True})
+        (self.root/'CREDIHOY_PUBLICO_CONFIG').write_text(json.dumps(self.config))
+        p=self.load()
+        self.assertTrue(p['CELERY_TASK_ALWAYS_EAGER']);self.assertIsNone(p['CELERY_BROKER_URL'])
+        self.assertEqual(p['OTP_PROVIDER_MODE'],'real');self.assertEqual(p['SESSION_COOKIE_AGE'],900)
+        self.assertTrue(p['SESSION_COOKIE_SECURE']);self.assertTrue(p['SESSION_COOKIE_HTTPONLY'])
+        self.assertEqual(p['CREDIHOY_PUBLICO_VALIDACION'],self.config['validacionInstitucional'])
+        self.assertFalse(p['CREDIHOY_PUBLICO_BORDE_BASIC_EXTERNO'])
+        for changes in ({'referencia':'UNREVIEWED'},{'turnstilePendiente':False},{'avisoPendiente':False}):
+            self.config['seguridadCompensatoria'].update(changes)
+            (self.root/'CREDIHOY_PUBLICO_CONFIG').write_text(json.dumps(self.config))
+            with self.assertRaises(ImproperlyConfigured):self.load()
+
     def test_continuous_public_18449_is_explicit_keeps_private_state_and_individual_sessions(self):
         self.env.update(DJANGO_SETTINGS_MODULE='core.settings_credihoy_publico',
             CREDIHOY_PERFIL_DISPONIBILIDAD='PUBLICO_HTTPS',CREDIHOY_IDENTIDAD_GRANTS_ENABLED='1',

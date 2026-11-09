@@ -70,6 +70,7 @@ def _borde_basic_externo():
 
 
 def validar_habilitacion():
+    from .publico_privacidad import compensacion_configurada
     restricted=getattr(settings,'CREDIHOY_PUBLICO_RESTRINGIDO',None)
     if type(restricted) is not bool:raise AccesoDenegado
     availability = getattr(settings, 'CREDIHOY_PERFIL_DISPONIBILIDAD', 'PILOT_WINDOW')
@@ -80,7 +81,7 @@ def validar_habilitacion():
                 or getattr(settings,'CREDIHOY_PUBLICO_AUTORIZACION_HASTA',None)!=''
                 or getattr(settings,'CREDIHOY_PUBLICO_IDENTIDADES_HMAC',None)!=[]
                 or getattr(settings,'CREDIHOY_ADMISION_ENSAYO',{})
-                or getattr(settings,'CREDIHOY_IDENTIDAD_GRANTS_ENABLED',False) is not True):
+                or getattr(settings,'CREDIHOY_IDENTIDAD_GRANTS_ENABLED',False) is not True and not compensacion_configurada()):
             raise AccesoDenegado
     permanent = availability == 'PERMANENT_PRIVATE_V1'
     if permanent:
@@ -111,11 +112,11 @@ def validar_habilitacion():
             if (origin.scheme!='https' or origin.hostname!=getattr(settings,'CREDIHOY_PUBLICO_HOST',None)
                     or origin.username or origin.password or origin.path or origin.query or origin.fragment
                     or availability=='PUBLICO_HTTPS' and origin.port not in (None,443,18449)
-                    or permanent and origin.port not in (None, 443)):raise ValueError
+                    or permanent and origin.port not in (None,443,18449,18450)):raise ValueError
         except (ValueError,TypeError):raise AccesoDenegado from None
         if not restricted:
             from . import publico_privacidad as privacy
-            privacy.validar_aviso();privacy.validar_antibot()
+            privacy.validar_aviso();privacy.validar_proteccion_automatizacion()
     if restricted:
         identities = getattr(settings, 'CREDIHOY_PUBLICO_IDENTIDADES_HMAC', ())
         networks = getattr(settings, 'CREDIHOY_PUBLICO_REDES', ())
@@ -163,26 +164,25 @@ def admision_ensayo_vigente():
 
 def identidad_permitida(identity):
     validar_habilitacion()
-    if type(identity) is not str or not re.fullmatch('[a-f0-9]{64}', identity):
-        return False
-    if settings.CREDIHOY_PUBLICO_RESTRINGIDO is False:
-        return True
-    if getattr(settings, 'CREDIHOY_PERFIL_DISPONIBILIDAD', 'PILOT_WINDOW') == 'PERMANENT_PRIVATE_V1':
-        return True
-    if admision_ensayo_vigente():
-        return True
-    return any((hmac.compare_digest(identity, candidate) for candidate in settings.CREDIHOY_PUBLICO_IDENTIDADES_HMAC))
+    if type(identity) is not str or not re.fullmatch('[a-f0-9]{64}',identity):return False
+    # Admission to identity verification is not an authenticated session or ownership.
+    if settings.CREDIHOY_PUBLICO_RESTRINGIDO is False:return True
+    if getattr(settings, 'CREDIHOY_PERFIL_DISPONIBILIDAD', 'PILOT_WINDOW') == 'PERMANENT_PRIVATE_V1':return True
+    if admision_ensayo_vigente():return True
+    return any(hmac.compare_digest(identity, candidate)
+        for candidate in settings.CREDIHOY_PUBLICO_IDENTIDADES_HMAC)
 
 
 def ip_cliente(request):
     try:
         peer = ip_address(request.META.get('REMOTE_ADDR', ''))
-        trusted = any((peer in ip_network(n) for n in settings.CREDIHOY_PUBLICO_PROXIES))
+        trusted = any(peer in ip_network(n) for n in settings.CREDIHOY_PUBLICO_PROXIES)
         forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
         protocol = request.META.get('HTTP_X_FORWARDED_PROTO')
         if request.META.get('HTTP_X_REAL_IP'):
             raise ValueError
         if trusted:
+            # The institutional last hop must replace, not append, these headers.
             if not forwarded or ',' in forwarded or protocol != 'https':
                 raise ValueError
             client = ip_address(forwarded)
@@ -192,13 +192,26 @@ def ip_cliente(request):
             client = peer
         if getattr(settings, 'CREDIHOY_PERFIL_DISPONIBILIDAD', 'PILOT_WINDOW') == 'PERMANENT_PRIVATE_V1':
             origins = settings.CSRF_TRUSTED_ORIGINS
-            if getattr(settings, 'CREDIHOY_PUBLICO_RESTRINGIDO', None) is not True or not trusted or (not request.is_secure()) or ('https://' + request.get_host() not in origins) or (request.META.get('HTTP_ORIGIN') is not None and request.META['HTTP_ORIGIN'] not in origins) or ('HTTP_FORWARDED' in request.META) or request.META.get('HTTP_X_FORWARDED_HOST') or request.META.get('HTTP_X_FORWARDED_PORT') or (request.META.get('HTTP_X_FORWARDED_PREFIX', '') != (getattr(settings, 'FORCE_SCRIPT_NAME', None) or '')):
+            if (getattr(settings, 'CREDIHOY_PUBLICO_RESTRINGIDO', None) is not True
+                    or not trusted or not request.is_secure()
+                    or 'https://' + request.get_host() not in origins
+                    or request.META.get('HTTP_ORIGIN') is not None and request.META['HTTP_ORIGIN'] not in origins
+                    or 'HTTP_FORWARDED' in request.META
+                    or request.META.get('HTTP_X_FORWARDED_HOST') or request.META.get('HTTP_X_FORWARDED_PORT')
+                    or request.META.get('HTTP_X_FORWARDED_PREFIX', '') != (getattr(settings, 'FORCE_SCRIPT_NAME', None) or '')):
                 raise ValueError
-        if getattr(settings, 'CREDIHOY_PUBLICO_RESTRINGIDO', None) is False:
-            if not trusted or client.is_unspecified or client.is_multicast or request.META.get('HTTP_FORWARDED') or ('https://' + request.get_host() not in settings.CSRF_TRUSTED_ORIGINS) or (request.META.get('HTTP_X_FORWARDED_PREFIX', '') != (getattr(settings, 'FORCE_SCRIPT_NAME', None) or '')):
+        if getattr(settings,'CREDIHOY_PUBLICO_RESTRINGIDO',None) is False:
+            if (not trusted or client.is_unspecified or client.is_multicast
+                    or request.META.get('HTTP_FORWARDED')
+                    or 'https://'+request.get_host() not in settings.CSRF_TRUSTED_ORIGINS
+                    or request.META.get('HTTP_X_FORWARDED_PREFIX','')!=(getattr(settings,'FORCE_SCRIPT_NAME',None) or '')):
                 raise ValueError
-        elif not any((client in ip_network(n) for n in settings.CREDIHOY_PUBLICO_REDES)):
-            if not _borde_basic_externo() or not trusted or (not request.is_secure()) or client.is_unspecified or client.is_multicast or ('HTTP_FORWARDED' in request.META) or ('https://' + request.get_host() not in settings.CSRF_TRUSTED_ORIGINS) or (request.META.get('HTTP_X_FORWARDED_PREFIX', '') != (getattr(settings, 'FORCE_SCRIPT_NAME', None) or '')):
+        elif not any(client in ip_network(n) for n in settings.CREDIHOY_PUBLICO_REDES):
+            if (not _borde_basic_externo() or not trusted or not request.is_secure()
+                    or client.is_unspecified or client.is_multicast
+                    or 'HTTP_FORWARDED' in request.META
+                    or 'https://'+request.get_host() not in settings.CSRF_TRUSTED_ORIGINS
+                    or request.META.get('HTTP_X_FORWARDED_PREFIX','')!=(getattr(settings,'FORCE_SCRIPT_NAME',None) or '')):
                 raise ValueError
             from .publico_restringido import autorizar_edge
             autorizar_edge(request)
@@ -327,3 +340,16 @@ def purgar_temporales(*, actor, referencia):
                 revocar(key, actor=actor, referencia=referencia)
                 count += 1
     return count
+
+
+def exigir_sesion_permanente(sesion,expira_at):
+    from uuid import UUID
+    from datetime import datetime,timedelta
+    if getattr(settings,'CREDIHOY_PERFIL_DISPONIBILIDAD','')!='PERMANENT_PRIVATE_V1':raise AccesoDenegado
+    validar_habilitacion()
+    try:
+        if type(sesion) is not str or str(UUID(sesion))!=sesion:raise ValueError
+        expiry=datetime.fromisoformat(expira_at) if type(expira_at) is str else expira_at
+        now=timezone.now()
+        if not isinstance(expiry,datetime) or not timezone.is_aware(expiry) or not now<expiry<=now+timedelta(seconds=900):raise ValueError
+    except (ValueError,TypeError,AttributeError):raise AccesoDenegado from None

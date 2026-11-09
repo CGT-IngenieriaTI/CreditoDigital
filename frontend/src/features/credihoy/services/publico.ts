@@ -2,7 +2,7 @@ const POLITICA_URL='https://www.congente.coop/images/Balancesocial/GER-PO.085-Po
 import {validarSimulacionLocal,type EscenarioLocal,type SimulacionLocal} from './simulacion';
 export interface InicioPublico { avisoVersion:string; avisoTexto:string; botSitekey:string; csrfToken:string; canales:('SMS'|'EMAIL')[];
   politica:{codigo:'GER-PO.085';version:'03';url:string};duracionSesionSegundos:number;duracionOtpSegundos:number;
-  proteccion?:'OPERADOR_RESTRINGIDO';controlAcceso?:string }
+  proteccion?:'OPERADOR_RESTRINGIDO'|'LIMITES_INSTITUCIONALES';controlAcceso?:string }
 export interface IntentoPublico { intento:string;estado:'PREPARANDO'|'CONTACTO_DISPONIBLE'|'ENVIO_PENDIENTE'|'CODIGO_ENVIADO';
   contactoEnmascarado:string|null;canal:'SMS'|'EMAIL'|null;expiraAt:string|null }
 export interface PerfilPersonal {correoRegistrado:string|null;correoVerificado:boolean;contactoEnmascarado:string|null;fuente:'COTEJO_INSTITUCIONAL_AUTENTICADO'}
@@ -533,9 +533,9 @@ export class AccesoAsociadoClient {
         ||!Number.isInteger(p.duracionSesionSegundos)||Number(p.duracionSesionSegundos)<=0||Number(p.duracionSesionSegundos)>900
         ||!Number.isInteger(p.duracionOtpSegundos)||Number(p.duracionOtpSegundos)<=0||Number(p.duracionOtpSegundos)>300)fail();
     this.csrf=p.csrfToken as string;
-    if(p.proteccion!==undefined&&(p.proteccion!=='OPERADOR_RESTRINGIDO'||typeof p.controlAcceso!=='string'||p.controlAcceso.length<40||p.controlAcceso.length>2048))fail();
+    if(p.proteccion!==undefined&&(!['OPERADOR_RESTRINGIDO','LIMITES_INSTITUCIONALES'].includes(p.proteccion as string)||typeof p.controlAcceso!=='string'||p.controlAcceso.length<40||p.controlAcceso.length>2048))fail();
     return {csrfToken:this.csrf,avisoVersion:text(p.avisoVersion),avisoTexto:text(p.avisoTexto,20000),
-      ...(p.proteccion==='OPERADOR_RESTRINGIDO'?{proteccion:p.proteccion,controlAcceso:p.controlAcceso as string}:{}),
+      ...(p.proteccion==='OPERADOR_RESTRINGIDO'||p.proteccion==='LIMITES_INSTITUCIONALES'?{proteccion:p.proteccion,controlAcceso:p.controlAcceso as string}:{}),
       botSitekey:text(p.botSitekey),canales:[...p.canales as ('SMS'|'EMAIL')[]],
       politica:{codigo:'GER-PO.085',version:'03',url:POLITICA_URL},
       duracionSesionSegundos:p.duracionSesionSegundos as number,duracionOtpSegundos:p.duracionOtpSegundos as number};

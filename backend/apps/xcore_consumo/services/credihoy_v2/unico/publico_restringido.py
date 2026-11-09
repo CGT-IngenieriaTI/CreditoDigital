@@ -146,3 +146,25 @@ class InstitucionalLecturaRouter(AlmacenamientoAisladoRouter):
                 raise PermissionDenied('FUENTE_INSTITUCIONAL_NO_CONFIGURADA')
             return alias
         return getattr(settings,'CREDIHOY_ACCESO_STATE_DB_ALIAS','default')
+
+
+def comprobar_continuo(token,request_id):
+    from .publico import Acceso
+    from .publico_privacidad import compensacion_configurada,plazos
+    from django.utils import timezone
+    if not compensacion_configurada():return False
+    try:
+        p=signing.loads(token,salt='credihoy-continuo-control-navegador-v1',max_age=plazos()['otpSegundos'])
+        a=Acceso.objects.get(pk=UUID(request_id))
+        return (set(p)=={'navegador','proposito'} and p['proposito']=='CONTROL_NAVEGADOR_NO_AUTENTICACION'
+            and not a.revocado and a.estado=='PROCESANDO' and a.expira_at>timezone.now()
+            and hmac.compare_digest(p['navegador'],a.navegador_hmac))
+    except (signing.BadSignature,ValueError,KeyError,TypeError,Acceso.DoesNotExist):return False
+
+
+def emitir_continuo(request):
+    from .publico import navegador,AccesoDenegado
+    from .publico_privacidad import compensacion_configurada
+    if not compensacion_configurada():raise AccesoDenegado
+    return signing.dumps({'navegador':navegador(request),'proposito':'CONTROL_NAVEGADOR_NO_AUTENTICACION'},
+        salt='credihoy-continuo-control-navegador-v1')

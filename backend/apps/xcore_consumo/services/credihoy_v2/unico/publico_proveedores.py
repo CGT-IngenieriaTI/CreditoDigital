@@ -20,13 +20,20 @@ from .precarga import _texto, _entero_exacto
 
 def verificar_bot(token, request_id):
     from . import publico_restringido as restringido
+    from .publico_privacidad import compensacion_configurada
+    if compensacion_configurada():return restringido.comprobar_continuo(token,request_id)
     if restringido.activo():
         return restringido.comprobar(token, request_id)
-    with requests.post('https://challenges.cloudflare.com/turnstile/v0/siteverify', data={'secret': settings.CREDIHOY_PUBLICO_BOT_SECRET, 'response': token, 'idempotency_key': request_id}, timeout=5, allow_redirects=False) as r:
+    # Tokens are single-use; hostname/action are checked, not just success.
+    # https://developers.cloudflare.com/turnstile/get-started/server-side-validation/
+    with requests.post('https://challenges.cloudflare.com/turnstile/v0/siteverify',
+            data={'secret': settings.CREDIHOY_PUBLICO_BOT_SECRET, 'response': token,
+                  'idempotency_key': request_id}, timeout=5, allow_redirects=False) as r:
         if r.status_code != 200:
             return False
         p = r.json()
-    accepted = p.get('success') is True and p.get('hostname') == settings.CREDIHOY_PUBLICO_HOST and (p.get('action') == 'credihoy_acceso')
+    accepted = (p.get('success') is True and p.get('hostname') == settings.CREDIHOY_PUBLICO_HOST
+                and p.get('action') == 'credihoy_acceso')
     if accepted and _grants_enabled():
         from incluirtec.services.identity_credential import record_preotp_challenge
         accepted = record_preotp_challenge(request_id)

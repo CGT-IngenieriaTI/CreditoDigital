@@ -57,6 +57,12 @@ def validar_aviso():
     if not isinstance(approval, dict):
         raise AccesoDenegado
     plazos()
+    if compensacion_configurada():
+        if (not settings.CREDIHOY_PUBLICO_AVISO_VERSION or not settings.CREDIHOY_PUBLICO_AVISO_TEXTO
+                or approval.get('estado') not in ('BORRADOR','VALIDADO')
+                or approval.get('estado')=='VALIDADO' and settings.CREDIHOY_PUBLICO_AVISO_TEXTO==BORRADOR):
+            raise AccesoDenegado
+        return
     if (approval.get('estado') != 'VALIDADO'
             or not approval.get('referenciaPrivacidad') or not approval.get('referenciaSeguridad')
             or approval.get('politicaSha256') != POLITICA['sha256']
@@ -77,3 +83,40 @@ def validar_antibot():
         if (type(value) is not str or not value.strip()
                 or value.startswith(('1x00000000000000000000', '2x00000000000000000000', '3x00000000000000000000'))):
             raise AccesoDenegado
+
+
+def compensacion_configurada():
+    from django.conf import settings
+    config=getattr(settings,'CREDIHOY_PUBLICO_COMPENSACION',{})
+    if not config:return False
+    try:
+        if (settings.SETTINGS_MODULE!='core.settings_credihoy_publico'
+                or settings.CREDIHOY_PUBLICO_RESTRINGIDO is not False
+                or settings.CREDIHOY_PERFIL_DISPONIBILIDAD!='PUBLICO_HTTPS'
+                or list(settings.CSRF_TRUSTED_ORIGINS)!=['https://consulta.congente.coop:18449']):raise ValueError
+        validar_compensacion(config,settings.CSRF_TRUSTED_ORIGINS[0])
+    except (AttributeError,TypeError,ValueError):
+        from .publico_controles import AccesoDenegado
+        raise AccesoDenegado from None
+    return True
+
+
+def validar_compensacion(config,origen):
+    if (type(config) is not dict or set(config)!={'version','referencia','origen','revisionPrevista','turnstilePendiente','avisoPendiente'}
+            or config['version']!='CREDIHOY_COMPENSACION_LIMITES_V1'
+            or config['referencia']!='DECISION_TECNOLOGIA_20261109_PUBLICACION18449'
+            or origen!='https://consulta.congente.coop:18449' or config['origen']!=origen
+            or config['revisionPrevista']!='2026-11-10'
+            or config['turnstilePendiente'] is not True or config['avisoPendiente'] is not True):
+        raise ValueError('COMPENSACION_PUBLICA_NO_ACREDITADA')
+    return config
+
+
+def validar_proteccion_automatizacion():
+    if compensacion_configurada():
+        from django.conf import settings
+        if settings.DATABASES['default']['ENGINE']!='django.db.backends.postgresql':
+            from .publico_controles import AccesoDenegado
+            raise AccesoDenegado
+        return
+    validar_antibot()

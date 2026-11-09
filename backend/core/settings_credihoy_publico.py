@@ -6,7 +6,7 @@ import stat
 from pathlib import Path
 from urllib.parse import urlsplit
 from django.core.exceptions import ImproperlyConfigured
-from apps.xcore_consumo.services.credihoy_v2.unico.publico_privacidad import validar_plazos
+from apps.xcore_consumo.services.credihoy_v2.unico.publico_privacidad import validar_plazos,validar_compensacion
 
 os.environ['DJANGO_SKIP_DOTENV'] = '1'
 from .settings import *  # noqa: E402,F403
@@ -63,6 +63,10 @@ try:
     public_prefix=cfg.get('prefijoPublico','')
     if public_prefix not in ('','/credihoy'):raise ValueError
     CREDIHOY_PUBLICO_HOST = url.hostname
+    CREDIHOY_PUBLICO_COMPENSACION=cfg.get('seguridadCompensatoria',{})
+    if CREDIHOY_PUBLICO_COMPENSACION:
+        validar_compensacion(CREDIHOY_PUBLICO_COMPENSACION,origin)
+        if not _publico_permanente and not _privado_permanente:raise ValueError
     CREDIHOY_PUBLICO_AVISO_VERSION = cfg['avisoVersion']
     CREDIHOY_PUBLICO_AVISO_TEXTO = cfg['avisoTexto']
     CREDIHOY_PUBLICO_BOT_SITEKEY = cfg.get('botSitekey', '') if _ensayo_privado else cfg['botSitekey']
@@ -108,7 +112,7 @@ try:
             or not set(CREDIHOY_PUBLICO_CANALES) <= {'SMS', 'EMAIL'}
             or any(type(v) is not str or not v.strip() for v in (CREDIHOY_PUBLICO_AVISO_VERSION,
                 CREDIHOY_PUBLICO_AVISO_TEXTO, CREDIHOY_PUBLICO_AUTORIZACION_REFERENCIA))
-            or (not _ensayo_privado and (type(CREDIHOY_PUBLICO_BOT_SITEKEY) is not str
+            or (not _ensayo_privado and not CREDIHOY_PUBLICO_COMPENSACION and (type(CREDIHOY_PUBLICO_BOT_SITEKEY) is not str
                 or not CREDIHOY_PUBLICO_BOT_SITEKEY.strip()))):
         raise ValueError
 except (KeyError, ValueError, TypeError):
@@ -119,7 +123,7 @@ CREDIHOY_PUBLICO_RESTRINGIDO = _ensayo_privado
 CREDIHOY_PUBLICO_MODO = 'ENSAYO_HTTPS_RESTRINGIDO' if _ensayo_privado else 'PUBLICO_HTTPS'
 if _privado_permanente:
     CREDIHOY_PUBLICO_MODO = 'INSTITUTIONAL_PERMANENT'
-CREDIHOY_PUBLICO_BOT_SECRET = '' if _ensayo_privado else secreto('CREDIHOY_PUBLICO_BOT_SECRET')
+CREDIHOY_PUBLICO_BOT_SECRET = '' if _ensayo_privado or CREDIHOY_PUBLICO_COMPENSACION else secreto('CREDIHOY_PUBLICO_BOT_SECRET')
 OTP_AES_KEY_B64 = secreto('CREDIHOY_PUBLICO_OTP_AES_KEY_B64')
 try:
     if len(base64.b64decode(OTP_AES_KEY_B64, validate=True)) != 32:
@@ -153,7 +157,7 @@ if CREDIHOY_IDENTIDAD_GRANTS_ENABLED:
     CREDIHOY_IDENTIDAD_CREDENTIAL_FILE = requerido('CREDIHOY_IDENTIDAD_CREDENTIAL_FILE')
     if not Path(CREDIHOY_IDENTIDAD_CREDENTIAL_FILE).is_absolute():
         raise ImproperlyConfigured('Politica identidad requiere referencia absoluta')
-if _publico_permanente and not CREDIHOY_IDENTIDAD_GRANTS_ENABLED:
+if _publico_permanente and not CREDIHOY_IDENTIDAD_GRANTS_ENABLED and not CREDIHOY_PUBLICO_COMPENSACION:
     raise ImproperlyConfigured('Disponibilidad publica requiere grants individuales de identidad')
 if urlsplit(API_DATA_CREDIHOY_BASE_URL).scheme != 'https':
     raise ImproperlyConfigured('API_DATA requiere HTTPS verificado')
@@ -195,7 +199,7 @@ SECURE_REFERRER_POLICY = 'no-referrer'
 DATA_UPLOAD_MAX_MEMORY_SIZE = 16384
 REST_FRAMEWORK = {**REST_FRAMEWORK, 'DEFAULT_AUTHENTICATION_CLASSES': (),
     'DEFAULT_THROTTLE_CLASSES': (), 'DEFAULT_PERMISSION_CLASSES': ()}
-CELERY_BROKER_URL = None if _ensayo_privado else secreto('CREDIHOY_PUBLICO_CELERY_BROKER_URL')
+CELERY_BROKER_URL = None if _ensayo_privado or CREDIHOY_PUBLICO_COMPENSACION else secreto('CREDIHOY_PUBLICO_CELERY_BROKER_URL')
 CELERY_TASK_DEFAULT_QUEUE = 'credihoy_publico'
 CELERY_TASK_ROUTES = {name: {'queue': 'credihoy_publico'} for name in (
     'credihoy.preparar_acceso_publico', 'credihoy.limpiar_accesos_publicos')}
@@ -234,7 +238,8 @@ if _publico_permanente:
     if any(type(value) is not bool for value in (CREDIHOY_SEGUIMIENTO_ENABLED,CREDIHOY_COTIZACION_TITULAR_ENABLED)):
         raise ImproperlyConfigured('Capacidades personales publicas invalidas')
     DATABASE_ROUTERS = ['apps.xcore_consumo.services.credihoy_v2.unico.publico_restringido.AlmacenamientoAisladoRouter']
-    CELERY_TASK_ALWAYS_EAGER = False
+    CELERY_TASK_ALWAYS_EAGER = bool(CREDIHOY_PUBLICO_COMPENSACION)
+    CELERY_TASK_EAGER_PROPAGATES = False
 
 # Deployment metadata only. Credential contents are loaded by the existing task.
 from apps.integraciones.autentic.pdf_criptografia import referencias_registro_sello

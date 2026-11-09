@@ -113,7 +113,11 @@ def authorize(request):
     if not timezone.is_aware(expires) or expires<=timezone.now():raise ValueError
     cohort=getattr(settings,'CREDIHOY_TITULAR_DOCUMENTOS_HMAC',())
     from .publico_controles import admision_ensayo_vigente
-    if not admision_ensayo_vigente() and (not 1<=len(cohort)<=2 or not any(hmac.compare_digest(document_hmac(proof['numeroDocumento']),v)
+    if getattr(settings,'CREDIHOY_PERFIL_DISPONIBILIDAD','')=='PERMANENT_PRIVATE_V1':
+        from .publico_controles import exigir_sesion_permanente
+        exigir_sesion_permanente(proof['accesoId'],expires)
+        if cohort!=[]:raise ValueError
+    elif not admision_ensayo_vigente() and (not 1<=len(cohort)<=2 or not any(hmac.compare_digest(document_hmac(proof['numeroDocumento']),v)
             for v in cohort)):raise ValueError
     identity={'numeroDocumento':proof['numeroDocumento'],
         '_sesionReferencia':proof['accesoId'],'_sesionExpiraAt':proof['sesionExpiraAt']}

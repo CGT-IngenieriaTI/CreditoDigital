@@ -104,7 +104,7 @@ export function CredihoyAccesoAsociado({seguimiento}:{seguimiento?:(props:Seguim
   },[]);
   useEffect(()=>{
     if(!inicio||sesion.autenticado||intento||!botNode.current)return;
-    if(inicio.proteccion==='OPERADOR_RESTRINGIDO'){
+    if(inicio.proteccion==='OPERADOR_RESTRINGIDO'||inicio.proteccion==='LIMITES_INSTITUCIONALES'){
       setBot(inicio.controlAcceso??'');return;
     }
     let active=true,widget:string|undefined;

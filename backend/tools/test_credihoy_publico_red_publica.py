@@ -14,6 +14,32 @@ from apps.xcore_consumo.services.credihoy_v2.unico import publico_privacidad as 
     CREDIHOY_PUBLICO_RETENCION_DIAS=30,CREDIHOY_PUBLICO_BOT_SITEKEY='synthetic-public-key-only',
     CREDIHOY_PUBLICO_BOT_SECRET='synthetic-private-secret-only')
 class PublicNetworkTests(SimpleTestCase):
+    @override_settings(CREDIHOY_PERFIL_DISPONIBILIDAD='PERMANENT_PRIVATE_V1',
+        SETTINGS_MODULE='core.settings_credihoy_titular',CREDIHOY_PUBLICO_MODO='OWNER_PERMANENT',
+        CREDIHOY_PUBLICO_RESTRINGIDO=True,CREDIHOY_PUBLICO_AUTORIZACION_HASTA='',
+        CREDIHOY_PUBLICO_IDENTIDADES_HMAC=[],CREDIHOY_TITULAR_DOCUMENTOS_HMAC=[],CREDIHOY_ADMISION_ENSAYO={},
+        CREDIHOY_PUBLICO_AUTORIZACION_REFERENCIA='SYNTHETIC_ONLY',CREDIHOY_PUBLICO_BORDE_BASIC_EXTERNO=False,
+        CREDIHOY_PUBLICO_REDES=['10.0.13.7/32'],CSRF_TRUSTED_ORIGINS=['https://consulta.congente.coop:18450'],
+        CREDIHOY_AUTOSERVICIO_ENABLED=True,CREDIHOY_AUTOSERVICIO_ALCANCE={'modo':'SESION_PERSONAL_VERIFICADA'})
+    def test_permanent_owner_retains_individual_expiry_and_rejects_old_window_and_forged_peers(self):
+        from datetime import timedelta
+        from uuid import uuid4
+        from django.utils import timezone
+        from apps.xcore_consumo.services.credihoy_v2.unico import autoservicio
+        sid=str(uuid4());now=timezone.now()
+        controls.validar_habilitacion()
+        controls.exigir_sesion_permanente(sid,now+timedelta(minutes=14))
+        self.assertTrue(autoservicio.sesion_habilitada(sid,expira_at=now+timedelta(minutes=14)))
+        for value in (now-timedelta(seconds=1),now+timedelta(minutes=16),now.replace(tzinfo=None),None):
+            self.assertFalse(autoservicio.sesion_habilitada(sid,expira_at=value))
+        for change in ({'CREDIHOY_PUBLICO_AUTORIZACION_HASTA':'2099-01-01T00:00:00Z'},
+                {'CREDIHOY_PUBLICO_IDENTIDADES_HMAC':['a'*64]},
+                {'CREDIHOY_PUBLICO_BORDE_BASIC_EXTERNO':True},
+                {'CREDIHOY_ADMISION_ENSAYO':{'version':'OLD'}}):
+            with override_settings(**change),self.assertRaises(controls.AccesoDenegado):controls.validar_habilitacion()
+        with override_settings(CREDIHOY_AUTOSERVICIO_ALCANCE={'modo':'SESION_PERSONAL_VERIFICADA','hasta':'2099'}):
+            self.assertFalse(autoservicio.sesion_habilitada(sid,expira_at=now+timedelta(minutes=14)))
+
     @override_settings(CREDIHOY_PERFIL_DISPONIBILIDAD='PUBLICO_HTTPS',SETTINGS_MODULE='core.settings_credihoy_publico',
         CREDIHOY_PUBLICO_AUTORIZACION_HASTA='',CREDIHOY_PUBLICO_BORDE_BASIC_EXTERNO=False,
         CREDIHOY_IDENTIDAD_GRANTS_ENABLED=True,CREDIHOY_ADMISION_ENSAYO={},

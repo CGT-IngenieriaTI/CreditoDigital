@@ -40,7 +40,7 @@ def habilitado():
             or getattr(settings, 'OTP_PROVIDER_MODE', None) != 'real'
             or any(not getattr(settings, k, '') for k in ('CREDIHOY_PUBLICO_AVISO_VERSION',
                 'CREDIHOY_PUBLICO_AVISO_TEXTO','CREDIHOY_PUBLICO_HOST'))
-            or (not restringido.activo() and any(not getattr(settings,k,'') for k in (
+            or (not restringido.activo() and not privacidad.compensacion_configurada() and any(not getattr(settings,k,'') for k in (
                 'CREDIHOY_PUBLICO_BOT_SITEKEY','CREDIHOY_PUBLICO_BOT_SECRET')))):
         raise AccesoDenegado
     # Access OTP must not share a verification service with consent/signature OTP.
@@ -53,7 +53,7 @@ def habilitado():
         restringido.validar()
     else:
         privacidad.validar_aviso()
-        privacidad.validar_antibot()
+        privacidad.validar_proteccion_automatizacion()
 
 
 def huella(uso, valor):
@@ -82,6 +82,8 @@ def inicializar(request):
     from . import publico_restringido as restringido
     if restringido.activo():
         result.update(proteccion='OPERADOR_RESTRINGIDO', controlAcceso=restringido.emitir(request))
+    elif privacidad.compensacion_configurada():
+        result.update(proteccion='LIMITES_INSTITUCIONALES',controlAcceso=restringido.emitir_continuo(request))
     return result
 
 

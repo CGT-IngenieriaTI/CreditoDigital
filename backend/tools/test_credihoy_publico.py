@@ -40,6 +40,48 @@ SID='VE'+'a'*32
     CREDIHOY_PUBLICO_RETENCION_DIAS=30,OTP_PROVIDER_MODE='real',ALLOWED_HOSTS=['testserver'])
 @override_settings(CREDIHOY_PUBLICO_VERIFY_SID='VA'+'b'*32,TWILIO_VERIFY_SID='VA'+'a'*32)
 class PublicAccessTests(TransactionTestCase):
+    def test_compensated_public_18449_keeps_browser_otp_audit_csrf_and_revocation_without_basic(self):
+        compensation={'version':'CREDIHOY_COMPENSACION_LIMITES_V1',
+            'referencia':'DECISION_TECNOLOGIA_20261109_PUBLICACION18449','origen':'https://consulta.congente.coop:18449',
+            'revisionPrevista':'2026-11-10','turnstilePendiente':True,'avisoPendiente':True}
+        from django.conf import settings
+        draft={**settings.CREDIHOY_PUBLICO_VALIDACION,'estado':'BORRADOR'}
+        with override_settings(SETTINGS_MODULE='core.settings_credihoy_publico',CREDIHOY_PUBLICO_RESTRINGIDO=False,
+                CREDIHOY_PERFIL_DISPONIBILIDAD='PUBLICO_HTTPS',CREDIHOY_PUBLICO_MODO='PUBLICO_HTTPS',
+                CREDIHOY_PUBLICO_COMPENSACION=compensation,CREDIHOY_PUBLICO_BORDE_BASIC_EXTERNO=False,
+                CREDIHOY_IDENTIDAD_GRANTS_ENABLED=False,CREDIHOY_PUBLICO_AUTORIZACION_HASTA='',
+                CREDIHOY_PUBLICO_IDENTIDADES_HMAC=[],CREDIHOY_ADMISION_ENSAYO={},
+                CREDIHOY_PUBLICO_PROXIES=['127.0.0.1/32'],CREDIHOY_PUBLICO_REDES=[],
+                CREDIHOY_PUBLICO_HOST='consulta.congente.coop',ALLOWED_HOSTS=['consulta.congente.coop'],
+                CSRF_TRUSTED_ORIGINS=['https://consulta.congente.coop:18449'],
+                CREDIHOY_PUBLICO_BOT_SITEKEY='',CREDIHOY_PUBLICO_BOT_SECRET='',
+                CREDIHOY_PUBLICO_VALIDACION=draft,CREDIHOY_PUBLICO_AUDITORIA_AISLADA=True):
+            client=APIClient(enforce_csrf_checks=True)
+            headers={'HTTP_HOST':'consulta.congente.coop:18449','HTTP_X_FORWARDED_FOR':'198.51.100.9','HTTP_X_FORWARDED_PROTO':'https'}
+            boot=client.get(BASE+'inicio/',secure=True,**headers).json()
+            self.assertEqual(boot['proteccion'],'LIMITES_INSTITUCIONALES')
+            self.assertEqual(boot['avisoTexto'],settings.CREDIHOY_PUBLICO_AVISO_TEXTO)
+            def post(path,body,rid=None,csrf=True):
+                return client.post(BASE+path,body,format='json',secure=True,
+                    HTTP_X_REQUEST_ID=rid or str(uuid4()),HTTP_ORIGIN='https://consulta.congente.coop:18449',
+                    **({'HTTP_X_CSRFTOKEN':boot['csrfToken']} if csrf else {}),**headers)
+            self.assertEqual(post('acceso/',{},csrf=False).status_code,403)
+            self.bot.side_effect=self.original_bot
+            rid=str(uuid4());data={**self.payload,'botToken':boot['controlAcceso']}
+            self.assertEqual(post('acceso/',data,rid).status_code,202)
+            self.assertEqual(service.preparar(rid),'IDENTIFICADO')
+            self.assertEqual(post('acceso/',{'intento':rid,'canal':'SMS'}).status_code,202)
+            self.assertEqual(service.preparar(rid),'ENVIO_PROCESADO')
+            self.assertEqual(post('verificar/',{'intento':rid,'codigo':'123456'}).status_code,200)
+            client.credentials(HTTP_X_ACCESO_REFERENCIA=rid)
+            self.assertTrue(client.get(BASE+'sesion/',secure=True,**headers).json()['autenticado'])
+            outsider=APIClient(enforce_csrf_checks=True)
+            self.assertFalse(outsider.get(BASE+'sesion/',secure=True,**headers).json()['autenticado'])
+            from apps.xcore_consumo.public_access_models import EventoAccesoCredihoy
+            self.assertEqual(EventoAccesoCredihoy.objects.get(acceso_id=rid,evento='solicitado').datos['validacion']['estado'],'BORRADOR')
+            Acceso.objects.filter(pk=rid).update(revocado=True)
+            self.assertFalse(client.get(BASE+'sesion/',secure=True,**headers).json()['autenticado'])
+
     def setUp(self):
         quote_fixture.QuoteFlowTests.setUp(self)
         restricted=override_settings(CREDIHOY_PUBLICO_IDENTIDADES_HMAC=(service.huella(

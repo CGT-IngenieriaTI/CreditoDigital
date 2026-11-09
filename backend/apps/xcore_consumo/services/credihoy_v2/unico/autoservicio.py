@@ -81,12 +81,31 @@ def vincular_consumo_enviada(s, alias):
     return detail
 
 
-def habilitar(sesion=None):
+def habilitar(sesion=None, *, expira_at=None):
     if getattr(settings, 'CREDIHOY_AUTOSERVICIO_ENABLED', False) is not True:
         raise wire.NoDisponible
-    if getattr(settings, 'CREDIHOY_PUBLICO_RESTRINGIDO', False) is True:
+    if getattr(settings,'CREDIHOY_PERFIL_DISPONIBILIDAD','')=='PERMANENT_PRIVATE_V1':
+        from .publico_controles import exigir_sesion_permanente,AccesoDenegado
+        try:
+            exigir_sesion_permanente(sesion,expira_at)
+            if getattr(settings,'CREDIHOY_AUTOSERVICIO_ALCANCE',None)!={'modo':'SESION_PERSONAL_VERIFICADA'}:raise ValueError
+        except (AccesoDenegado,ValueError):raise wire.NoDisponible from None
+    elif getattr(settings, 'CREDIHOY_PUBLICO_RESTRINGIDO', False) is True:
         try:
             scope = settings.CREDIHOY_AUTOSERVICIO_ALCANCE
+            if type(scope) is dict and scope.get('modo')=='SESION_PERSONAL_VERIFICADA':
+                from .publico_controles import admision_ensayo_vigente
+                if set(scope)!={'modo','hasta'} or not admision_ensayo_vigente():raise ValueError
+                if type(sesion) is not str or str(UUID(sesion))!=sesion:raise ValueError
+                expiry=datetime.fromisoformat(expira_at) if type(expira_at) is str else expira_at
+                until=datetime.fromisoformat(scope['hasta'])
+                window=datetime.fromisoformat(settings.CREDIHOY_PUBLICO_AUTORIZACION_HASTA)
+                now=timezone.now()
+                if (not isinstance(expiry,datetime) or not timezone.is_aware(expiry)
+                        or not timezone.is_aware(until) or not timezone.is_aware(window)
+                        or not now<expiry<=now+__import__('datetime').timedelta(minutes=15)
+                        or not now<until<=window):raise ValueError
+                return
             if (type(scope) is not dict or set(scope) != {'sesiones','hasta'}
                     or type(scope['sesiones']) is not list or len(scope['sesiones']) != 1
                     or type(sesion) is not str or str(UUID(sesion)) != sesion
@@ -116,13 +135,21 @@ def habilitar_lectura(identity):
         for field in ('_sesionReferencia','_requestId'):
             if str(UUID(identity[field]))!=identity[field]:raise ValueError
         expires=datetime.fromisoformat(identity['_sesionExpiraAt'])
-        window=datetime.fromisoformat(settings.CREDIHOY_PUBLICO_AUTORIZACION_HASTA)
+        permanent=getattr(settings,'CREDIHOY_PERFIL_DISPONIBILIDAD','')=='PERMANENT_PRIVATE_V1'
+        if permanent:
+            from .publico_controles import exigir_sesion_permanente,AccesoDenegado
+            try:exigir_sesion_permanente(identity['_sesionReferencia'],expires)
+            except AccesoDenegado:raise ValueError from None
+        window=expires if permanent else datetime.fromisoformat(settings.CREDIHOY_PUBLICO_AUTORIZACION_HASTA)
         if (not timezone.is_aware(expires) or not timezone.is_aware(window)
                 or timezone.now()>=min(expires,window)
                 or not getattr(settings,'CREDIHOY_PUBLICO_AUTORIZACION_REFERENCIA','')
                 or not re.fullmatch('[0-9]{6,15}',identity['numeroDocumento'])):raise ValueError
         cohort=settings.CREDIHOY_TITULAR_DOCUMENTOS_HMAC
-        if not 1<=len(cohort)<=2 or not any(hmac.compare_digest(document_hmac(identity['numeroDocumento']),v) for v in cohort):raise ValueError
+        from .publico_controles import admision_ensayo_vigente
+        if permanent:
+            if cohort!=[]:raise ValueError
+        elif not admision_ensayo_vigente() and (not 1<=len(cohort)<=2 or not any(hmac.compare_digest(document_hmac(identity['numeroDocumento']),v) for v in cohort)):raise ValueError
     except (KeyError,AttributeError,TypeError,ValueError):raise wire.NoDisponible from None
     privacy.configuracion()
 

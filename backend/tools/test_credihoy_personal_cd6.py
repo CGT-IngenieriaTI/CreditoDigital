@@ -8,7 +8,7 @@ import sys
 
 from django.core import signing
 from django.db import connection
-from django.test import TransactionTestCase,override_settings
+from django.test import SimpleTestCase,TransactionTestCase,override_settings
 from django.utils import timezone
 from apps.utils.models import AuditLog
 from apps.xcore_consumo.services.credihoy_v2.unico import cotizacion as q,publico_seguimiento as owner
@@ -103,6 +103,42 @@ class PersonalConfirmationTests(TransactionTestCase):
         self.identity['_scopeRadicacion']='solicitudes:cotizar'
         with self.assertRaises(ValueError):self.operate('consultar')
         self.assertEqual(self.received,[])
+
+
+@override_settings(CREDIHOY_RADICACION_TITULAR_ENABLED=True)
+class IntakeTrackingTests(SimpleTestCase):
+    def test_reload_reads_only_existing_intent_and_hides_operational_identifiers(self):
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+        from apps.xcore_consumo.services.credihoy_v2.unico import publico_institucional as wire
+        sid=str(uuid4());row={'referencia':sid,'procedencia':{'origen':'FUENTE_OPERATIVA'}}
+        proof={'cuota':'204448','aceptadaEn':'2026-11-07T21:00:28+00:00'}
+        with patch.object(q,'fuente_cotizacion',return_value=nullcontext()),patch.object(q,'_obtener',return_value=SimpleNamespace(pk=sid)),\
+                patch.object(q,'comprobante_simulacion_aceptada',return_value=proof),patch.object(q.SolicitudConsumo.objects,'using') as manager,\
+                patch.object(q,'transporte_cd6_personal',return_value={'estado':'RADICADA','K_FLUJO':'16119455','SC':'26101003935'}) as transport:
+            manager.return_value.values_list.return_value.get.return_value={q.KEY:{'aceptacionesSimulacion':{'HASH':{}}}}
+            for unused in range(2):
+                result=q.seguimiento_radicacion_titular({'numeroDocumento':'SYNTHETIC'},[row])[0]['seguimientoRadicacion']
+                self.assertTrue(result['confirmada']);self.assertEqual(result['cuotaAceptada'],'204448')
+                self.assertNotIn('16119455',str(result));self.assertNotIn('26101003935',str(result))
+            self.assertTrue(all(call.args[0]['accion']=='consultar' for call in transport.call_args_list))
+            manager.return_value.values_list.return_value.get.return_value={}
+            transport.reset_mock();self.assertEqual(q.seguimiento_radicacion_titular({},[row]),[row]);transport.assert_not_called()
+        raw={'versionContrato':'credihoy-radicacion-personal-v1','solicitudId':sid,'intencionId':str(uuid4()),'estado':'RADICADA',
+            'codigo':None,'puedeConfirmar':False,'presentacion':None,'K_FLUJO':'16119455','SC':'26101003935',
+            'actividadesActivas':[{'actividad':6964}],'decisionInstitucional':'PENDIENTE','firmaContractual':'PENDIENTE',
+            'autorizaFirma':False,'autorizaDesembolso':False}
+        public=wire.project_radication(raw)
+        self.assertIsNone(public['K_FLUJO']);self.assertIsNone(public['SC']);self.assertEqual(public['actividadesActivas'],[])
+        self.assertEqual(raw['SC'],'26101003935')
+
+    def test_incomplete_evidence_and_cross_holder_never_become_confirmed(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import publico_institucional as wire
+        value={'versionContrato':'credihoy-seguimiento-radicacion-v1','estado':'RADICADA','confirmada':True,
+            'consultadoEn':timezone.now().isoformat(),'cuotaAceptada':'204448','aceptadaEn':'2026-11-07T21:00:28+00:00',
+            'decisionInstitucional':'PENDIENTE','firmaContractual':'PENDIENTE'}
+        for changes in ({'confirmada':False},{'estado':'PREPARADA'},{'SC':'123'},{'decisionInstitucional':'APROBADA'}):
+            with self.assertRaises(wire.NoDisponible):wire.project_intake_tracking({**value,**changes})
 
 
 class PaymentDayTests(TransactionTestCase):

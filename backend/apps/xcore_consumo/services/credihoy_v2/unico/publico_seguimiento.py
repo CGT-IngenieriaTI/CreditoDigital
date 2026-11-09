@@ -140,71 +140,55 @@ def authorize(request):
     return rid,identity
 
 
-def read_owned(identity,payload):
-    if getattr(settings,'CREDIHOY_TITULAR_FUENTE_ENABLED',True) is not True:
+def read_owned(identity, payload):
+    if getattr(settings, 'CREDIHOY_TITULAR_FUENTE_ENABLED', True) is not True:
         raise wire.NoDisponible
     from .autoservicio import leer_enviadas
-    submitted = leer_enviadas(identity,payload)
-    if submitted and 'solicitudId' in payload:return submitted
-    alias=getattr(settings,'CREDIHOY_SEGUIMIENTO_DB_ALIAS','')
-    if (alias not in {'default','historico'} or alias not in settings.DATABASES
-            or not getattr(settings,'CREDIHOY_SEGUIMIENTO_SOURCE_REFERENCE','')):raise wire.NoDisponible
-    if alias=='historico':
-        db=settings.DATABASES[alias]
-        if (db.get('NAME')!='credihoy_validacion' or db.get('USER')!='credihoy_titular_historico'
-                or settings.DATABASES['default'].get('NAME')!='credito_digital'
-                or db.get('OPTIONS',{}).get('options')!=
-                    '-c default_transaction_read_only=on -c search_path=credihoy_lectura,pg_catalog'):
+    submitted = leer_enviadas(identity, payload)
+    if submitted and 'solicitudId' in payload:
+        from .cotizacion import seguimiento_radicacion_titular
+        return seguimiento_radicacion_titular(identity, submitted)
+    alias = getattr(settings, 'CREDIHOY_SEGUIMIENTO_DB_ALIAS', '')
+    if alias not in {'default', 'historico'} or alias not in settings.DATABASES or (not getattr(settings, 'CREDIHOY_SEGUIMIENTO_SOURCE_REFERENCE', '')):
+        raise wire.NoDisponible
+    if alias == 'historico':
+        db = settings.DATABASES[alias]
+        if db.get('NAME') != 'credihoy_validacion' or db.get('USER') != 'credihoy_titular_historico' or settings.DATABASES['default'].get('NAME') != 'credito_digital' or (db.get('OPTIONS', {}).get('options') != '-c default_transaction_read_only=on -c search_path=credihoy_lectura,pg_catalog'):
             raise wire.NoDisponible
     from apps.solicitudes.models import Solicitud
     from .publico_institucional import PRODUCTO
-    if alias!='historico':
+    if alias != 'historico':
         from .publico_http import estado_publico
-    # This function belongs to the case-owning service only. Its own source
-    # credentials must never be installed in the public portal or Verify relay.
     with transaction.atomic(using=alias):
-        if connections[alias].vendor=='postgresql':
-            with connections[alias].cursor() as cursor:cursor.execute('SET TRANSACTION READ ONLY')
+        if connections[alias].vendor == 'postgresql':
+            with connections[alias].cursor() as cursor:
+                cursor.execute('SET TRANSACTION READ ONLY')
         try:
-            config=getattr(settings,'CREDIHOY_PUBLICO_ENSAYO',{})
-            if type(config) is not dict:raise ValueError
-            configured=config.get('solicitudes',[])
-            if (type(configured) is not list or not 1<=len(configured)<=2
-                    or any(type(v) is not str or str(UUID(v))!=v for v in configured)
-                    or len(set(configured))!=len(configured)):
+            config = getattr(settings, 'CREDIHOY_PUBLICO_ENSAYO', {})
+            if type(config) is not dict:
                 raise ValueError
-        except (ValueError,TypeError,AttributeError):
+            configured = config.get('solicitudes', [])
+            if type(configured) is not list or not 1 <= len(configured) <= 2 or any((type(v) is not str or str(UUID(v)) != v for v in configured)) or (len(set(configured)) != len(configured)):
+                raise ValueError
+        except (ValueError, TypeError, AttributeError):
             raise wire.NoDisponible from None
-        source=Solicitud.objects.using(alias).filter(producto=PRODUCTO,
-            metadatos__modo='CONSULTA_REAL_CONTROLADA',pk__in=configured)
-        # A missing configured case is a broken source, not an empty owner list.
-        if source.count()!=len(configured):raise wire.NoDisponible
-        query=source.select_related('solicitante').filter(
-            solicitante__tipo_identificacion='CC',solicitante__numero_identificacion=identity['numeroDocumento'],
-        )
-        if alias=='historico':
-            query=query.only('id','solicitante_id','monto_solicitado','plazo_solicitado','estado',
-                'created_at','updated_at','solicitante__id','solicitante__tipo_identificacion',
-                'solicitante__numero_identificacion')
+        source = Solicitud.objects.using(alias).filter(producto=PRODUCTO, metadatos__modo='CONSULTA_REAL_CONTROLADA', pk__in=configured)
+        if source.count() != len(configured):
+            raise wire.NoDisponible
+        query = source.select_related('solicitante').filter(solicitante__tipo_identificacion='CC', solicitante__numero_identificacion=identity['numeroDocumento'])
+        if alias == 'historico':
+            query = query.only('id', 'solicitante_id', 'monto_solicitado', 'plazo_solicitado', 'estado', 'created_at', 'updated_at', 'solicitante__id', 'solicitante__tipo_identificacion', 'solicitante__numero_identificacion')
         if 'solicitudId' in payload:
-            query=query.filter(pk=UUID(payload['solicitudId']))
-            if not query.exists():raise Http404
-        rows=[]
+            query = query.filter(pk=UUID(payload['solicitudId']))
+            if not query.exists():
+                raise Http404
+        rows = []
         for s in query.order_by('-created_at')[:20]:
-            # Historical views deliberately expose no evaluations, quotes or CD6
-            # links. Do not run helpers that implicitly query default here.
-            row=({'referencia':str(s.pk),'titulo':'Estamos verificando tu solicitud',
-                'monto':str(s.monto_solicitado),'plazoMeses':s.plazo_solicitado,'periodicidad':'Mensual',
-                'fechaCreacion':s.created_at.isoformat(),'requisitosCumplidos':None,
-                'pendientes':['Comunicate con Congente para revisar el estado.'],
-                'siguientePaso':'Espera la revision de Congente.','ofertaDisponible':False,
-                'acciones':{'radicar':False,'firmar':False},'institucional':None,'simulacion':None}
-                if alias=='historico' else estado_publico(s))
-            row['procedencia']={'origen':'HISTORICO_PILOTO' if alias=='historico' else 'FUENTE_OPERATIVA',
-                'estadoRegistrado':s.get_estado_display(),'actualizadoAt':s.updated_at.isoformat(),
-                'consultadoAt':timezone.now().isoformat()}
+            row = {'referencia': str(s.pk), 'titulo': 'Estamos verificando tu solicitud', 'monto': str(s.monto_solicitado), 'plazoMeses': s.plazo_solicitado, 'periodicidad': 'Mensual', 'fechaCreacion': s.created_at.isoformat(), 'requisitosCumplidos': None, 'pendientes': ['Comunicate con Congente para revisar el estado.'], 'siguientePaso': 'Espera la revision de Congente.', 'ofertaDisponible': False, 'acciones': {'radicar': False, 'firmar': False}, 'institucional': None, 'simulacion': None} if alias == 'historico' else estado_publico(s)
+            row['procedencia'] = {'origen': 'HISTORICO_PILOTO' if alias == 'historico' else 'FUENTE_OPERATIVA', 'estadoRegistrado': s.get_estado_display(), 'actualizadoAt': s.updated_at.isoformat(), 'consultadoAt': timezone.now().isoformat()}
             rows.append(wire.project_row(row))
-    return (submitted+rows)[:20]
+    from .cotizacion import seguimiento_radicacion_titular
+    return seguimiento_radicacion_titular(identity, (submitted + rows)[:20])
 
 
 def claim_delegation(rid):

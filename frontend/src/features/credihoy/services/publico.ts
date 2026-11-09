@@ -156,10 +156,25 @@ export type SimulacionBorrador=Omit<SimulacionLocal,'solicitudId'>&{borradorId:s
 export type GuardarBorrador={operacion:'borrador';accion:'guardar'|'enviar';clave:string;operacionId:string;
   version:number;datos:BorradorPublico['datos'];promotor:string|null;
   aceptacion:{version:string;sha256:string;presentacion:string;acepta:true}};
+export interface SeguimientoRadicacion {versionContrato:'credihoy-seguimiento-radicacion-v1';
+  estado:'SIN_INTENCION'|'PREPARADA'|'EN_PROCESO'|'RADICADA'|'POR_CONFIRMAR'|'NO_DISPONIBLE';confirmada:boolean;
+  consultadoEn:string;cuotaAceptada:string|null;aceptadaEn:string|null;decisionInstitucional:'PENDIENTE';firmaContractual:'PENDIENTE'}
+export function validarSeguimientoRadicacion(raw:unknown,now=Date.now()):SeguimientoRadicacion {
+  const p=obj(raw),date=(v:unknown)=>typeof v==='string'&&/(Z|[+-]\d{2}:\d{2})$/.test(v)&&Number.isFinite(Date.parse(v));
+  if(Object.keys(p).sort().join(',')!=='aceptadaEn,confirmada,consultadoEn,cuotaAceptada,decisionInstitucional,estado,firmaContractual,versionContrato'
+    ||p.versionContrato!=='credihoy-seguimiento-radicacion-v1'||!['SIN_INTENCION','PREPARADA','EN_PROCESO','RADICADA','POR_CONFIRMAR','NO_DISPONIBLE'].includes(String(p.estado))
+    ||typeof p.confirmada!=='boolean'||p.confirmada!==(p.estado==='RADICADA')||!date(p.consultadoEn)||Date.parse(String(p.consultadoEn))>now
+    ||p.decisionInstitucional!=='PENDIENTE'||p.firmaContractual!=='PENDIENTE'
+    ||(p.cuotaAceptada===null?(p.aceptadaEn!==null||p.estado!=='NO_DISPONIBLE'):
+      (typeof p.cuotaAceptada!=='string'||!/^\d{1,12}(\.\d{1,2})?$/.test(p.cuotaAceptada)||Number(p.cuotaAceptada)<=0
+        ||!date(p.aceptadaEn)||Date.parse(String(p.aceptadaEn))>Date.parse(String(p.consultadoEn)))))fail();
+  return p as unknown as SeguimientoRadicacion;
+}
 export interface SolicitudPublica { referencia:string; titulo:string; monto:string; plazoMeses:number;
   periodicidad:'Mensual'; fechaCreacion:string; requisitosCumplidos:number|null; pendientes:string[];
   siguientePaso:string; ofertaDisponible:false; acciones:{ radicar:false; firmar:false };simulacion?:SimulacionPublica|null;
   institucional?:InstitucionalPublica|null; estudio?:EstudioPublico|null;
+  seguimientoRadicacion?:SeguimientoRadicacion;
   formalizacionDocumental?:{versionContrato:'credihoy-formalizacion-publica-v1';documento:'COLO-FO.001';
     estado:'DOCUMENTO_VERIFICADO'|'VALIDACION_PENDIENTE';firmaAcreditada:boolean;actualizadoAt:string;
     continuacionInstitucionalPendiente:true};
@@ -452,7 +467,8 @@ export function validarSolicitudPublica(raw:unknown,now=Date.now()):SolicitudPub
     periodicidad:'Mensual',fechaCreacion:p.fechaCreacion as string,requisitosCumplidos:p.requisitosCumplidos as number|null,
     pendientes:[...p.pendientes as string[]],siguientePaso:p.siguientePaso as string,ofertaDisponible:false,acciones:{radicar:false,firmar:false},simulacion,institucional,
     ...(procedencia?{procedencia}:{}),...(estudio?{estudio}:{}),...(envio?{envio}:{}),...(simulacionLocal?{simulacionLocal}:{}),
-    ...(formalizacionDocumental?{formalizacionDocumental}:{})};
+    ...(formalizacionDocumental?{formalizacionDocumental}:{}),
+    ...(p.seguimientoRadicacion!==undefined?{seguimientoRadicacion:validarSeguimientoRadicacion(p.seguimientoRadicacion,now)}:{})};
 }
 
 export class AccesoAsociadoClient {

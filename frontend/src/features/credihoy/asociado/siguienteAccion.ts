@@ -3,12 +3,19 @@ import type {AutorizacionTitular,SolicitudPublica} from '../services/publico';
 export interface SiguienteAccion {
   estado:'ACCION_PERSONAL'|'PROCESANDO'|'REQUIERE_REVISION'|'CONTINUAR'|'COMPLETADO';
   mensaje:string;
-  destino:'autorizaciones'|'evaluacion'|'solicitud'|null;
+  destino:'autorizaciones'|'evaluacion'|'solicitud'|'simulador'|null;
 }
 
 // Only persisted, validated DTOs can supply a completed act or a study.
 export function resolverSiguienteAccion(s:SolicitudPublica,autorizacion?:AutorizacionTitular|null,
   consultando=false):SiguienteAccion {
+  const intake=s.seguimientoRadicacion;
+  if(intake?.confirmada)return {estado:'COMPLETADO',mensaje:'Tu solicitud fue radicada y se encuentra en revision institucional. Te informaremos cuando tengamos una actualizacion.',destino:null};
+  if(intake&&['EN_PROCESO','POR_CONFIRMAR','NO_DISPONIBLE'].includes(intake.estado))return {
+    estado:'PROCESANDO',mensaje:'Estamos verificando el estado de tu radicacion. No necesitas enviar otra solicitud.',destino:null};
+  if(intake?.cuotaAceptada)return {estado:'ACCION_PERSONAL',mensaje:'Tu cuota ya esta aceptada. Continua con la revision de tu radicacion.',destino:'simulador'};
+  if(s.estudio?.decisionPolitica?.continuidad?.estudioFavorable)return {estado:'ACCION_PERSONAL',
+    mensaje:'Tu estudio es favorable. Revisa la cuota y las condiciones de tu solicitud.',destino:'simulador'};
   if(s.estudio){
     const pendiente=s.estudio.reglas.some(r=>['PENDIENTE_POLITICA','NO_EVALUABLE','NO_CUMPLE'].includes(r.estadoEvaluacion));
     return {estado:'REQUIERE_REVISION',mensaje:pendiente?

@@ -63,6 +63,8 @@ export function ProgresoSolicitud({solicitud}:{solicitud:SolicitudPublica}){
   const institucion=solicitud.institucional;
   const etapas=[
     {titulo:'Solicitud registrada',detalle:fechaPublica(solicitud.fechaCreacion),confirmada:true},
+    {titulo:'Cuota y condiciones',detalle:solicitud.seguimientoRadicacion?.cuotaAceptada?'Aceptadas personalmente':'Pendientes',confirmada:Boolean(solicitud.seguimientoRadicacion?.cuotaAceptada)},
+    {titulo:'Radicacion',detalle:solicitud.seguimientoRadicacion?.confirmada?'Confirmada; en revision institucional':'Pendiente de confirmacion',confirmada:solicitud.seguimientoRadicacion?.confirmada===true},
     {titulo:'Decision institucional',detalle:institucion?'Aprobacion registrada':'Sin resultado acreditado',confirmada:Boolean(institucion)},
     {titulo:'Documentos y firma',detalle:solicitud.formalizacionDocumental?.firmaAcreditada?'Documento verificado':'Preparacion documental pendiente',confirmada:solicitud.formalizacionDocumental?.firmaAcreditada===true},
   ];
@@ -133,6 +135,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
   },[s?.referencia,s?.estudio?.referenciaVersion,puedeLeerActo,centralesHabilitadas]);
   const siguiente=s?resolverSiguienteAccion(s,acto?.sid===s.referencia?acto.data:null,consultandoActo):null;
   const quote=s?.simulacion,institucion=s?.institucional;
+  const radicada=s?.seguimientoRadicacion?.confirmada===true;
   const estudioFavorable=s?.estudio?.decisionPolitica?.continuidad?.estudioFavorable===true;
   const puedeConsultarCuota=Boolean(cotizacionHabilitada&&cotizar&&s?.procedencia?.origen==='FUENTE_OPERATIVA');
   const editando=edicionBorrador&&!s?.envio;
@@ -195,6 +198,9 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
         {solicitudes?.length===0&&vista!=='solicitud'&&<EstadoVacio titulo="Inicia tu solicitud CrediHoy" icono={Files}>
           {formularioBorrador?'Selecciona Solicitar mi CrediHoy para completar y guardar tu solicitud.':'Tu identidad esta verificada, pero el inicio de solicitudes no esta disponible en esta sesion. Actualiza el estado o contacta a Congente.'}</EstadoVacio>}
         {s&&vista==='estado'&&<div className="ca-dashboard">
+          {radicada&&!institucion&&<Aviso tono="success" titulo="Solicitud radicada - En revision institucional">
+            ¡Tu solicitud fue radicada exitosamente! Se encuentra en revisión institucional. Te informaremos cuando tengamos una actualización.
+          </Aviso>}
           {s.envio&&<section className="ca-document-band" aria-label="Confirmacion de envio"><h3>Recibimos tu solicitud de CrediHoy.</h3>
             <p>Recibida el {fechaPublica(s.envio.confirmadoEn)}. Esta confirmacion no es una aprobacion de credito.</p>
             <p className="ca-muted">Referencia de seguimiento: <strong>{s.referencia.slice(-8).toUpperCase()}</strong></p>
@@ -202,7 +208,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
           <div className="ca-credit-overview">
             <article className="ca-credit-card" aria-label="Resumen de tu credito">
               <div className="ca-credit-brand"><span>CrediHoy Unico</span><ShieldCheck size={21} aria-hidden="true"/></div>
-              <Etiqueta tono={institucion?'success':'warning'}>{institucion?'Aprobacion registrada; firma pendiente':s.titulo}</Etiqueta>
+              <Etiqueta tono={radicada||institucion?'success':'warning'}>{institucion?'Aprobacion registrada; firma pendiente':radicada?'Solicitud radicada':s.titulo}</Etiqueta>
               <p className="ca-summary-label">Monto solicitado</p><p className="ca-summary-amount">{moneda(s.monto)}<span>COP</span></p>
               <div className="ca-credit-foot"><span>{s.plazoMeses} cuotas · {s.periodicidad}</span><span>Solicitud registrada</span></div>
             </article>
@@ -215,15 +221,15 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
               {siguiente?.destino==='evaluacion'&&<button className="btn btn-outline-primary" type="button" disabled={busy} onClick={()=>setVista('evaluacion')}>
                 <BadgeCheck size={17} aria-hidden="true"/>Ver mi estudio</button>}
               {estudioFavorable&&puedeConsultarCuota&&<button className="btn btn-primary" type="button" disabled={busy} onClick={()=>setVista('simulador')}>
-                <Calculator size={17} aria-hidden="true"/>Revisar cuota y condiciones</button>}
+                <Calculator size={17} aria-hidden="true"/>{radicada?'Consultar cuota aceptada':'Revisar cuota y condiciones'}</button>}
             </section>
           </div>
           <section className="ca-conditions" aria-labelledby="ca-conditions-title">
-            <div className="ca-section-heading"><h3 id="ca-conditions-title">Condiciones de tu solicitud</h3><span>Sin oferta contractual aceptada</span></div>
+            <div className="ca-section-heading"><h3 id="ca-conditions-title">Condiciones de tu solicitud</h3><span>{s.seguimientoRadicacion?.cuotaAceptada?'Simulacion aceptada; firma contractual pendiente':'Condiciones por confirmar'}</span></div>
             <dl className="ca-condition-grid"><div><dt>Plazo</dt><dd>{s.plazoMeses} meses</dd></div>
               <div><dt>Periodicidad</dt><dd>{s.periodicidad}</dd></div>
-              <div><dt>{s.simulacionLocal?'Cuota estimada':quote?.origen==='REFERENCIA_INSTITUCIONAL_REGISTRADA'?'Cuota de referencia':'Cuota simulada'}</dt>
-                <dd>{s.simulacionLocal?.resultado?moneda(s.simulacionLocal.resultado.cuotaEstimada):quote?moneda(quote.cuota):'Por confirmar'}</dd>{(quote||s.simulacionLocal)&&<ContextoCuota/>}</div>
+              <div><dt>{s.seguimientoRadicacion?.cuotaAceptada?'Cuota aceptada':s.simulacionLocal?'Cuota estimada':quote?.origen==='REFERENCIA_INSTITUCIONAL_REGISTRADA'?'Cuota de referencia':'Cuota simulada'}</dt>
+                <dd>{s.seguimientoRadicacion?.cuotaAceptada?moneda(s.seguimientoRadicacion.cuotaAceptada):s.simulacionLocal?.resultado?moneda(s.simulacionLocal.resultado.cuotaEstimada):quote?moneda(quote.cuota):'Por confirmar'}</dd>{!s.seguimientoRadicacion?.cuotaAceptada&&(quote||s.simulacionLocal)&&<ContextoCuota/>}</div>
               <div><dt>Condiciones contractuales</dt><dd className="ca-metric-text">Por confirmar</dd></div></dl>
           </section>
           <section className="ca-progress-section" aria-labelledby="ca-progress-title">
@@ -250,7 +256,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
               operar={simular} continuar={()=>setVista('evaluacion')}/>}
           {cotizacionHabilitada&&cotizar&&s.procedencia?.origen==='FUENTE_OPERATIVA'&&
             <OfertaTitular key={s.referencia} sid={s.referencia} operar={cotizar} horaServidor={horaServidor}
-              radicar={radicacionHabilitada?radicar:undefined}/>}
+              radicar={radicacionHabilitada&&!radicada?radicar:undefined} verSeguimiento={()=>{actualizar();setVista('estado');}}/>}
           {(!simuladorLocalHabilitado||!simular||s.procedencia?.origen!=='FUENTE_OPERATIVA')&&(!cotizacionHabilitada||!cotizar||s.procedencia?.origen!=='FUENTE_OPERATIVA')&&<>
           <Etiqueta tono="neutral">{quote?.origen==='REFERENCIA_INSTITUCIONAL_REGISTRADA'?'Referencia institucional':'Condiciones por confirmar'}</Etiqueta>
           <fieldset className="ca-form" disabled={!quote||busy}><legend>Condiciones de tu solicitud</legend>
@@ -613,7 +619,7 @@ export function AutorizacionPersonal({sid,operar,centralesHabilitadas=false,onAc
   </section>;
 }
 
-export function OfertaTitular({sid,operar,horaServidor=Date.now,radicar}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['cotizar']>;horaServidor?:()=>number;radicar?:SeguimientoAsociadoProps['radicar']}){
+export function OfertaTitular({sid,operar,horaServidor=Date.now,radicar,verSeguimiento}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['cotizar']>;horaServidor?:()=>number;radicar?:SeguimientoAsociadoProps['radicar'];verSeguimiento?:()=>void}){
   const [data,setData]=useState<CotizacionTitular|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const [acepta,setAcepta]=useState(false),[now,setNow]=useState(horaServidor);
   const [diaPago,setDiaPago]=useState('');
@@ -658,7 +664,7 @@ export function OfertaTitular({sid,operar,horaServidor=Date.now,radicar}:{sid:st
     </select></label>
     <button className="btn btn-outline-primary" type="button" disabled={busy} onClick={()=>void run('consultar')}><RefreshCw size={17} aria-hidden="true"/> Consultar oferta</button>
     <button className="btn btn-brand" type="button" disabled={busy||Boolean(error)||!diaPago} onClick={()=>void run('cotizar')}><Calculator size={17} aria-hidden="true"/> Cotizar condiciones guardadas</button></>}
-    {sim&&data?.aceptacionSimulacion?.aceptada&&radicar&&<RadicacionPersonal sid={sid} operar={radicar}/>}
+    {sim&&data?.aceptacionSimulacion?.aceptada&&radicar&&<RadicacionPersonal sid={sid} operar={radicar} verSeguimiento={verSeguimiento}/>}
     {sim&&<button className="btn btn-outline-primary" type="button" disabled={busy} onClick={()=>void run('consultar')}><RefreshCw size={17} aria-hidden="true"/> Consultar condiciones</button>}
     {offer&&<><dl className="ca-metrics"><div><dt>Monto</dt><dd>{moneda(offer.monto)}</dd></div>
       <div><dt>Cuota institucional</dt><dd>{data?.cuota?moneda(data.cuota):'No disponible'}</dd></div><div><dt>Plazo</dt><dd>{offer.plazoMeses} meses</dd></div>
@@ -678,11 +684,12 @@ export function OfertaTitular({sid,operar,horaServidor=Date.now,radicar}:{sid:st
   </section>;
 }
 
-export function RadicacionPersonal({sid,operar}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['radicar']>}){
-  const [data,setData]=useState<RadicacionTitular|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+export function RadicacionPersonal({sid,operar,verSeguimiento}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['radicar']>;verSeguimiento?:()=>void}){
+  const [data,setData]=useState<RadicacionTitular|null>(null),[busy,setBusy]=useState(true),[error,setError]=useState('');
   const [abierto,setAbierto]=useState(false),[diaPago,setDiaPago]=useState(''),[acepta,setAcepta]=useState(false),[incierta,setIncierta]=useState(false);
   const guard=useRef(false),alive=useRef(true);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
+  useEffect(()=>{void run('consultar');},[sid]);
   const recuperar=incierta||data?.estado==='INCIERTA'||data?.estado==='EXECUTING';
   async function run(action:PeticionRadicacion['accion']){
     if(guard.current)return;guard.current=true;setBusy(true);setError('');
@@ -691,21 +698,25 @@ export function RadicacionPersonal({sid,operar}:{sid:string;operar:NonNullable<S
       const body:PeticionRadicacion=action==='preparar'?{...base,accion:action,diaPagoPropuesto:Number(diaPago)}:
         action==='confirmar'?{...base,accion:action,presentacion:data!.presentacion!,aceptaRadicar:true}:{...base,accion:action};
       const p=await operar(body);
-      if(alive.current){setData(p);setAcepta(false);setIncierta(p.estado==='INCIERTA'||p.estado==='EXECUTING');}
-    }catch{if(alive.current){setData(null);setAcepta(false);setIncierta(true);setError('No pudimos confirmar el resultado. Consulta la operacion existente antes de continuar.');}}
+      if(alive.current){setData(p);setAcepta(false);setIncierta(p.estado==='INCIERTA'||p.estado==='EXECUTING');if(p.estado==='RADICADA')setAbierto(true);}
+    }catch{if(alive.current){setAbierto(true);setData(null);setAcepta(false);setIncierta(true);setError('No pudimos confirmar el resultado. Consulta la operacion existente antes de continuar.');}}
     finally{guard.current=false;if(alive.current)setBusy(false);}
   }
   return <section aria-label="Radicacion personal" aria-busy={busy}>
     <h3>Radicacion de tu solicitud</h3>
-    {!abierto&&<button className="btn btn-brand" type="button" onClick={()=>{setAbierto(true);void run('consultar');}}>
+    {busy&&<p role="status" aria-live="polite"><RefreshCw size={17} aria-hidden="true"/> Verificando el estado de tu solicitud. Espera un momento...</p>}
+    {!abierto&&data?.estado!=='RADICADA'&&data&&!busy&&<button className="btn btn-brand" type="button" disabled={busy} onClick={()=>{setAbierto(true);void run('consultar');}}>
       <FileCheck2 size={17} aria-hidden="true"/> Radicar mi solicitud</button>}
     {abierto&&<>
-      {busy&&<p role="status">Consultando la operacion institucional...</p>}
       {error&&<Aviso tono="warning" titulo="Resultado por confirmar">{error}</Aviso>}
-      {data?.codigo&&<Aviso tono="warning" titulo="Radicacion pendiente">Referencia: {data.codigo}</Aviso>}
-      {data?.estado==='RADICADA'?<Aviso tono="success" titulo="Solicitud radicada">
-        Flujo {data.K_FLUJO??'por conciliar'}. Solicitud LINIX {data.SC??'por conciliar'}. La decision institucional y la firma contractual siguen pendientes.
-      </Aviso>:<>
+      {data?.codigo&&data.estado!=='RADICADA'&&<Aviso tono="warning" titulo="Radicacion por verificar">Estamos verificando tu solicitud. No necesitas enviarla nuevamente.</Aviso>}
+      {data?.estado==='RADICADA'?<>
+        <Aviso tono="success" titulo="¡Tu solicitud fue radicada exitosamente!">
+          Se encuentra en revisión institucional. Te informaremos cuando tengamos una actualización.
+        </Aviso>
+        {verSeguimiento&&<button className="btn btn-brand" type="button" disabled={busy} onClick={verSeguimiento}>
+          <ArrowRight size={17} aria-hidden="true"/> Ver seguimiento</button>}
+      </>:<>
         {data&&!recuperar&&['SIN_INTENCION','PREPARADA'].includes(data.estado)&&<>
           <label className="ch-field">Dia mensual de pago<select className="form-select" value={diaPago}
             disabled={busy||data.puedeConfirmar} onChange={e=>{setDiaPago(e.target.value);setAcepta(false);}}>

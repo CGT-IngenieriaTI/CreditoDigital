@@ -1385,6 +1385,8 @@ def operacion_radicacion_titular(identity,payload,rid,*,transporte=None):
                         payload={'intencionId':intent,'fingerprint':presentation['fingerprint'],'comprobante':proof,'confirmacionPersonal':confirmation})
                     body['confirmacionPersonal']={**confirmation,'auditoriaId':record.pk}
         result=call(body,proof,identity)
+        if result.get('estado')=='RADICADA' and not (result.get('K_FLUJO') and result.get('SC')):
+            result={**result,'estado':'INCIERTA','codigo':'RADICACION_POR_VERIFICAR'}
         response={'versionContrato':'credihoy-radicacion-personal-v1','solicitudId':sid,'intencionId':intent,
             'estado':result['estado'],'codigo':result.get('codigo'),'puedeConfirmar':False,'presentacion':None,
             'K_FLUJO':result.get('K_FLUJO'),'SC':result.get('SC'),'actividadesActivas':result.get('actividadesActivas',[]),
@@ -1435,4 +1437,42 @@ def transporte_cd6_personal(body,proof,identity):
     result=packet.get('radicacion')
     if (type(result) is not dict or result.get('solicitudId')!=body['solicitudId']
             or result.get('intencionId')!=body['intencionId']):raise ValueError('RADICACION_RESPUESTA_DE_OTRO_EXPEDIENTE')
+    return result
+
+
+def seguimiento_radicacion_titular(identity,rows):
+    """Recover existing CD6 state after login; never prepare or advance a workflow."""
+    from django.conf import settings
+    from uuid import uuid4,uuid5,NAMESPACE_URL
+    from .publico_restringido import fuente_cotizacion
+    from .publico_institucional import project_intake_tracking
+    if getattr(settings,'CREDIHOY_RADICACION_TITULAR_ENABLED',False) is not True:return rows
+    result=[]
+    for row in rows:
+        if row.get('procedencia',{}).get('origen')!='FUENTE_OPERATIVA':
+            result.append(row);continue
+        tracking={'versionContrato':'credihoy-seguimiento-radicacion-v1','estado':'NO_DISPONIBLE',
+            'confirmada':False,'consultadoEn':timezone.now().isoformat(),'cuotaAceptada':None,
+            'aceptadaEn':None,'decisionInstitucional':'PENDIENTE','firmaContractual':'PENDIENTE'}
+        try:
+            sid=str(UUID(row['referencia']))
+            with fuente_cotizacion():
+                s=_obtener(sid,None,titular=identity)
+                stored=SolicitudConsumo.objects.using(alias_cotizacion()).values_list('orchestration_data',flat=True).get(solicitud_id=s.pk)
+                if not stored.get(KEY,{}).get('aceptacionesSimulacion'):
+                    result.append(row);continue
+                proof=comprobante_simulacion_aceptada(s,identity)
+            body={'accion':'consultar','solicitudId':sid,
+                'intencionId':str(uuid5(NAMESPACE_URL,'credihoy-cd6-personal:'+sid)),'requestId':str(uuid4())}
+            state=transporte_cd6_personal(body,proof,identity)
+            stages={'SIN_INTENCION':'SIN_INTENCION','PREPARADA':'PREPARADA','RADICADA':'RADICADA',
+                'EXECUTING':'EN_PROCESO','INCIERTA':'POR_CONFIRMAR','BLOQUEADA':'POR_CONFIRMAR'}
+            if state.get('estado') not in stages:raise ValueError('RADICACION_ESTADO_NO_RECONOCIDO')
+            confirmed=state['estado']=='RADICADA' and bool(state.get('K_FLUJO') and state.get('SC'))
+            tracking.update(estado='RADICADA' if confirmed else stages[state['estado']] if state['estado']!='RADICADA' else 'POR_CONFIRMAR',
+                confirmada=confirmed,cuotaAceptada=proof['cuota'],aceptadaEn=proof['aceptadaEn'])
+        except Exception as exc:
+            import logging
+            logging.getLogger('credito.publico').warning('seguimiento_radicacion_no_disponible tipo=%s',type(exc).__name__)
+        result.append({**row,'seguimientoRadicacion':project_intake_tracking(tracking)})
     return result

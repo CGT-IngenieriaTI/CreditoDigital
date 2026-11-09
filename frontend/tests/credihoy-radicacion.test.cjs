@@ -1,7 +1,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
 const {load,id}=require('./helpers/cd8-fixture.cjs');
-const {validarRadicacionTitular,validarCotizacionTitular}=load('services/publico');
+const {validarRadicacionTitular,validarCotizacionTitular,validarSeguimientoRadicacion}=load('services/publico');
 const {RadicacionPersonal}=load('asociado/PortalAsociado.tsx');
 function packet(){return {versionContrato:'credihoy-radicacion-personal-v1',solicitudId:id,intencionId:id,
   estado:'SIN_INTENCION',codigo:null,puedeConfirmar:false,presentacion:null,K_FLUJO:null,SC:null,
@@ -21,7 +21,16 @@ test('preparada requiere presentacion, incertidumbre no permite confirmar',()=>{
 });
 test('pantalla inicial exige accion personal y nunca inicia transporte al renderizar',()=>{
   let calls=0;const html=renderToStaticMarkup(React.createElement(RadicacionPersonal,{sid:id,operar:async()=>{calls++;return packet();}}));
-  assert.match(html,/Radicar mi solicitud/);assert.doesNotMatch(html,/Confirmar radicacion/);assert.equal(calls,0);
+  assert.match(html,/Verificando el estado/);assert.doesNotMatch(html,/Confirmar radicacion|Radicar mi solicitud/);assert.equal(calls,0);
+});
+test('seguimiento persistido dirige al estado institucional y nunca solicita otra aceptacion o radicacion',()=>{
+  const t={versionContrato:'credihoy-seguimiento-radicacion-v1',estado:'RADICADA',confirmada:true,
+    consultadoEn:new Date().toISOString(),cuotaAceptada:'204448',aceptadaEn:'2026-11-07T21:00:28+00:00',decisionInstitucional:'PENDIENTE',firmaContractual:'PENDIENTE'};
+  assert.equal(validarSeguimientoRadicacion(t).confirmada,true);
+  for(const bad of [{estado:'PREPARADA'},{SC:'123'},{decisionInstitucional:'APROBADA'},{cuotaAceptada:'0'}])assert.throws(()=>validarSeguimientoRadicacion({...t,...bad}));
+  const {resolverSiguienteAccion}=load('asociado/siguienteAccion');
+  const action=resolverSiguienteAccion({seguimientoRadicacion:t});
+  assert.equal(action.estado,'COMPLETADO');assert.equal(action.destino,null);assert.match(action.mensaje,/revision institucional/);
 });
 test('aceptacion historica vigente al aceptar se conserva sin extender TTL ni permitir nueva aceptacion tardia',()=>{
   const now=Date.now(),begin=now-7200000,end=now-3600000;

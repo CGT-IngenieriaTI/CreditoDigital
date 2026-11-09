@@ -97,7 +97,7 @@ def enviar(contacto, canal, *, acceso_id=None):
         contacto, channel='sms' if canal == 'SMS' else 'email')
 
 
-def acreditar_firmante(grant, *, solicitud_id, pdf_sha256, clave, request_id, autoriza_firma):
+def acreditar_firmante(grant, *, solicitud_id, pdf_sha256, clave, request_id, autoriza_firma, presentacion_contractual=False):
     """Relay-only identity attestation. No signature, SMS or authorization granted.
 
     Called after a browser-bound personal intent, never from browser name fields.
@@ -112,36 +112,48 @@ def acreditar_firmante(grant, *, solicitud_id, pdf_sha256, clave, request_id, au
     from apps.xcore_consumo.public_access_models import OperacionVerifyCredihoy
     from .publico_seguimiento import key
     for value in (solicitud_id, clave, request_id):
-        if type(value) is not str or str(UUID(value)) != value:
-            raise ValueError('INTENCION_FIRMA_INVALIDA')
-    if autoriza_firma is not True or not re.fullmatch('[a-f0-9]{64}', pdf_sha256):
+        if type(value) is not str or str(UUID(value)) != value:raise ValueError('INTENCION_FIRMA_INVALIDA')
+    if (type(presentacion_contractual) is not bool
+            or autoriza_firma is not (False if presentacion_contractual else True)
+            or not re.fullmatch('[a-f0-9]{64}',pdf_sha256)):
         raise ValueError('ACTO_PERSONAL_FIRMA_REQUERIDO')
 
     def vigente():
         grant.refresh_from_db(using=state_alias())
-        now = timezone.now()
-        if grant.estado != 'VERIFICADO' or grant.revocado or (not grant.verificado_at) or (not grant.sesion_expira_at) or (grant.sesion_expira_at <= now) or (not 0 <= (now - grant.verificado_at).total_seconds() <= 600) or (not grant.verification_sid) or (grant.verification_check_sid != grant.verification_sid):
+        now=timezone.now()
+        if (grant.estado!='VERIFICADO' or grant.revocado or not grant.verificado_at
+                or not grant.sesion_expira_at or grant.sesion_expira_at<=now
+                or not 0<=(now-grant.verificado_at).total_seconds()<=600
+                or not grant.verification_sid or grant.verification_check_sid!=grant.verification_sid):
             raise ValueError('IDENTIDAD_FIRMA_REQUIERE_SESION_PERSONAL_RECIENTE')
         return _identity(grant)
-    identity = vigente()
-    approved = OperacionVerifyCredihoy.objects.using(state_alias()).filter(acceso_id=grant.pk, accion='COMPROBAR', estado='FINALIZADA', resultado__estadoProveedor='approved', resultado__verificationSid=grant.verification_sid).exists()
-    if not approved:
-        raise ValueError('VERIFICACION_PERSONAL_NO_ACREDITADA')
-    _authorize_identity(access_id=str(grant.pk), request_id=request_id, document=identity['numeroDocumento'], purpose='VERIFIED_IDENTITY')
-    client = ApiDataCrediHoyV2Client(ConfiguracionApiDataV2.desde_settings())
-    raw = client.consultar_socio(numero_documento=identity['numeroDocumento'], request_id=request_id)
-    current = cotejar_respuesta(identity, raw)
-    if current['contacto'] != identity['contacto']:
-        raise ValueError('CONTACTO_VERIFICADO_CAMBIO')
-    projected = proyectar_identidad(raw)
-    names = ' '.join((v for v in (projected['primerNombre'], projected['segundoNombre']) if v))
-    surnames = ' '.join((v for v in (projected['primerApellido'], projected['segundoApellido']) if v))
-    if not names or not surnames or max(len(names), len(surnames)) > 120:
+
+    identity=vigente()
+    approved=OperacionVerifyCredihoy.objects.using(state_alias()).filter(acceso_id=grant.pk,
+        accion='COMPROBAR',estado='FINALIZADA',resultado__estadoProveedor='approved',
+        resultado__verificationSid=grant.verification_sid).exists()
+    if not approved:raise ValueError('VERIFICACION_PERSONAL_NO_ACREDITADA')
+    _authorize_identity(access_id=str(grant.pk), request_id=request_id,
+                        document=identity['numeroDocumento'], purpose='VERIFIED_IDENTITY')
+    client=ApiDataCrediHoyV2Client(ConfiguracionApiDataV2.desde_settings())
+    raw=client.consultar_socio(numero_documento=identity['numeroDocumento'],request_id=request_id)
+    current=cotejar_respuesta(identity,raw)
+    if current['contacto']!=identity['contacto']:raise ValueError('CONTACTO_VERIFICADO_CAMBIO')
+    projected=proyectar_identidad(raw)
+    names=' '.join(v for v in (projected['primerNombre'],projected['segundoNombre']) if v)
+    surnames=' '.join(v for v in (projected['primerApellido'],projected['segundoApellido']) if v)
+    if not names or not surnames or max(len(names),len(surnames))>120:
         raise ValueError('NOMBRE_INSTITUCIONAL_INCOMPLETO')
-    if vigente()['numeroDocumento'] != identity['numeroDocumento']:
-        raise ValueError('TITULAR_CAMBIO')
-    proof = {'version': 'COLO023_IDENTIDAD_INSTITUCIONAL_V1', 'fuente': 'API_DATA.consultarSocio', 'requestId': request_id, 'consultadoEn': timezone.now().isoformat(), 'sesionReferencia': str(grant.pk), 'sesionExpiraAt': grant.sesion_expira_at.isoformat(), 'verificadoEn': grant.verificado_at.isoformat(), 'verificacionReferencia': hashlib.sha256(grant.verification_sid.encode()).hexdigest(), 'solicitudId': solicitud_id, 'pdfSha256': pdf_sha256, 'operacionFirmaId': clave, 'numeroDocumento': identity['numeroDocumento'], 'names': names, 'lastNames': surnames, 'actoPersonalFirma': True, 'OTP9AEsFirma': False}
-    return signing.dumps(proof, key=key(), salt='credihoy-firmante-institucional-v1')
+    if vigente()['numeroDocumento']!=identity['numeroDocumento']:raise ValueError('TITULAR_CAMBIO')
+    proof={'version':'CONTRACTUAL_IDENTIDAD_INSTITUCIONAL_V1' if presentacion_contractual else 'COLO023_IDENTIDAD_INSTITUCIONAL_V1','fuente':'API_DATA.consultarSocio',
+        'requestId':request_id,'consultadoEn':timezone.now().isoformat(),
+        'sesionReferencia':str(grant.pk),'sesionExpiraAt':grant.sesion_expira_at.isoformat(),
+        'verificadoEn':grant.verificado_at.isoformat(),
+        'verificacionReferencia':hashlib.sha256(grant.verification_sid.encode()).hexdigest(),
+        'solicitudId':solicitud_id,'pdfSha256':pdf_sha256,'operacionFirmaId':clave,
+        'numeroDocumento':identity['numeroDocumento'],'names':names,'lastNames':surnames,
+        'actoPersonalFirma':not presentacion_contractual,'OTP9AEsFirma':False}
+    return signing.dumps(proof,key=key(),salt='credihoy-firmante-institucional-v1')
 
 
 def comprobar(contacto, codigo, verification_sid, *, acceso_id=None, numero_intento=None, canal='SMS'):

@@ -5,7 +5,8 @@ import {CredihoyAccesoAsociado,type SeguimientoAsociadoProps} from '../component
 import {CredihoyShell} from '../components/CredihoyShell';
 import {crearEstadoInicial} from '../state';
 import {moneda} from '../components/FormControls';
-import type {CotizacionTitular,InstitucionalPublica,SolicitudPublica,AutorizacionTitular,PeticionAutorizacion,PeticionRadicacion,RadicacionTitular,EventoHistorial} from '../services/publico';
+import type {CotizacionTitular,InstitucionalPublica,SolicitudPublica,AutorizacionTitular,PeticionAutorizacion,PeticionRadicacion,RadicacionTitular,EventoHistorial,ContractualStaging,PeticionContractual} from '../services/publico';
+import {PdfScrollViewer} from '../../../components/PdfScrollViewer';
 import {Aviso,Cargando,EstadoVacio,Etiqueta,NotaPrivacidad} from './ui';
 import './asociado.css';
 import {SimuladorLocal} from './SimuladorLocal';
@@ -85,6 +86,77 @@ export function ProgresoSolicitud({solicitud}:{solicitud:SolicitudPublica}){
   </li>)}</ol>;
 }
 
+function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;operar:(body:PeticionContractual)=>Promise<ContractualStaging>}){
+  const [clave]=useState(()=>{
+    const storage='credihoy_contractual_acto:'+solicitud.referencia;
+    try{const old=sessionStorage.getItem(storage);if(old&&/^[a-f0-9-]{36}$/.test(old))return old;
+      const id=crypto.randomUUID();sessionStorage.setItem(storage,id);return id;}catch{return crypto.randomUUID();}});
+  const [data,setData]=useState<ContractualStaging|null>(null),[documento,setDocumento]=useState<ContractualStaging['documento']>(null);
+  const [url,setUrl]=useState(''),[firmadoUrl,setFirmadoUrl]=useState(''),[leido,setLeido]=useState(false),[acepta,setAcepta]=useState(false),[confirma,setConfirma]=useState(false);
+  const [codigo,setCodigo]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[incierta,setIncierta]=useState(false);
+  const guard=useRef(false);
+  useEffect(()=>{
+    if(!documento){setUrl('');return;}
+    const bytes=Uint8Array.from(atob(documento.pdfBase64),v=>v.charCodeAt(0));
+    const next=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));setUrl(next);
+    return()=>URL.revokeObjectURL(next);
+  },[documento]);
+  useEffect(()=>{
+    if(!data?.firmado){setFirmadoUrl('');return;}
+    const bytes=Uint8Array.from(atob(data.firmado.pdfBase64),v=>v.charCodeAt(0));
+    const next=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));setFirmadoUrl(next);
+    return()=>URL.revokeObjectURL(next);
+  },[data?.firmado]);
+  async function enviar(action:Omit<PeticionContractual,'operacion'|'solicitudId'|'clave'>){
+    if(guard.current)return;guard.current=true;setBusy(true);setError('');
+    try{const result=await operar({operacion:'autorizacion',solicitudId:solicitud.referencia,clave,...action} as PeticionContractual);
+      setData(result);if(result.documento)setDocumento(result.documento);setIncierta(false);
+    }catch{setIncierta(true);setError('No pudimos confirmar el resultado. Consulta el estado; no repitas el envio ni solicites otro codigo.');}
+    finally{setCodigo('');guard.current=false;setBusy(false);}
+  }
+  const estado=data?.estado;
+  return <section className="ca-document-band" aria-label="Formalizacion contractual STAGING" aria-busy={busy}>
+    <h3>Formalizacion contractual</h3>
+    <Aviso tono="warning" titulo="Validacion de firma en STAGING">
+      Este recorrido valida el servicio de firma en un ambiente de ensayo. No acredita formalizacion productiva,
+      aprobacion institucional ni autoriza desembolsos. El documento oficial no contiene marcas de prueba.
+    </Aviso>
+    <dl className="ca-authorizations"><div><dt>Documento</dt><dd>COLO-FO.001, version 13, tres paginas</dd></div>
+      <div><dt>Monto</dt><dd>{moneda(solicitud.monto)}</dd></div><div><dt>Plazo</dt><dd>{solicitud.plazoMeses} meses</dd></div>
+      <div><dt>Cuota aceptada</dt><dd>{solicitud.seguimientoRadicacion?.cuotaAceptada?moneda(solicitud.seguimientoRadicacion.cuotaAceptada):'Sin lectura acreditada'}</dd></div></dl>
+    {!data&&!incierta&&<button type="button" className="btn btn-primary" disabled={busy} onClick={()=>void enviar({accion:'contractual_presentar'})}>
+      <FileCheck2 size={17} aria-hidden="true"/>Revisar y firmar formalizacion</button>}
+    {url&&<><PdfScrollViewer file={url} title="COLO-FO.001 v13" onLoad={()=>setLeido(false)} onReachEnd={()=>setLeido(true)}/>
+      <p className="ca-muted" style={{overflowWrap:'anywhere'}}>SHA-256: {documento?.pdfSha256}</p>
+      <a className="btn btn-outline-primary" href={url} download="COLO-FO.001-v13.pdf"><ExternalLink size={16} aria-hidden="true"/>Abrir documento completo</a></>}
+    {estado==='PRESENTADA'&&!incierta&&<>
+      <label className="ca-check"><input type="checkbox" checked={acepta} disabled={busy||!leido} onChange={e=>setAcepta(e.target.checked)}/>
+        He revisado las tres paginas y acepto expresamente el contenido de este documento.</label>
+      <button className="btn btn-primary" type="button" disabled={busy||!leido||!acepta||!documento} onClick={()=>void enviar({accion:'contractual_aceptar',presentacion:documento!.presentacion,acepta:true} as PeticionContractual)}>
+        <CheckCircle2 size={17} aria-hidden="true"/>Aceptar documento</button></>}
+    {estado==='ACEPTADA_PENDIENTE_OTP'&&!incierta&&<button type="button" className="btn btn-primary" disabled={busy} onClick={()=>void enviar({accion:'contractual_enviar_otp'})}>
+      <ShieldCheck size={17} aria-hidden="true"/>Solicitar codigo contractual</button>}
+    {estado==='OTP_ENVIADA'&&!incierta&&<form onSubmit={e=>{e.preventDefault();void enviar({accion:'contractual_comprobar_otp',codigo,comprobacionId:crypto.randomUUID()} as PeticionContractual);}}>
+      <label className="ca-field">Codigo contractual<input className="form-control" inputMode="numeric" autoComplete="one-time-code" value={codigo} maxLength={6} disabled={busy}
+        onChange={e=>setCodigo(e.target.value.replace(/\D/g,''))}/></label>
+      <button type="submit" className="btn btn-primary" disabled={busy||!/^\d{6}$/.test(codigo)}><ShieldCheck size={17} aria-hidden="true"/>Verificar codigo</button></form>}
+    {estado==='OTP_VALIDADA'&&!incierta&&<>
+      <label className="ca-check"><input type="checkbox" checked={confirma} disabled={busy} onChange={e=>setConfirma(e.target.checked)}/>
+        Confirmo personalmente la firma electronica de este documento en STAGING.</label>
+      <button type="button" className="btn btn-primary" disabled={busy||!confirma} onClick={()=>void enviar({accion:'contractual_firmar',confirmaFirma:true} as PeticionContractual)}>
+        <FileCheck2 size={17} aria-hidden="true"/>Confirmar firma</button></>}
+    {data&&<p role="status">{data.estado==='FIRMA_REPORTADA_NO_VERIFICADA'?'Respuesta de firma recibida. Verificacion documental pendiente.':
+      data.otpVerificado?'Codigo contractual verificado.':data.estado==='PRESENTADA'?'Documento disponible para tu revision.':data.estado.replace(/_/g,' ')}</p>}
+    {(incierta||data&&['ENVIANDO','INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA'].includes(data.estado))&&
+      <button type="button" className="btn btn-outline-primary" disabled={busy} onClick={()=>void enviar({accion:'contractual_consultar'})}>
+        <RefreshCw size={16} aria-hidden="true"/>Consultar estado sin reenviar</button>}
+    {data?.pendientes.length? <p role="status">La evidencia se conserva. La verificacion documental independiente sigue pendiente; no se acredita una firma productiva.</p>:null}
+    {firmadoUrl&&<a className="btn btn-outline-primary" href={firmadoUrl} download="COLO-FO.001-recuperado-STAGING.pdf">
+      <ExternalLink size={16} aria-hidden="true"/>Descargar documento recuperado en STAGING</a>}
+    {error&&<p role="alert">{error}</p>}
+  </section>;
+}
+
 export function DocumentosAsociado({formalizacion}:{institucion?:InstitucionalPublica|null;formalizacion?:SolicitudPublica['formalizacionDocumental']}){
   return <div className="ca-documents">
     <section className="ca-document-band" aria-labelledby="ca-document-title">
@@ -99,7 +171,7 @@ export function DocumentosAsociado({formalizacion}:{institucion?:InstitucionalPu
   </div>;
 }
 
-export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguimientoHabilitado=true,formularioBorrador,cotizacionHabilitada=false,cotizar,radicacionHabilitada=false,radicar,horaServidor,autorizacionHabilitada=false,centralesHabilitadas=false,autorizar,simuladorLocalHabilitado=false,simular}:SeguimientoAsociadoProps){
+export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguimientoHabilitado=true,formularioBorrador,cotizacionHabilitada=false,cotizar,radicacionHabilitada=false,radicar,horaServidor,autorizacionHabilitada=false,centralesHabilitadas=false,autorizar,simuladorLocalHabilitado=false,simular,contractual}:SeguimientoAsociadoProps){
   const [vista,setVista]=useState<Vista>('estado'),[seleccion,setSeleccion]=useState('');
   const [escritorio,setEscritorio]=useState(false),[menuAbierto,setMenuAbierto]=useState(false);
   const [autorizacionesVisitadas,setAutorizacionesVisitadas]=useState(false);
@@ -233,6 +305,8 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
                 <BadgeCheck size={17} aria-hidden="true"/>Ver mi estudio</button>}
               {estudioFavorable&&puedeConsultarCuota&&<button className="btn btn-primary" type="button" disabled={busy} onClick={()=>setVista('simulador')}>
                 <Calculator size={17} aria-hidden="true"/>{radicada?'Consultar cuota aceptada':'Revisar cuota y condiciones'}</button>}
+              {s.formalizacionStaging&&contractual&&<button className="btn btn-outline-primary" type="button" disabled={busy} onClick={()=>setVista('firma')}>
+                <FileCheck2 size={17} aria-hidden="true"/>Revisar y firmar formalizacion</button>}
             </section>
           </div>
           <section className="ca-conditions" aria-labelledby="ca-conditions-title">
@@ -388,6 +462,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
         </>}
         {s&&vista==='firma'&&<><Etiqueta tono={s.formalizacionDocumental?.firmaAcreditada?'success':'warning'}>{s.formalizacionDocumental?.firmaAcreditada?'Documento firmado y verificado':s.formalizacionDocumental?'Validacion documental pendiente':'Preparacion documental pendiente'}</Etiqueta>
           <DocumentosAsociado formalizacion={s.formalizacionDocumental}/>
+          {s.formalizacionStaging&&contractual&&<FirmaContractualStaging key={s.referencia} solicitud={s} operar={contractual}/>}
           {estudioFavorable&&puedeConsultarCuota&&!s.formalizacionDocumental&&<button className="btn btn-outline-primary" type="button"
             disabled={busy} onClick={()=>setVista('simulador')}><Calculator size={17} aria-hidden="true"/>Revisar cuota y condiciones</button>}</>}
         {s&&vista==='historial'&&<>

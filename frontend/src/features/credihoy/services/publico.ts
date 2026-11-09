@@ -1,3 +1,39 @@
+export type PeticionContractual={operacion:'autorizacion';solicitudId:string;clave:string}&(
+  {accion:'contractual_presentar'|'contractual_enviar_otp'|'contractual_consultar'}|
+  {accion:'contractual_aceptar';presentacion:string;acepta:true}|
+  {accion:'contractual_comprobar_otp';codigo:string;comprobacionId:string}|
+  {accion:'contractual_firmar';confirmaFirma:true});
+export interface ContractualStaging {versionContrato:'credihoy-contractual-staging-v1';solicitudId:string;
+  operacionFirmaId:string;ambiente:'STAGING';estado:string;pdfSha256:string;otpProveedor:'TWILIO_VERIFY';
+  otpVerificado:boolean;firmaProductivaAcreditada:false;autorizaDesembolso:false;pendientes:string[];
+  documento:null|{solicitudId:string;operacionFirmaId:string;documentoOperacionId:string;codigo:'COLO-FO.001';
+    pdfSha256:string;pdfBase64:string;presentacion:string;proposito:'FIRMA_DOCUMENTO_CONTRACTUAL';ttl:600};
+  firmado:null|{pdfBase64:string;pdfSha256:string}}
+export async function validarContractualStaging(raw:unknown,sid:string,key:string):Promise<ContractualStaging>{
+  const p=obj(raw),keys='ambiente,autorizaDesembolso,documento,estado,firmaProductivaAcreditada,firmado,operacionFirmaId,otpProveedor,otpVerificado,pdfSha256,pendientes,solicitudId,versionContrato';
+  if(Object.keys(p).sort().join(',')!==keys||p.versionContrato!=='credihoy-contractual-staging-v1'
+    ||p.solicitudId!==sid||p.operacionFirmaId!==key||!uuid.test(sid)||!uuid.test(key)||p.ambiente!=='STAGING'
+    ||p.otpProveedor!=='TWILIO_VERIFY'||typeof p.otpVerificado!=='boolean'||p.firmaProductivaAcreditada!==false
+    ||p.autorizaDesembolso!==false||!/^[a-f0-9]{64}$/.test(String(p.pdfSha256))
+    ||!['PRESENTADA','ACEPTADA_PENDIENTE_OTP','OTP_ENVIO_RESERVADO','OTP_ENVIADA','OTP_ENVIO_INDETERMINADO',
+      'OTP_COMPROBACION_RESERVADA','OTP_VALIDADA','OTP_BLOQUEADA','OTP_EXPIRADA','OTP_COMPROBACION_INDETERMINADA',
+      'ENVIANDO','INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA'].includes(String(p.estado))
+    ||!Array.isArray(p.pendientes)||p.pendientes.length>30
+    ||p.pendientes.some(v=>typeof v!=='string'||!/^[A-Z0-9_]{1,120}$/.test(v)))fail();
+  if(p.documento!==null){const d=obj(p.documento);
+    if(Object.keys(d).sort().join(',')!=='codigo,documentoOperacionId,operacionFirmaId,pdfBase64,pdfSha256,presentacion,proposito,solicitudId,ttl'
+      ||d.solicitudId!==sid||d.operacionFirmaId!==key||!uuid.test(String(d.documentoOperacionId))
+      ||d.pdfSha256!==p.pdfSha256||d.codigo!=='COLO-FO.001'||d.proposito!=='FIRMA_DOCUMENTO_CONTRACTUAL'
+      ||d.ttl!==600||typeof d.presentacion!=='string'||!d.presentacion||d.presentacion.length>4096)fail();}
+  if(p.firmado!==null&&Object.keys(obj(p.firmado)).sort().join(',')!=='pdfBase64,pdfSha256')fail();
+  for(const value of [p.documento,p.firmado]){if(value===null)continue;const d=obj(value);
+    if(typeof d.pdfBase64!=='string'||!d.pdfBase64||d.pdfBase64.length>4000000||!/^[a-f0-9]{64}$/.test(String(d.pdfSha256)))fail();
+    let content:string;try{content=atob(String(d.pdfBase64));}catch{return fail();}
+    const bytes=new Uint8Array(content.length);for(let i=0;i<content.length;i++)bytes[i]=content.charCodeAt(i);
+    const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(v=>v.toString(16).padStart(2,'0')).join('');
+    if(hash!==d.pdfSha256)fail();}
+  return p as unknown as ContractualStaging;
+}
 const POLITICA_URL='https://www.congente.coop/images/Balancesocial/GER-PO.085-Politica_tratamiento_datos_personales.pdf';
 import {validarSimulacionLocal,type EscenarioLocal,type SimulacionLocal} from './simulacion';
 export interface InicioPublico { avisoVersion:string; avisoTexto:string; botSitekey:string; csrfToken:string; canales:('SMS'|'EMAIL')[];
@@ -180,6 +216,7 @@ export interface SolicitudPublica { referencia:string; titulo:string; monto:stri
   institucional?:InstitucionalPublica|null; estudio?:EstudioPublico|null;
   seguimientoRadicacion?:SeguimientoRadicacion;
   historial?:EventoHistorial[];
+  formalizacionStaging?:{ambiente:'STAGING';documento:'COLO-FO.001';version:'13';paginas:3;disponibleHasta:string;firmaProductivaAcreditada:false};
   formalizacionDocumental?:{versionContrato:'credihoy-formalizacion-publica-v1';documento:'COLO-FO.001';
     estado:'DOCUMENTO_VERIFICADO'|'VALIDACION_PENDIENTE';firmaAcreditada:boolean;actualizadoAt:string;
     continuacionInstitucionalPendiente:true};
@@ -458,6 +495,13 @@ export function validarSolicitudPublica(raw:unknown,now=Date.now()):SolicitudPub
       {monto:p.monto as string,plazoMeses:p.plazoMeses as number,linea:rate.linea as 'VENTANILLA'|'LIBRANZA'});
   }
   let formalizacionDocumental:SolicitudPublica['formalizacionDocumental'];
+  let formalizacionStaging:SolicitudPublica['formalizacionStaging'];
+  if(p.formalizacionStaging!==undefined){const f=obj(p.formalizacionStaging);
+    if(Object.keys(f).sort().join(',')!=='ambiente,disponibleHasta,documento,firmaProductivaAcreditada,paginas,version'
+      ||f.ambiente!=='STAGING'||f.documento!=='COLO-FO.001'||f.version!=='13'||f.paginas!==3
+      ||f.firmaProductivaAcreditada!==false||typeof f.disponibleHasta!=='string'
+      ||!Number.isFinite(Date.parse(f.disponibleHasta)))fail();
+    formalizacionStaging=f as unknown as NonNullable<SolicitudPublica['formalizacionStaging']>;}
   if(p.formalizacionDocumental!=null){
     const f=obj(p.formalizacionDocumental);
     const fields=['versionContrato','documento','estado','firmaAcreditada','actualizadoAt','continuacionInstitucionalPendiente'];
@@ -492,6 +536,7 @@ export function validarSolicitudPublica(raw:unknown,now=Date.now()):SolicitudPub
     pendientes:[...p.pendientes as string[]],siguientePaso:p.siguientePaso as string,ofertaDisponible:false,acciones:{radicar:false,firmar:false},simulacion,institucional,
     ...(procedencia?{procedencia}:{}),...(estudio?{estudio}:{}),...(envio?{envio}:{}),...(simulacionLocal?{simulacionLocal}:{}),
     ...(formalizacionDocumental?{formalizacionDocumental}:{}),
+    ...(formalizacionStaging?{formalizacionStaging}:{}),
     ...(seguimientoRadicacion?{seguimientoRadicacion}:{}),...(historial?{historial}:{})};
 }
 
@@ -573,6 +618,12 @@ export class AccesoAsociadoClient {
     const grant=this.acceso,p=obj(await this.request('solicitudes/',body));
     if(this.acceso!==grant||p.sesionReferencia!==grant)fail();
     return validarAutorizacionTitular(p.autorizacion,body.solicitudId,this.ahoraServidor());
+  }
+  async contractual(body:PeticionContractual):Promise<ContractualStaging>{
+    if(!this.acceso)throw new AccesoPublicoError(401);
+    const grant=this.acceso,p=obj(await this.request('solicitudes/',body,crypto.randomUUID()));
+    if(this.acceso!==grant||p.sesionReferencia!==grant)fail();
+    return validarContractualStaging(p.autorizacion,body.solicitudId,body.clave);
   }
   async cotizacion(sid:string,operacion:'consultar'|'cotizar'|'aceptar'|'aceptar_simulacion',ofertaSha256?:string,diaPago?:number):Promise<CotizacionTitular>{
     if(!this.acceso)throw new AccesoPublicoError(401);

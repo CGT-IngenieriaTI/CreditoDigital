@@ -6,7 +6,7 @@ import {moneda} from './FormControls';
 import {ArrowLeft,ArrowRight,Clock3,Fingerprint,LockKeyhole,MessageSquare,ShieldCheck} from 'lucide-react';
 import {Aviso,Cargando,NotaPrivacidad,ProgresoAcceso} from '../asociado/ui';
 import {BorradorAsociado} from '../asociado/BorradorAsociado';
-import type {GuardarBorrador,CotizacionTitular,AutorizacionTitular,PeticionAutorizacion,PeticionRadicacion,RadicacionTitular} from '../services/publico';
+import type {GuardarBorrador,CotizacionTitular,AutorizacionTitular,PeticionAutorizacion,PeticionRadicacion,RadicacionTitular,PeticionContractual,ContractualStaging} from '../services/publico';
 import type {OperarSimulacion} from '../asociado/SimuladorLocal';
 import './credihoy-publico.css';
 
@@ -26,6 +26,7 @@ export interface SeguimientoAsociadoProps { solicitudes:SolicitudPublica[]|null;
   actualizar:()=>void;salir:()=>void;seguimientoHabilitado?:boolean;formularioBorrador?:ReactNode;
   cotizacionHabilitada?:boolean;horaServidor?:()=>number;radicacionHabilitada?:boolean;
   radicar?:(body:PeticionRadicacion)=>Promise<RadicacionTitular>;
+  contractual?:(body:PeticionContractual)=>Promise<ContractualStaging>;
   simuladorLocalHabilitado?:boolean;simular?:OperarSimulacion;
   autorizacionHabilitada?:boolean;centralesHabilitadas?:boolean;autorizar?:(body:PeticionAutorizacion)=>Promise<AutorizacionTitular>;
   cotizar?:(sid:string,operacion:'consultar'|'cotizar'|'aceptar'|'aceptar_simulacion',sha?:string,diaPago?:number)=>Promise<CotizacionTitular> }
@@ -214,6 +215,10 @@ export function CredihoyAccesoAsociado({seguimiento}:{seguimiento?:(props:Seguim
         })}><ArrowLeft size={16} aria-hidden="true"/>Solicitar otro codigo con nuevo cotejo</button>}
       {!sesion.autenticado&&<NotaPrivacidad/>}
       {sesion.autenticado&&seguimiento?<Fragment key={sesion.sesionReferencia}>{seguimiento({solicitudes,busy,nombre:sesion.nombre,seguimientoHabilitado:sesion.acciones.seguimiento,
+        contractual:async body=>{
+          try{return await api.current.contractual(body);}
+          catch(e){if(e instanceof AccesoPublicoError&&[401,403].includes(e.status))expirarSesion();throw e;}
+        },
         autorizacionHabilitada:sesion.acciones.autorizar===true,centralesHabilitadas:sesion.acciones.centralesOtp===true,autorizar:async body=>{
           try{return await api.current.autorizacion(body);}
           catch(e){if(e instanceof AccesoPublicoError&&[401,403].includes(e.status))expirarSesion();throw e;}

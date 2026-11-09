@@ -265,6 +265,103 @@ class ContractualOTPTests(TransactionTestCase):
         return service.presentar_documento_contractual(self.case.pk, self.identity,
             documento_operacion_id=self.doc, clave=self.send)
 
+    def staging_scope(self):
+        return dict(version='CREDIHOY_CONTRACTUAL_STAGING_V1',ambiente='STAGING',solicitudId=str(self.case.pk),
+            titularReferencia=sha256(self.holder.numero_identificacion.encode()).hexdigest(),
+            documentoOperacionId=self.doc,pdfSha256=self.pdf_sha,venceEn=(timezone.now()+timedelta(hours=1)).isoformat())
+
+    def test_contractual_dispatcher_preserves_separate_personal_presentation_acceptance_and_otp(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import publico_institucional as wire
+        proof=signing.loads(self.identity['_firmanteInstitucional'],key=SIGNING_KEY,salt='credihoy-firmante-institucional-v1')
+        proof.update(version='CONTRACTUAL_IDENTIDAD_INSTITUCIONAL_V1',actoPersonalFirma=False)
+        self.identity['_firmanteInstitucional']=signing.dumps(proof,key=SIGNING_KEY,salt='credihoy-firmante-institucional-v1')
+        base={'operacion':'autorizacion','solicitudId':str(self.case.pk),'clave':self.send}
+        with override_settings(CREDIHOY_CONTRACTUAL_AMBIENTE='STAGING',CREDIHOY_CONTRACTUAL_STAGING_ALCANCE=self.staging_scope()):
+            p=wire.project_contractual(service.operar_contractual(self.identity,{**base,'accion':'contractual_presentar'}))
+            self.assertEqual(p['estado'],'PRESENTADA');self.assertFalse(OtpChallenge.objects.exists())
+            self.assertFalse(AuditLog.objects.filter(event='credihoy_contractual_aceptado').exists())
+            p=wire.project_contractual(service.operar_contractual(self.identity,{**base,'accion':'contractual_aceptar',
+                'presentacion':p['documento']['presentacion'],'acepta':True}))
+            self.assertEqual(p['estado'],'ACEPTADA_PENDIENTE_OTP');self.client.start_verification.assert_not_called()
+            p=service.operar_contractual(self.identity,{**base,'accion':'contractual_enviar_otp'})
+            self.assertEqual(p['estado'],'OTP_ENVIADA')
+            p=wire.project_contractual(service.operar_contractual(self.identity,{**base,'accion':'contractual_comprobar_otp',
+                'codigo':'123456','comprobacionId':str(uuid4())}))
+            self.assertTrue(p['otpVerificado']);self.assertFalse(p['firmaProductivaAcreditada'])
+            self.assertFalse(p['autorizaDesembolso']);self.assertIsNone(p['firmado'])
+
+    def test_contractual_cohort_expiry_foreign_holder_and_tampered_pdf_fail_before_provider(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import publico_institucional as wire
+        for changed in ({'venceEn':(timezone.now()-timedelta(seconds=1)).isoformat()},
+                {'titularReferencia':'f'*64},{'solicitudId':str(uuid4())}):
+            with override_settings(CREDIHOY_CONTRACTUAL_STAGING_ALCANCE={**self.staging_scope(),**changed}):
+                with self.assertRaises(wire.NoDisponible):
+                    service.operar_contractual(self.identity,{'operacion':'autorizacion','solicitudId':str(self.case.pk),
+                        'clave':self.send,'accion':'contractual_presentar'})
+        self.client.start_verification.assert_not_called()
+        with self.assertRaises(wire.NoDisponible):
+            wire.project_contractual({'versionContrato':'credihoy-contractual-staging-v1','ambiente':'PRODUCCION'})
+
+    def test_existing_relay_adapter_uses_integer_challenge_id_and_document_bound_signed_body(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import publico_institucional as wire
+        from apps.xcore_consumo.services.credihoy_v2.unico.publico_institucional_http import _autorizar_verify_contractual
+        self.accept();self.send_otp()
+        case,_=service._contexto_contractual(self.case.pk,self.identity)
+        record=service._leer_contractual(case,self.send)
+        self.assertRegex(record['otpId'],'^[0-9]+$')
+        observed=[]
+        def relay(origin,path,body,rid,headers):
+            self.assertEqual(origin,'https://relay.example.invalid')
+            request=SimpleNamespace(method='POST',is_secure=lambda:True,content_type='application/json',
+                path=path,body=body,headers=headers)
+            self.assertEqual(_autorizar_verify_contractual(request),rid)
+            packet=json.loads(body);observed.append(packet)
+            self.assertEqual(packet['otpId'],record['otpId'])
+            self.assertEqual(packet['pdfSha256'],self.pdf_sha)
+            self.assertEqual(packet['aceptacionSha256'],record['aceptacionSha256'])
+            return {'verifyContractual':{'verificationSid':VERIFICATION_SID,'estadoProveedor':'pending'}}
+        with override_settings(CREDIHOY_CONTRACTUAL_STAGING_ALCANCE=self.staging_scope(),
+                CREDIHOY_CONTRACTUAL_RELE_URL='https://relay.example.invalid',CREDIHOY_CONTRACTUAL_RELE_ENABLED=True),\
+                patch.object(wire,'request_packet',side_effect=relay):
+            client=wire.cliente_verify_contractual(SERVICE_SID,self.identity,record,comprobacion_id=str(uuid4()))
+            self.assertEqual(client.start_verification('+573000000001',channel='sms').sid,VERIFICATION_SID)
+            client.check_verification('+573000000001','123456',verification_sid=VERIFICATION_SID)
+        self.assertNotIn('codigo',observed[0]);self.assertEqual(observed[1]['codigo'],'123456')
+
+    def test_staging_signature_uses_native_durable_journal_without_productive_formalization_or_resend(self):
+        from apps.documentos import formularios_credihoy as forms
+        from apps.integraciones.autentic.contratos import ConfiguracionSTAGING
+        from apps.integraciones.autentic.cliente import AutenticDEVClient
+        from apps.integraciones.autentic.operaciones import RegistroFirmasExpediente
+        from .test_cliente import Session,Response,recibo,token
+        self.full_act()
+        self.detail.refresh_from_db();data=self.detail.orchestration_data
+        meta=data['credihoy_pdf_oficiales_v1'][self.doc]['metadata']
+        meta.update(ambienteFirma='STAGING',firmaProductivaAcreditada=False,simulacionSha256='d'*64,
+            aceptacionSimulacionSha256='e'*64,cuotaAceptada='204448',autorizaDesembolso=False)
+        envelope=json.loads(decrypt_text(data['credihoy_pdf_oficiales_v1'][self.doc]['contenidoCifrado']))
+        envelope['metadata']=meta;data['credihoy_pdf_oficiales_v1'][self.doc]['contenidoCifrado']=encrypt_text(json.dumps(envelope))
+        self.detail.orchestration_data=data;self.detail.save(update_fields=['orchestration_data'])
+        session=Session(Response({**token(),'scope':'signingcore-stag:fullaccess'}),Response(recibo(),201))
+        client=AutenticDEVClient(ConfiguracionSTAGING('SYNTHETIC','SECRET',permitir_documentos=True,
+            hosts_descarga=('descarga.example.test',)),session=session);self.addCleanup(client.close)
+        params=dict(actor=None,titular=self.identity,operacion_id=self.doc,metadata=None,clave_idempotencia=self.send,
+            cliente=client,registro=RegistroFirmasExpediente(self.case.pk,self.send),
+            referencia_autorizacion='SYNTHETIC-STAGING-PERSONAL',autoriza_firma=True)
+        with override_settings(CREDIHOY_AUTENTIC_TITULAR_ENVIO_ENABLED=False,
+                CREDIHOY_AUTENTIC_CONTRACTUAL_STAGING_ENVIO_ENABLED=True,CREDIHOY_CONTRACTUAL_STAGING_ALCANCE=self.staging_scope()),\
+                patch('apps.xcore_consumo.services.credihoy_v2.unico.cotizacion.comprobante_simulacion_aceptada',
+                    return_value={'simulacionSha256':'d'*64,'aceptacionSha256':'e'*64,'cuota':'204448'}),\
+                patch.object(forms,'_exigir_condiciones_definitivas',side_effect=AssertionError('NO_FAKE_PRODUCTIVE_APPROVAL')):
+            first=forms.enviar_formato_custodiado(self.case.pk,**params)
+            second=forms.enviar_formato_custodiado(self.case.pk,**params)
+        self.assertEqual(len(session.calls),2)
+        self.assertEqual(first['estado'],'FIRMA_REPORTADA_NO_VERIFICADA');self.assertFalse(first['firmaAcreditada'])
+        self.assertFalse(second['reenvioPermitido'])
+        self.detail.refresh_from_db();entry=self.detail.orchestration_data['credihoy_autentic_envios_v1'][self.send]
+        self.assertEqual(entry['vinculo']['ambienteFirma'],'STAGING');self.assertNotIn('formalizacion',entry)
+        self.assertNotIn('credihoy_formalizacion_autentic_v1',self.detail.orchestration_data)
+
     def test_native_contractual_scope_can_custody_official_three_page_form_without_signing(self):
         from apps.documentos import formularios_credihoy as forms
         fields={k:{'valor':v,'referencia':'SYNTHETIC_VERIFIED_CONDITIONS','verificado':True}

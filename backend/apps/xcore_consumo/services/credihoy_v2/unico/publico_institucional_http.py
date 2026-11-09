@@ -229,7 +229,25 @@ def _centrales_resultado(a,payload,proof):
 
 
 class SeguimientoView(InstitucionalView):
+    def authorize_request(self,request):
+        if type(request.data) is dict and request.data.get('operacion') in {'verify_contractual','verify_contractual_preflight'}:
+            self.rid=_autorizar_verify_contractual(request)
+        else:super().authorize_request(request)
+
     def post(self, request):
+        if type(request.data) is dict and request.data.get('operacion')=='verify_contractual_preflight':
+            from hashlib import sha256
+            p=request.data
+            if set(p)!={'operacion','solicitudId','pdfSha256'}:raise access.AccesoDenegado
+            scope=wire.alcance_contractual(p['solicitudId'])
+            sid=settings.CREDIHOY_OTP_CONTRACTUAL_VERIFY_SID
+            if (scope['pdfSha256']!=p['pdfSha256'] or not re.fullmatch('VA[a-fA-F0-9]{32}',sid)
+                    or sid.lower() in {settings.CREDIHOY_PUBLICO_VERIFY_SID.lower(),settings.TWILIO_VERIFY_SID.lower()}
+                    or not getattr(settings,'TWILIO_VERIFY_API_KEY_SECRET','')):raise wire.NoDisponible
+            return self.packet(configuracionContractual={'ambiente':'STAGING','serviceSha256':sha256(sid.encode()).hexdigest(),
+                'SIDIndependiente':True,'SMS':0,'firma':0})
+        if type(request.data) is dict and request.data.get('operacion')=='verify_contractual':
+            return self.packet(verifyContractual=_verify_contractual(request.data,self.rid))
         if type(request.data) is dict and 'radicacion' in request.data:
             from . import publico_seguimiento as owner
             payload=request.data
@@ -266,6 +284,13 @@ class SeguimientoView(InstitucionalView):
                 packet=_centrales_verify(a,payload,self.rid)
                 return self.packet(sesionReferencia=str(a.pk),autorizacion=wire.project_authorization(packet['autorizacion']))
             firmante=None
+            if type(payload['autorizacion']) is dict and payload['autorizacion'].get('accion')=='contractual_presentar':
+                from .publico_proveedores import acreditar_firmante
+                action=payload['autorizacion'];scope=wire.alcance_contractual(action['solicitudId'],
+                    {**_identity(a),'_sesionExpiraAt':a.sesion_expira_at.isoformat()})
+                if set(action)!={'operacion','accion','solicitudId','clave'}:raise access.AccesoDenegado
+                firmante=acreditar_firmante(a,solicitud_id=action['solicitudId'],pdf_sha256=scope['pdfSha256'],
+                    clave=action['clave'],request_id=self.rid,autoriza_firma=False,presentacion_contractual=True)
             if type(payload['autorizacion']) is dict and payload['autorizacion'].get('accion')=='verificar_firmante':
                 from .publico_seguimiento import verificar_presentacion_firma
                 from .publico_proveedores import acreditar_firmante
@@ -357,3 +382,93 @@ class SeguimientoView(InstitucionalView):
         rows=read_owned(identity,payload)
         access.auditar(a, 'seguimiento_consultado', cantidad=len(rows))
         return self.packet(sesionReferencia=str(a.pk), solicitudes=rows)
+
+
+def _autorizar_verify_contractual(request):
+    from hashlib import sha256
+    from django.core import signing
+    from .publico_seguimiento import key
+    if getattr(settings,'CREDIHOY_CONTRACTUAL_RELE_ENABLED',False) is not True:raise wire.NoDisponible
+    rid=request.headers.get('X-Request-ID','');authorization=request.headers.get('Authorization','')
+    if (request.method!='POST' or not request.is_secure() or request.content_type!='application/json'
+            or request.path!=wire.BASE+'seguimiento/' or len(request.body)>4096
+            or str(UUID(rid))!=rid or not authorization.startswith('Bearer chcontractual.')
+            or len(authorization)>8192):raise access.AccesoDenegado
+    proof=signing.loads(authorization[len('Bearer chcontractual.'):],key=key(),
+        salt='credihoy-verify-contractual-rele-v1',max_age=30,fallback_keys=[])
+    if (type(proof) is not dict or set(proof)!={'version','aud','requestId','bodySha256'}
+            or proof['version']!='CREDIHOY_VERIFY_CONTRACTUAL_RELE_V1' or proof['aud']!=request.path
+            or proof['requestId']!=rid or proof['bodySha256']!=sha256(request.body).hexdigest()):
+        raise access.AccesoDenegado
+    return rid
+
+
+
+def _verify_contractual(payload,rid):
+    """Existing relay SDK and durable Verify journal, separate from login and centrals."""
+    from datetime import datetime,timedelta
+    from hashlib import sha256
+    from apps.xcore_consumo.services.otp import normalize_sms_destination
+    import logging
+    if any(logging.getLogger(name).isEnabledFor(logging.INFO) for name in ('twilio','twilio.http_client')):
+        raise wire.NoDisponible
+    required={'operacion','accion','solicitudId','sesionReferencia','operacionFirmaId','otpId','pdfSha256',
+        'aceptacionSha256','serviceSha256','contactoSha256','aceptadoEn'}
+    if type(payload) is not dict:raise access.AccesoDenegado
+    sending=payload.get('accion')=='enviar'
+    if (payload.get('accion') not in {'enviar','comprobar'}
+            or set(payload)!=(required if sending else required|{'codigo','verificationSid'})
+            or payload['operacion']!='verify_contractual'
+            or any(str(UUID(payload[k]))!=payload[k] for k in ('solicitudId','sesionReferencia','operacionFirmaId'))
+            or not re.fullmatch('[1-9][0-9]{0,18}',str(payload['otpId']))
+            or any(not re.fullmatch('[a-f0-9]{64}',payload[k]) for k in
+                ('pdfSha256','aceptacionSha256','serviceSha256','contactoSha256'))):raise access.AccesoDenegado
+    if not sending and (not re.fullmatch('[0-9]{6}',payload['codigo'])
+            or not re.fullmatch('VE[a-fA-F0-9]{32}',payload['verificationSid'])):raise access.AccesoDenegado
+    scope=wire.alcance_contractual(payload['solicitudId'])
+    if payload['pdfSha256']!=scope['pdfSha256']:raise access.AccesoDenegado
+    service=settings.CREDIHOY_OTP_CONTRACTUAL_VERIFY_SID
+    if (not re.fullmatch('VA[a-fA-F0-9]{32}',service)
+            or service.lower() in {settings.CREDIHOY_PUBLICO_VERIFY_SID.lower(),settings.TWILIO_VERIFY_SID.lower()}
+            or sha256(service.encode()).hexdigest()!=payload['serviceSha256']):raise access.AccesoDenegado
+    accepted=datetime.fromisoformat(payload['aceptadoEn']);now=timezone.now()
+    if accepted.utcoffset() is None or not 0<=(now-accepted).total_seconds()<600:raise access.AccesoDenegado
+    alias=state_alias();fingerprint=hmac.new(wire.secret(),wire.encode(payload),'sha256').hexdigest()
+    with transaction.atomic(using=alias):
+        grant=Acceso.objects.using(alias).select_for_update().get(pk=payload['sesionReferencia'],
+            estado='VERIFICADO',revocado=False,sesion_expira_at__gt=now)
+        identity=_identity(grant)
+        if sha256(identity['numeroDocumento'].encode()).hexdigest()!=scope['titularReferencia']:raise access.AccesoDenegado
+        destination=normalize_sms_destination(identity['celular'])
+        if sha256(destination.encode()).hexdigest()!=payload['contactoSha256']:raise access.AccesoDenegado
+        operation,created=Operacion.objects.using(alias).get_or_create(pk=UUID(rid),defaults={
+            'acceso_id':grant.pk,'accion':'CONTR_ENVIO' if sending else 'CONTR_CHECK','peticion_hmac':fingerprint})
+        if operation.acceso_id!=grant.pk or not hmac.compare_digest(operation.peticion_hmac,fingerprint):raise access.AccesoDenegado
+        if not created:
+            if operation.estado!='FINALIZADA':raise wire.NoDisponible
+            return json.loads(decrypt_text(operation.resultado['evidenciaCifrada']))
+        label='contractual_enviar' if sending else 'contractual_comprobar'
+        limit_key=payload['sesionReferencia']+':'+payload['pdfSha256']
+        if not access.limite([(label,limit_key,1 if sending else 3)],using=alias):raise access.AccesoDenegado
+        access.auditar(grant,'contractual_verify_reservado',accion=operation.accion)
+    try:
+        client=TwilioVerifyClient(service_sid=service)
+        if sending:
+            reply=client.start_verification(destination,channel='sms')
+            if (reply.status!='pending' or reply.date_created is None
+                    or reply.date_created<accepted-timedelta(seconds=5)):raise wire.NoDisponible
+        else:reply=client.check_verification(destination,payload['codigo'],verification_sid=payload['verificationSid'])
+        if (not re.fullmatch('VE[a-fA-F0-9]{32}',reply.sid or '') or reply.status not in {'pending','approved'}
+                or reply.to!=destination or reply.channel!='sms'
+                or not sending and reply.sid!=payload['verificationSid']):raise wire.NoDisponible
+        result={'verificationSid':reply.sid,'estadoProveedor':reply.status}
+        grant.refresh_from_db(using=alias)
+        if grant.revocado or grant.sesion_expira_at<=timezone.now():raise wire.NoDisponible
+        Operacion.objects.using(alias).filter(pk=operation.pk,estado='RESERVADA').update(
+            estado='FINALIZADA',resultado={'evidenciaCifrada':encrypt_text(json.dumps(result,sort_keys=True))})
+        access.auditar(grant,'contractual_verify_finalizado',accion=operation.accion)
+        return result
+    except Exception:
+        Operacion.objects.using(alias).filter(pk=operation.pk,estado='RESERVADA').update(estado='INCIERTA')
+        raise wire.NoDisponible from None
+

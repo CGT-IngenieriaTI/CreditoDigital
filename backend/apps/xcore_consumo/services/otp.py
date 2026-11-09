@@ -94,12 +94,29 @@ def _invalidate_pending_challenges(solicitud, *, keep_id=None):
     candidates.update(estado=EstadoOtp.CANCELADA, validation_result='canceled', ultimo_error='Reemplazada por un nuevo envío OTP.')
 
 
-def _create_base_challenge(solicitud, *, channel: str, provider: str, destination: str, request=None, using=None, max_intentos=None) -> OtpChallenge:
+def _create_base_challenge(solicitud, *, channel: str, provider: str, destination: str, request=None,
+                           using=None, max_intentos=None, validation_result='') -> OtpChallenge:
+    if validation_result not in ('','contractual:send_reserved'):
+        raise ValueError('PROPOSITO_CHALLENGE_NO_ADMITIDO')
     meta = _request_meta(request)
     destination_masked = mask_destination(channel, destination)
     encrypted_destination = encrypt_text(destination)
+
     manager = OtpChallenge.objects if using is None else OtpChallenge.objects.using(using)
-    return manager.create(solicitud=solicitud, canal=channel, provider=provider, destino=destination_masked, destination_masked=destination_masked, destination_full_encrypted=encrypted_destination, estado=EstadoOtp.PENDIENTE, max_intentos=getattr(settings, 'TWILIO_VERIFY_RESEND_MAX', 3) if max_intentos is None else max_intentos, transaction_uuid=uuid.uuid4().hex, ip_address=meta['ip_address'], user_agent=meta['user_agent'])
+    return manager.create(
+        solicitud=solicitud,
+        canal=channel,
+        provider=provider,
+        validation_result=validation_result,
+        destino=destination_masked,
+        destination_masked=destination_masked,
+        destination_full_encrypted=encrypted_destination,
+        estado=EstadoOtp.PENDIENTE,
+        max_intentos=getattr(settings, "TWILIO_VERIFY_RESEND_MAX", 3) if max_intentos is None else max_intentos,
+        transaction_uuid=uuid.uuid4().hex,
+        ip_address=meta["ip_address"],
+        user_agent=meta["user_agent"],
+    )
 
 
 def _send_email(destination: str, code: str, solicitud):

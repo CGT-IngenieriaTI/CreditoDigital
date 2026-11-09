@@ -214,6 +214,8 @@ def seguimiento(grant, solicitud_id=None, *, borrador=None,autorizacion=None,rad
 
 
 def project_authorization(row):
+    if type(row) is dict and row.get('versionContrato')=='credihoy-contractual-staging-v1':
+        return project_contractual(row)
     fields={'versionContrato','solicitudId','estado','documento','firmado','consultasHabilitadas','evaluacionHabilitada'}
     if (type(row) is not dict or set(row) not in (fields,fields|{'firma'},fields|{'complemento'},fields|{'centrales'}) or row['versionContrato']!='credihoy-autorizacion-titular-v1'
             or any(row[k] is not False for k in ('firmado','consultasHabilitadas','evaluacionHabilitada'))
@@ -476,6 +478,13 @@ def project_row(row):
                     or p['estado']!=('DOCUMENTO_VERIFICADO' if p['firmaAcreditada'] else 'VALIDACION_PENDIENTE')
                     or datetime.fromisoformat(p['actualizadoAt']).utcoffset() is None):raise ValueError
             clean['formalizacionDocumental']=dict(p)
+        if row.get('formalizacionStaging') is not None:
+            p=row['formalizacionStaging']
+            if (type(p) is not dict or set(p)!={'ambiente','documento','version','paginas','disponibleHasta','firmaProductivaAcreditada'}
+                    or p['ambiente']!='STAGING' or p['documento']!='COLO-FO.001' or p['version']!='13'
+                    or p['paginas']!=3 or p['firmaProductivaAcreditada'] is not False
+                    or datetime.fromisoformat(p['disponibleHasta']).utcoffset() is None):raise ValueError
+            clean['formalizacionStaging']=dict(p)
         if row.get('envio') is not None:
             from datetime import timezone
             from decimal import Decimal
@@ -812,3 +821,115 @@ def project_digital_history(row):
         event('DESEMBOLSO','Desembolso',None,'Sin confirmacion institucional de desembolso.')]
     if institution:rows.append(event('PAGARE','Pagare LINPAG',None,'LINIX gestiona el pagare en su oportunidad; no se firma desde este portal.'))
     return sorted(rows,key=lambda item:(item['fecha'] is None,item['fecha'] or '',item['codigo']))
+
+
+def alcance_contractual(solicitud_id,identity=None):
+    from datetime import datetime,timezone
+    scope=getattr(settings,'CREDIHOY_CONTRACTUAL_STAGING_ALCANCE',None)
+    fields={'version','ambiente','solicitudId','titularReferencia','documentoOperacionId','pdfSha256','venceEn'}
+    if (type(scope) is not dict or set(scope)!=fields or scope['version']!='CREDIHOY_CONTRACTUAL_STAGING_V1'
+            or scope['ambiente']!='STAGING' or scope['solicitudId']!=str(solicitud_id)
+            or any(type(scope[k]) is not str or not re.fullmatch('[a-f0-9]{64}',scope[k]) for k in ('titularReferencia','pdfSha256'))
+            or any(str(UUID(scope[k]))!=scope[k] for k in ('solicitudId','documentoOperacionId'))):
+        raise NoDisponible
+    end=datetime.fromisoformat(scope['venceEn'])
+    if end.utcoffset() is None or datetime.now(timezone.utc)>=end:raise NoDisponible
+    if identity is not None:
+        if hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()!=scope['titularReferencia']:
+            raise NoDisponible
+        if datetime.fromisoformat(identity['_sesionExpiraAt'])<=datetime.now(timezone.utc):raise NoDisponible
+    return scope
+
+
+
+def cliente_verify_contractual(service,identity,record,*,comprobacion_id=None):
+    """Purpose adapter over the existing relay; provider credentials stay there."""
+    from django.core import signing
+    from .publico_seguimiento import key
+    scope=alcance_contractual(record['vinculo']['solicitudId'],identity)
+    if (record['vinculo']['pdfSha256']!=scope['pdfSha256']
+            or record['vinculo']['documentoOperacionId']!=scope['documentoOperacionId']):raise NoDisponible
+    path=BASE+'seguimiento/'
+    def call_contract(action,destination,code=None,verification_sid=None):
+        label='CONTRACTUAL:ENVIAR' if action=='enviar' else 'CONTRACTUAL:COMPROBAR:'+str(UUID(comprobacion_id))
+        if not re.fullmatch('[1-9][0-9]{0,18}',str(record['otpId'])):raise NoDisponible
+        rid=str(uuid5(UUID(record['vinculo']['operacionFirmaId']),label+':'+str(record['otpId'])))
+        body={'operacion':'verify_contractual','accion':action,'solicitudId':scope['solicitudId'],
+            'sesionReferencia':identity['_sesionReferencia'],'operacionFirmaId':record['vinculo']['operacionFirmaId'],
+            'otpId':record['otpId'],'pdfSha256':scope['pdfSha256'],'aceptacionSha256':record['aceptacionSha256'],
+            'serviceSha256':hashlib.sha256(service.encode()).hexdigest(),
+            'contactoSha256':hashlib.sha256(destination.encode()).hexdigest(),'aceptadoEn':record['aceptadoEn']}
+        if action=='comprobar':body.update(codigo=code,verificationSid=verification_sid)
+        raw=encode(body)
+        proof=signing.dumps({'version':'CREDIHOY_VERIFY_CONTRACTUAL_RELE_V1','aud':path,'requestId':rid,
+            'bodySha256':hashlib.sha256(raw).hexdigest()},key=key(),salt='credihoy-verify-contractual-rele-v1')
+        result=request_packet(getattr(settings,'CREDIHOY_CONTRACTUAL_RELE_URL',''),path,raw,rid,
+            {'Content-Type':'application/json','Accept':'application/json','X-Request-ID':rid,
+             'Authorization':'Bearer chcontractual.'+proof})['verifyContractual']
+        if (set(result)!={'verificationSid','estadoProveedor'} or not re.fullmatch('VE[a-fA-F0-9]{32}',result['verificationSid'])
+                or result['estadoProveedor'] not in {'pending','approved'}
+                or verification_sid is not None and result['verificationSid']!=verification_sid):raise NoDisponible
+        return SimpleNamespace(sid=result['verificationSid'],status=result['estadoProveedor'],to=destination,channel='sms')
+    def start(destination,channel='sms'):
+        if channel!='sms':raise NoDisponible
+        return call_contract('enviar',destination)
+    def check(destination,code,*,verification_sid):
+        return call_contract('comprobar',destination,code,verification_sid)
+    return SimpleNamespace(start_verification=start,check_verification=check)
+
+
+
+def comprobar_rele_contractual():
+    from django.core import signing
+    from uuid import uuid4
+    from .publico_seguimiento import key
+    scope=getattr(settings,'CREDIHOY_CONTRACTUAL_STAGING_ALCANCE',{})
+    alcance_contractual(scope.get('solicitudId'))
+    rid=str(uuid4());path=BASE+'seguimiento/'
+    body=encode({'operacion':'verify_contractual_preflight','solicitudId':scope['solicitudId'],'pdfSha256':scope['pdfSha256']})
+    proof=signing.dumps({'version':'CREDIHOY_VERIFY_CONTRACTUAL_RELE_V1','aud':path,'requestId':rid,
+        'bodySha256':hashlib.sha256(body).hexdigest()},key=key(),salt='credihoy-verify-contractual-rele-v1')
+    response=request_packet(getattr(settings,'CREDIHOY_CONTRACTUAL_RELE_URL',''),path,body,rid,
+        {'Content-Type':'application/json','Accept':'application/json','X-Request-ID':rid,
+         'Authorization':'Bearer chcontractual.'+proof})
+    result=response['configuracionContractual']
+    sid=getattr(settings,'CREDIHOY_OTP_CONTRACTUAL_VERIFY_SID','')
+    if (type(result) is not dict or set(result)!={'ambiente','serviceSha256','SIDIndependiente','SMS','firma'}
+            or result!={'ambiente':'STAGING','serviceSha256':hashlib.sha256(sid.encode()).hexdigest(),
+                'SIDIndependiente':True,'SMS':0,'firma':0}):raise NoDisponible
+    return result
+
+
+
+def project_contractual(row):
+    import base64
+    required={'versionContrato','solicitudId','operacionFirmaId','ambiente','estado','pdfSha256','documento',
+        'firmado','pendientes','otpProveedor','otpVerificado','firmaProductivaAcreditada','autorizaDesembolso'}
+    allowed={'PRESENTADA','ACEPTADA_PENDIENTE_OTP','OTP_ENVIO_RESERVADO','OTP_ENVIADA','OTP_ENVIO_INDETERMINADO',
+        'OTP_COMPROBACION_RESERVADA','OTP_VALIDADA','OTP_BLOQUEADA','OTP_EXPIRADA','OTP_COMPROBACION_INDETERMINADA',
+        'ENVIANDO','INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA'}
+    if (type(row) is not dict or set(row)!=required or row['ambiente']!='STAGING'
+            or row['versionContrato']!='credihoy-contractual-staging-v1' or row['estado'] not in allowed
+            or row['otpProveedor']!='TWILIO_VERIFY' or type(row['otpVerificado']) is not bool
+            or row['firmaProductivaAcreditada'] is not False or row['autorizaDesembolso'] is not False
+            or any(str(UUID(row[k]))!=row[k] for k in ('solicitudId','operacionFirmaId'))
+            or not re.fullmatch('[a-f0-9]{64}',row['pdfSha256'])
+            or type(row['pendientes']) is not list or len(row['pendientes'])>30
+            or any(type(k) is not str or not re.fullmatch('[A-Z0-9_]{1,120}',k) for k in row['pendientes'])):raise NoDisponible
+    document=row['documento']
+    if document is not None:
+        keys={'solicitudId','operacionFirmaId','documentoOperacionId','codigo','pdfSha256','pdfBase64','presentacion','proposito','ttl'}
+        if (type(document) is not dict or set(document)!=keys or document['solicitudId']!=row['solicitudId']
+                or document['operacionFirmaId']!=row['operacionFirmaId'] or document['pdfSha256']!=row['pdfSha256']
+                or str(UUID(document['documentoOperacionId']))!=document['documentoOperacionId']
+                or document['codigo']!='COLO-FO.001' or document['proposito']!='FIRMA_DOCUMENTO_CONTRACTUAL'
+                or document['ttl']!=600 or type(document['presentacion']) is not str
+                or not 1<=len(document['presentacion'])<=4096):raise NoDisponible
+    for pdf in (document,row['firmado']):
+        if pdf is None:continue
+        if (type(pdf) is not dict or type(pdf.get('pdfBase64')) is not str or len(pdf['pdfBase64'])>4000000
+                or not re.fullmatch('[a-f0-9]{64}',pdf.get('pdfSha256',''))
+                or hashlib.sha256(base64.b64decode(pdf['pdfBase64'],validate=True)).hexdigest()!=pdf['pdfSha256']):raise NoDisponible
+    if row['firmado'] is not None and set(row['firmado'])!={'pdfBase64','pdfSha256'}:raise NoDisponible
+    return dict(row)
+

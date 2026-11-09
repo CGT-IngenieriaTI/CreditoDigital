@@ -24,8 +24,10 @@ class SolicitudesTitularView(InstitucionalView):
                 result=operacion_radicacion_titular(self.identity,request.data['radicacion'],self.rid)
                 return self.packet(sesionReferencia=request.data['accesoId'],radicacion=wire.project_radication(result))
             if 'autorizacion' in request.data:
-                from .consentimiento_real import operar_autogestion
-                result=operar_autogestion(self.identity,request.data['autorizacion'])
+                from .consentimiento_real import operar_autogestion,operar_contractual
+                action=request.data['autorizacion']
+                operation=operar_contractual if type(action) is dict and str(action.get('accion','')).startswith('contractual_') else operar_autogestion
+                result=operation(self.identity,action)
                 return self.packet(sesionReferencia=request.data['accesoId'],autorizacion=wire.project_authorization(result))
             if 'cotizacion' in request.data:
                 from .simulacion_lectura import es_simulacion, operar_simulacion
@@ -42,10 +44,13 @@ class SolicitudesTitularView(InstitucionalView):
                 return self.packet(sesionReferencia=request.data['accesoId'],borrador=result,
                     avisoTemporal=presentar(self.identity))
             rows=owner.read_owned(self.identity,request.data)
+            for row in rows:
+                try:scope=wire.alcance_contractual(row['referencia'],self.identity)
+                except wire.NoDisponible:continue
+                row['formalizacionStaging']={'ambiente':'STAGING','documento':'COLO-FO.001','version':'13',
+                    'paginas':3,'disponibleHasta':scope['venceEn'],'firmaProductivaAcreditada':False}
         except Exception as error:
             registrar_rechazo_saneado(request,error,self.rid,started,'operacion')
-            rejection=wire.clasificar_rechazo(error) if 'autorizacion' in request.data else None
-            if rejection is not None:raise rejection from None
             if isinstance(error,DatabaseError):raise wire.NoDisponible from None
             raise
         owner.audit_read(self.rid,len(rows))

@@ -5,22 +5,27 @@ import pdfWorker from "react-pdf/node_modules/pdfjs-dist/build/pdf.worker.min.mj
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 interface PdfScrollViewerProps {
-  file: string;
+  file: string | { data: Uint8Array };
+  requiredPages?: number;
   title: string;
   onLoad: () => void;
   onReachEnd: () => void;
 }
 
-export function PdfScrollViewer({ file, title, onLoad, onReachEnd }: PdfScrollViewerProps) {
+export function PdfScrollViewer({ file, title, requiredPages, onLoad, onReachEnd }: PdfScrollViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [numPages, setNumPages] = useState(0);
   const [pageWidth, setPageWidth] = useState(720);
   const [hasReachedEnd, setHasReachedEnd] = useState(false);
+  const renderedPages = useRef(new Set<number>());
+  const failed = useRef(false);
   const isMobile = typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches;
 
   useEffect(() => {
     setNumPages(0);
     setHasReachedEnd(false);
+    renderedPages.current.clear();
+    failed.current = false;
     if (containerRef.current) {
       containerRef.current.scrollTop = 0;
       containerRef.current.scrollLeft = 0;
@@ -56,7 +61,8 @@ export function PdfScrollViewer({ file, title, onLoad, onReachEnd }: PdfScrollVi
 
   const handleScroll = () => {
     const current = containerRef.current;
-    if (!current || hasReachedEnd) return;
+    if (!current || hasReachedEnd || failed.current || !numPages || renderedPages.current.size !== numPages ||
+        (requiredPages !== undefined && numPages !== requiredPages)) return;
 
     const reachedEnd = current.scrollTop + current.clientHeight >= current.scrollHeight - 24;
 
@@ -76,6 +82,7 @@ export function PdfScrollViewer({ file, title, onLoad, onReachEnd }: PdfScrollVi
           file={file}
           loading={<div className="pdf-viewer__state">Cargando PDF...</div>}
           error={<div className="pdf-viewer__state">No fue posible mostrar el PDF.</div>}
+          onLoadError={() => { failed.current = true; setHasReachedEnd(false); onLoad(); }}
           onLoadSuccess={({ numPages: totalPages }) => {
             setNumPages(totalPages);
             if (containerRef.current) {
@@ -93,6 +100,8 @@ export function PdfScrollViewer({ file, title, onLoad, onReachEnd }: PdfScrollVi
                 width={pageWidth}
                 renderAnnotationLayer
                 renderTextLayer
+                onRenderSuccess={() => { renderedPages.current.add(index + 1); }}
+                onRenderError={() => { failed.current = true; setHasReachedEnd(false); onLoad(); }}
               />
             ))}
           </div>

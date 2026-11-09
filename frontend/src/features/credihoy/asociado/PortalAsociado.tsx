@@ -1,4 +1,4 @@
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useMemo,useRef,useState} from 'react';
 import {ArrowLeft,ArrowRight,BadgeCheck,Calculator,CheckCircle2,ChevronDown,ChevronRight,Menu,
   Clock3,ExternalLink,FileCheck2,Files,History,Info,LayoutDashboard,LogOut,RefreshCw,ShieldCheck,UserRound,type LucideIcon} from 'lucide-react';
 import {CredihoyAccesoAsociado,type SeguimientoAsociadoProps} from '../components/CredihoyAccesoAsociado';
@@ -95,6 +95,7 @@ function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;
   const [url,setUrl]=useState(''),[firmadoUrl,setFirmadoUrl]=useState(''),[leido,setLeido]=useState(false),[acepta,setAcepta]=useState(false),[confirma,setConfirma]=useState(false);
   const [codigo,setCodigo]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[incierta,setIncierta]=useState(false);
   const guard=useRef(false);
+  const pdfFile=useMemo(()=>documento?{data:Uint8Array.from(atob(documento.pdfBase64),v=>v.charCodeAt(0))}:null,[documento]);
   useEffect(()=>{
     if(!documento){setUrl('');return;}
     const bytes=Uint8Array.from(atob(documento.pdfBase64),v=>v.charCodeAt(0));
@@ -126,7 +127,7 @@ function FirmaContractualStaging({solicitud,operar}:{solicitud:SolicitudPublica;
       <div><dt>Cuota aceptada</dt><dd>{solicitud.seguimientoRadicacion?.cuotaAceptada?moneda(solicitud.seguimientoRadicacion.cuotaAceptada):'Sin lectura acreditada'}</dd></div></dl>
     {!data&&!incierta&&<button type="button" className="btn btn-primary" disabled={busy} onClick={()=>void enviar({accion:'contractual_presentar'})}>
       <FileCheck2 size={17} aria-hidden="true"/>Revisar y firmar formalizacion</button>}
-    {url&&<><PdfScrollViewer file={url} title="COLO-FO.001 v13" onLoad={()=>setLeido(false)} onReachEnd={()=>setLeido(true)}/>
+    {url&&pdfFile&&<><PdfScrollViewer file={pdfFile} requiredPages={3} title="COLO-FO.001 v13" onLoad={()=>{setLeido(false);setAcepta(false);}} onReachEnd={()=>setLeido(true)}/>
       <p className="ca-muted" style={{overflowWrap:'anywhere'}}>SHA-256: {documento?.pdfSha256}</p>
       <a className="btn btn-outline-primary" href={url} download="COLO-FO.001-v13.pdf"><ExternalLink size={16} aria-hidden="true"/>Abrir documento completo</a></>}
     {estado==='PRESENTADA'&&!incierta&&<>

@@ -387,14 +387,14 @@ def _estudio_publico_personal(s, identity):
             from .funcional import huella_consumo_estudio
             if (digest(evaluation)!=body['evaluacionBaseSha256'] or digest(consent)!=body['consentimientoSha256']
                     or (huella_consumo_estudio(detail,version=body['version'])!=body['consumoSha256']
-                        and not verificar_custodia_contractual_posterior(detail,body,row[1]))):raise ValueError
+                        and not verificar_custodia_contractual_posterior(detail,body,row[1],s))):raise ValueError
             return study
         except (ValueError,TypeError,KeyError,AttributeError,InvalidSignature,
                 EvaluacionConsumo.DoesNotExist,ConsentimientoConsumo.DoesNotExist,SolicitudConsumo.DoesNotExist):
             raise wire.NoDisponible from None
 
 
-def verificar_custodia_contractual_posterior(detail,body,registrado_en):
+def verificar_custodia_contractual_posterior(detail,body,registrado_en,case=None):
     """Match the signed input snapshot without deleting later document revisions."""
     from copy import deepcopy
     from datetime import datetime,timezone
@@ -422,10 +422,30 @@ def verificar_custodia_contractual_posterior(detail,body,registrado_en):
             removed.append(key)
         if not removed:return False
         snapshot=deepcopy(detail);snapshot['orchestration_data']['credihoy_pdf_oficiales_v1']=retained
-        if huella_consumo_estudio(snapshot,body['version'])==body['consumoSha256']:return True
-        if not retained:
-            snapshot['orchestration_data'].pop('credihoy_pdf_oficiales_v1')
-            return huella_consumo_estudio(snapshot,body['version'])==body['consumoSha256']
-        return False
+        empty=['credihoy_pdf_oficiales_v1'] if not retained else []
+        contracts=data.get('credihoy_otp_contractual_v1')
+        if contracts:
+            from types import SimpleNamespace
+            from .consentimiento_real import _leer_contractual
+            if (case is None or str(case.pk)!=body['solicitudId']
+                    or type(contracts) is not dict or len(contracts)>20):return False
+            previous={}
+            for key,stored in contracts.items():
+                record=_leer_contractual(case,key,detail=SimpleNamespace(orchestration_data=data))
+                binding=record['vinculo'];document=binding['documentoOperacionId']
+                if document not in removed:previous[key]=stored;continue
+                meta=history[document]['metadata']
+                if (binding['proposito']!='FIRMA_DOCUMENTO_CONTRACTUAL'
+                        or binding['scope']!='solicitudes:firmarContrato'
+                        or binding['codigo']!='COLO-FO.001' or binding['versionDocumento']!='13'
+                        or binding['pdfSha256']!=meta['pdfSha256']
+                        or binding['originalSha256']!=meta['originalSha256']):return False
+            snapshot['orchestration_data']['credihoy_otp_contractual_v1']=previous
+            if not previous:empty.append('credihoy_otp_contractual_v1')
+        candidates=[snapshot]
+        for key in empty:
+            for value in list(candidates):
+                absent=deepcopy(value);absent['orchestration_data'].pop(key);candidates.append(absent)
+        return any(huella_consumo_estudio(value,body['version'])==body['consumoSha256'] for value in candidates)
     except (ValueError,KeyError,TypeError,AttributeError):return False
 

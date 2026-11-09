@@ -168,6 +168,17 @@ class ContractualStagingDocumentTests(TransactionTestCase):
         self.assertFalse(verificar_custodia_contractual_posterior(altered,body,cutoff))
         unrelated=deepcopy(updated);unrelated['orchestration_data']['credihoy_pdf_oficiales_v1'][operation]['metadata']['codigo']='COLO-FO.023'
         self.assertFalse(verificar_custodia_contractual_posterior(unrelated,body,cutoff))
+        act=str(uuid4());record={'estado':'PRESENTADA','vinculo':{'solicitudId':str(self.case.pk),
+            'operacionFirmaId':act,'documentoOperacionId':operation,'proposito':'FIRMA_DOCUMENTO_CONTRACTUAL',
+            'scope':'solicitudes:firmarContrato','codigo':'COLO-FO.001','versionDocumento':'13',
+            'pdfSha256':meta['pdfSha256'],'originalSha256':meta['originalSha256']}}
+        with_act=deepcopy(updated)
+        with_act['orchestration_data']['credihoy_otp_contractual_v1']={act:{
+            'sha256':service._digest_contractual(record),'contenidoCifrado':encrypt_text(service._json_contractual(record))}}
+        self.assertTrue(verificar_custodia_contractual_posterior(with_act,body,cutoff,self.case))
+        self.assertFalse(verificar_custodia_contractual_posterior(with_act,body,cutoff))
+        corrupted=deepcopy(with_act);corrupted['orchestration_data']['credihoy_otp_contractual_v1'][act]['sha256']='0'*64
+        self.assertFalse(verificar_custodia_contractual_posterior(corrupted,body,cutoff,self.case))
         self.detail.refresh_from_db();data=self.detail.orchestration_data
         data['credihoy_pdf_oficiales_v1'][operation]['metadata']['pdfSha256']='0'*64
         self.detail.orchestration_data=data;self.detail.save(update_fields=['orchestration_data'])

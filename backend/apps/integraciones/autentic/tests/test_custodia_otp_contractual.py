@@ -145,6 +145,47 @@ class ContractualStagingDocumentTests(TransactionTestCase):
 
 
 class ContractualOffTests(SimpleTestCase):
+    @override_settings(CREDIHOY_CONTRACTUAL_RELE_ENABLED=True,CREDIHOY_TITULAR_SECRET=SIGNING_KEY,
+        CREDIHOY_OTP_CONTRACTUAL_VERIFY_SID=SERVICE_SID,CREDIHOY_PUBLICO_VERIFY_SID='VA'+'c'*32,
+        TWILIO_VERIFY_SID='VA'+'d'*32,TWILIO_VERIFY_API_KEY_SECRET='synthetic-relay-only-key')
+    def test_contractual_http_dispatch_preserves_raw_signed_body_before_json_parser(self):
+        from rest_framework.test import APIRequestFactory
+        from apps.xcore_consumo.services.credihoy_v2.unico import publico_institucional as wire
+        from apps.xcore_consumo.services.credihoy_v2.unico import publico_institucional_http as http
+        from apps.xcore_consumo.services.credihoy_v2.unico import publico_s2s
+        import time
+        rid=str(uuid4());path=wire.BASE+'seguimiento/';case=str(uuid4())
+        payload={'operacion':'verify_contractual_preflight','solicitudId':case,'pdfSha256':'a'*64}
+        body=wire.encode(payload)
+        token=signing.dumps({'version':'CREDIHOY_VERIFY_CONTRACTUAL_RELE_V1','aud':path,
+            'requestId':rid,'bodySha256':sha256(body).hexdigest()},key=SIGNING_KEY,
+            salt='credihoy-verify-contractual-rele-v1')
+        scope=dict(version='CREDIHOY_CONTRACTUAL_STAGING_V1',ambiente='STAGING',solicitudId=case,
+            titularReferencia='b'*64,documentoOperacionId=str(uuid4()),pdfSha256='a'*64,
+            venceEn=(timezone.now()+timedelta(hours=1)).isoformat())
+        def dispatch(raw=body,proof=token):
+            request=APIRequestFactory().post(path,data=raw,content_type='application/json',secure=True,
+                HTTP_X_REQUEST_ID=rid,HTTP_X_CREDIHOY_DELEGACION_CONTRACTUAL='chcontractual.'+proof)
+            return http.SeguimientoView.as_view()(request)
+        errors=[];handler=http.SeguimientoView.handle_exception
+        def failed(view,exc):
+            errors.append(type(exc).__name__)
+            return handler(view,exc)
+        with override_settings(CREDIHOY_CONTRACTUAL_STAGING_ALCANCE=scope), \
+                patch.object(publico_s2s.controls,'validar_habilitacion') as availability, \
+                patch.object(publico_s2s.controls,'ip_cliente') as network, \
+                patch.object(http.SeguimientoView,'handle_exception',new=failed), \
+                patch.object(http,'_verify_contractual',side_effect=AssertionError('NO_SMS_OR_PROVIDER')):
+            response=dispatch()
+            self.assertEqual(response.status_code,200,errors)
+            self.assertEqual(response.data['configuracionContractual']['SMS'],0)
+            self.assertEqual(response['X-Request-ID'],rid)
+            availability.assert_called_once();network.assert_called_once()
+            self.assertEqual(dispatch(raw=body+b' ').status_code,403)
+            self.assertEqual(dispatch(proof='untrusted').status_code,403)
+            with patch.object(signing.time,'time',return_value=time.time()+31):
+                self.assertEqual(dispatch().status_code,403)
+
     def test_private_http_diagnostic_retains_tls_redirect_and_single_attempt_guards(self):
         from apps.xcore_consumo.services.credihoy_v2.unico import publico_institucional as wire
         import requests

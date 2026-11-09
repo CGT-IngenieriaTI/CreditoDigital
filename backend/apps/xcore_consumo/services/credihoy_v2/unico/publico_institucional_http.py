@@ -230,6 +230,8 @@ def _centrales_resultado(a,payload,proof):
 
 class SeguimientoView(InstitucionalView):
     def authorize_request(self,request):
+        # Cache the exact signed bytes before DRF consumes the JSON stream.
+        _ = request.body
         if type(request.data) is dict and request.data.get('operacion') in {'verify_contractual','verify_contractual_preflight'}:
             self.rid=_autorizar_verify_contractual(request)
         else:super().authorize_request(request)

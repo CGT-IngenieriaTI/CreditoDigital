@@ -703,6 +703,59 @@ class ContractualOTPTests(TransactionTestCase):
     def test_send_reservation_is_durable_and_replay_sends_once(self):
         self.accept(); first = self.send_otp(); self.assertEqual(self.send_otp(), first)
         self.assertEqual(self.client.start_verification.call_count, 1)
+
+    def reserved_with_signed_ack(self):
+        from uuid import UUID,uuid5
+        self.accept();self.client.start_verification.side_effect=SystemExit('SYNTHETIC_WORKER_EXIT_AFTER_RESERVATION')
+        with self.assertRaises(SystemExit):self.send_otp()
+        record=self.record()
+        payload={'version':'CREDIHOY_CONTRACTUAL_OTP_ACK_V1','journalId':str(uuid5(UUID(self.send),'CONTRACTUAL:ENVIAR:'+record['otpId'])),
+            'verificationSid':VERIFICATION_SID,'estadoProveedor':'pending','observadoEn':timezone.now().isoformat(),
+            **{k:record[k] for k in ('otpId','aceptacionSha256','contactoSha256','aceptadoEn')},
+            'pdfSha256':self.pdf_sha,'serviceSha256':sha256(record['serviceSid'].encode()).hexdigest(),
+            'solicitudId':str(self.case.pk),'operacionFirmaId':self.send}
+        return signing.dumps(payload,key=SIGNING_KEY,salt='credihoy-contractual-otp-ack-v1'),payload
+
+    def test_finalized_relay_ack_recovers_delivery_once_without_sending_or_approving(self):
+        ack,_=self.reserved_with_signed_ack();old=self.record();challenge=OtpChallenge.objects.get(pk=old['otpId'])
+        expiry=challenge.expira_at
+        with override_settings(CREDIHOY_CONTRACTUAL_STAGING_ALCANCE=self.staging_scope()):
+            result=service.conciliar_acuse_otp_contractual(self.case.pk,clave=self.send,acuse=ack)
+            self.assertEqual(result['estado'],'OTP_ENVIADA')
+            count=AuditLog.objects.count()
+            self.assertEqual(service.conciliar_acuse_otp_contractual(self.case.pk,clave=self.send,acuse=ack),result)
+            self.assertEqual(AuditLog.objects.count(),count)
+        challenge.refresh_from_db();current=self.record()
+        self.assertEqual(challenge.expira_at,expiry);self.assertEqual(challenge.intentos,0)
+        self.assertFalse(challenge.verificado_at);self.assertEqual(challenge.verification_sid,VERIFICATION_SID)
+        self.assertEqual(current['aceptadoEn'],old['aceptadoEn']);self.assertEqual(current['vinculo'],old['vinculo'])
+        self.assertNotIn('prueba',current);self.assertEqual(self.client.start_verification.call_count,1)
+        self.client.check_verification.assert_not_called()
+
+    def test_late_relay_ack_preserves_expiration_and_allows_only_a_fresh_personal_act(self):
+        ack,_=self.reserved_with_signed_ack();old=self.record();challenge=OtpChallenge.objects.get(pk=old['otpId'])
+        now=challenge.expira_at+timedelta(seconds=61)
+        with patch.object(service.timezone,'now',return_value=now),override_settings(CREDIHOY_CONTRACTUAL_STAGING_ALCANCE=self.staging_scope()):
+            result=service.conciliar_acuse_otp_contractual(self.case.pk,clave=self.send,acuse=ack)
+            self.assertEqual(result['estado'],'OTP_EXPIRADA')
+            record=self.record();self.assertTrue(service.puede_renovar_revision_contractual(self.case,'default',record,self.send))
+            with self.assertRaises(ValueError):self.verify()
+        challenge.refresh_from_db()
+        self.assertEqual(challenge.validation_result,'contractual:sent_expired');self.assertEqual(challenge.intentos,0)
+        self.assertEqual(self.record()['aceptacionSha256'],old['aceptacionSha256'])
+        self.assertEqual(self.client.start_verification.call_count,1);self.client.check_verification.assert_not_called()
+
+    def test_foreign_modified_or_unfinalized_ack_never_changes_reserved_delivery(self):
+        ack,payload=self.reserved_with_signed_ack()
+        with override_settings(CREDIHOY_CONTRACTUAL_STAGING_ALCANCE=self.staging_scope()):
+            for changes in ({'estadoProveedor':'approved'},{'journalId':str(uuid4())},{'solicitudId':str(uuid4())},
+                    {'otpId':'999999'},{'pdfSha256':'f'*64},{'aceptacionSha256':'f'*64},{'serviceSha256':'f'*64}):
+                bad=signing.dumps({**payload,**changes},key=SIGNING_KEY,salt='credihoy-contractual-otp-ack-v1')
+                with self.assertRaises(Exception):service.conciliar_acuse_otp_contractual(self.case.pk,clave=self.send,acuse=bad)
+            with self.assertRaises(Exception):service.conciliar_acuse_otp_contractual(self.case.pk,clave=self.send,acuse=ack+'changed')
+        self.assertEqual(self.record()['estado'],'OTP_ENVIO_RESERVADO')
+        self.assertFalse(AuditLog.objects.filter(event='credihoy_contractual_otp_envio_recuperado').exists())
+        self.assertEqual(self.client.start_verification.call_count,1)
         challenge = OtpChallenge.objects.get(solicitud=self.case)
         self.assertEqual(challenge.max_intentos, 3)
         self.assertEqual(challenge.expira_at-service._fecha_contractual(self.record()['reservadoEn']), timedelta(seconds=600))

@@ -1160,24 +1160,10 @@ def enviar_otp_contractual(solicitud_id, identity, *, clave):
         success = True
     except Exception:
         success, sid = False, ''
-    with transaction.atomic(using=alias, durable=True):
-        case.consumo_detail = SolicitudConsumo.objects.using(alias).select_for_update().get(solicitud_id=case.pk)
-        record = _leer_contractual(case, key)
-        challenge = _challenge_contractual(case, alias, record, lock=True)
-        if record['estado'] != 'OTP_ENVIO_RESERVADO':
-            raise ValueError('RESERVA_OTP_CONTRACTUAL_CAMBIO')
-        challenge.verification_sid = sid
-        challenge.enviado_at = timezone.now() if success else None
-        challenge.estado = EstadoOtp.ENVIADA if success else EstadoOtp.ERROR_ENVIO
-        challenge.validation_result = 'contractual:sent' if success else 'contractual:send_uncertain'
-        challenge.save(using=alias, update_fields=['verification_sid', 'enviado_at', 'estado', 'validation_result', 'updated_at'])
-        record['estado'] = 'OTP_ENVIADA' if success else 'OTP_ENVIO_INDETERMINADO'
-        _guardar_contractual(case, alias, key, record)
-        _auditar_contractual(case, alias, 'otp_enviado' if success else 'otp_incierto', key,
-            {'otpId': str(challenge.pk), 'proposito': CONTRACTUAL_PURPOSE})
+    result = _cerrar_envio_otp_contractual(case, alias, key, success, sid)
     if not success:
         raise ValueError('OTP_CONTRACTUAL_ENVIO_INDETERMINADO_NO_REPETIR') from None
-    return _estado_contractual(record)
+    return result
 
 
 def verificar_otp_contractual(solicitud_id, identity, *, clave, codigo, clave_verificacion):
@@ -1422,10 +1408,21 @@ def operar_contractual(identity,action):
 
 
 def puede_renovar_revision_contractual(case, alias, record, key):
-    """Only a never-sent, expired personal act can precede another explicit review."""
+    """Renew only expired unsent acts or acknowledged, unused expired deliveries."""
+    recovered_expiry = record['estado'] == 'OTP_EXPIRADA' and bool(record.get('recuperacionEnvio'))
+    if recovered_expiry:
+        challenge = _challenge_contractual(case, alias, record)
+        if (challenge.estado != EstadoOtp.EXPIRADA or challenge.validation_result != 'contractual:sent_expired'
+                or challenge.intentos != 0 or challenge.verification_check_sid
+                or not re.fullmatch('VE[a-fA-F0-9]{32}', challenge.verification_sid)
+                or not challenge.expira_at or timezone.now() < challenge.expira_at+timedelta(seconds=60)):
+            return False
+        _exigir_auditoria_contractual(case, alias, 'otp_envio_recuperado', key, record['recuperacionEnvio'])
+        _exigir_auditoria_contractual(case, alias, 'otp_enviado', key, {'otpId': record['otpId'], 'proposito': CONTRACTUAL_PURPOSE})
     if (record['estado'] not in {'PRESENTADA', 'ACEPTADA_PENDIENTE_OTP'}
+            and not recovered_expiry
             or record.get('comprobaciones') != {}
-            or any(k in record for k in ('otpId', 'serviceSid', 'prueba', 'confirmacionFirma'))
+            or any(k in record for k in (('prueba', 'confirmacionFirma') if recovered_expiry else ('otpId', 'serviceSid', 'prueba', 'confirmacionFirma')))
             or key in case.consumo_detail.orchestration_data.get('credihoy_autentic_envios_v1', {})):
         return False
     binding = record['vinculo']
@@ -1434,7 +1431,7 @@ def puede_renovar_revision_contractual(case, alias, record, key):
         return False
     now = timezone.now()
     expired = _fecha_contractual(binding['sesionExpiraAt']) <= now
-    if record['estado'] == 'ACEPTADA_PENDIENTE_OTP':
+    if record['estado'] == 'ACEPTADA_PENDIENTE_OTP' or recovered_expiry:
         if record.get('aceptacionSha256') != _digest_contractual({k: record[k] for k in (
                 'vinculo', 'firmante', 'aceptacionId', 'aceptadoEn')}):
             raise ValueError('ACEPTACION_CONTRACTUAL_NO_INTEGRA')
@@ -1447,10 +1444,82 @@ def puede_renovar_revision_contractual(case, alias, record, key):
         from django.db import connections
         with connections[alias].cursor() as cursor:
             cursor.execute('SELECT event FROM public.credihoy_auditoria_contractual_publica '
-                'WHERE solicitud_id=%s AND request_id=%s LIMIT 5', [str(case.pk), key])
+                'WHERE solicitud_id=%s AND request_id=%s LIMIT 7', [str(case.pk), key])
             events = [r[0] for r in cursor.fetchall()]
     else:
-        events = list(AuditLog.objects.using(alias).filter(solicitud_id=case.pk, request_id=key).values_list('event', flat=True)[:5])
-    return bool(events) and set(events) <= {'credihoy_contractual_presentado', 'credihoy_contractual_aceptado',
-        'credihoy_contractual_revision_renovada'} and len(events) <= 3
+        events = list(AuditLog.objects.using(alias).filter(solicitud_id=case.pk, request_id=key).values_list('event', flat=True)[:7])
+    allowed = {'credihoy_contractual_presentado', 'credihoy_contractual_aceptado', 'credihoy_contractual_revision_renovada'}
+    if recovered_expiry:
+        allowed |= {'credihoy_contractual_otp_reservado', 'credihoy_contractual_otp_enviado', 'credihoy_contractual_otp_envio_recuperado'}
+    return bool(events) and set(events) <= allowed and len(events) <= (6 if recovered_expiry else 3)
+
+
+
+def _cerrar_envio_otp_contractual(case, alias, key, success, sid, *, acuse=None):
+    with transaction.atomic(using=alias, durable=True):
+        case.consumo_detail = SolicitudConsumo.objects.using(alias).select_for_update().get(solicitud_id=case.pk)
+        record = _leer_contractual(case, key)
+        challenge = _challenge_contractual(case, alias, record, lock=True)
+        if acuse is not None and record.get('recuperacionEnvio', {}).get('acuseSha256') == acuse['acuseSha256']:
+            return _estado_contractual(record)
+        if record['estado'] != 'OTP_ENVIO_RESERVADO':
+            raise ValueError('RESERVA_OTP_CONTRACTUAL_CAMBIO')
+        if acuse is not None and any(acuse[k] != record[k] for k in ('otpId', 'aceptacionSha256')):
+            raise ValueError('ACUSE_OTP_CONTRACTUAL_CAMBIO')
+        now = timezone.now()
+        expired = success and now >= challenge.expira_at
+        challenge.verification_sid = sid
+        challenge.enviado_at = now if success else None
+        challenge.estado = EstadoOtp.EXPIRADA if expired else EstadoOtp.ENVIADA if success else EstadoOtp.ERROR_ENVIO
+        challenge.validation_result = 'contractual:sent_expired' if expired else 'contractual:sent' if success else 'contractual:send_uncertain'
+        challenge.save(using=alias, update_fields=['verification_sid', 'enviado_at', 'estado', 'validation_result', 'updated_at'])
+        record['estado'] = 'OTP_EXPIRADA' if expired else 'OTP_ENVIADA' if success else 'OTP_ENVIO_INDETERMINADO'
+        if acuse is not None:
+            record['recuperacionEnvio'] = dict(acuse)
+            _auditar_contractual(case, alias, 'otp_envio_recuperado', key, acuse)
+        _guardar_contractual(case, alias, key, record)
+        _auditar_contractual(case, alias, 'otp_enviado' if success else 'otp_incierto', key,
+            {'otpId': str(challenge.pk), 'proposito': CONTRACTUAL_PURPOSE})
+    return _estado_contractual(record)
+
+
+
+def conciliar_acuse_otp_contractual(solicitud_id, *, clave, acuse):
+    """Acknowledge a signed, finalized relay result. Never sends or approves an OTP."""
+    from django.core import signing
+    from uuid import uuid5
+    from .publico_seguimiento import key as shared_key
+    key = str(UUID(str(clave)))
+    proof = signing.loads(acuse, key=shared_key(), salt='credihoy-contractual-otp-ack-v1', max_age=3600, fallback_keys=[])
+    fields = {'version', 'journalId', 'verificationSid', 'estadoProveedor', 'observadoEn', 'otpId', 'pdfSha256',
+        'aceptacionSha256', 'contactoSha256', 'serviceSha256', 'aceptadoEn', 'solicitudId', 'operacionFirmaId'}
+    scope = getattr(settings, 'CREDIHOY_CONTRACTUAL_STAGING_ALCANCE', {})
+    if (set(proof) != fields or proof['version'] != 'CREDIHOY_CONTRACTUAL_OTP_ACK_V1'
+            or proof['estadoProveedor'] != 'pending' or proof['solicitudId'] != str(solicitud_id)
+            or proof['operacionFirmaId'] != key or scope.get('solicitudId') != str(solicitud_id)
+            or scope.get('ambiente') != 'STAGING' or scope.get('pdfSha256') != proof['pdfSha256']
+            or not re.fullmatch('VE[a-fA-F0-9]{32}', proof['verificationSid'])):
+        raise ValueError('ACUSE_OTP_CONTRACTUAL_DE_OTRA_OPERACION')
+    alias = settings.CREDIHOY_OTP_CONTRACTUAL_DB_ALIAS
+    case = Solicitud.objects.using(alias).select_related('solicitante').get(pk=solicitud_id, producto=PRODUCTO, asesor__isnull=True)
+    case.consumo_detail = SolicitudConsumo.objects.using(alias).get(solicitud_id=case.pk)
+    record = _leer_contractual(case, key)
+    if (any(proof[k] != record[k] for k in ('otpId', 'aceptacionSha256', 'contactoSha256', 'aceptadoEn'))
+            or proof['pdfSha256'] != record['vinculo']['pdfSha256']
+            or record['vinculo']['documentoOperacionId'] != scope['documentoOperacionId']
+            or scope['titularReferencia'] != hashlib.sha256(case.solicitante.numero_identificacion.encode()).hexdigest()
+            or proof['serviceSha256'] != hashlib.sha256(record['serviceSid'].encode()).hexdigest()
+            or proof['journalId'] != str(uuid5(UUID(key), 'CONTRACTUAL:ENVIAR:'+str(record['otpId'])))
+            or not _fecha_contractual(record['reservadoEn']) <= _fecha_contractual(proof['observadoEn']) <= timezone.now()):
+        raise ValueError('ACUSE_OTP_CONTRACTUAL_NO_CONCORDANTE')
+    _exigir_auditoria_contractual(case, alias, 'aceptado', key, {'aceptacionSha256': record['aceptacionSha256']})
+    _exigir_auditoria_contractual(case, alias, 'otp_reservado', key, {'otpId': record['otpId'], 'proposito': CONTRACTUAL_PURPOSE})
+    meta = {'acuseSha256': hashlib.sha256(acuse.encode()).hexdigest(), 'journalId': proof['journalId'],
+        'otpId': proof['otpId'], 'aceptacionSha256': proof['aceptacionSha256'],
+        'verificationSidSha256': hashlib.sha256(proof['verificationSid'].encode()).hexdigest(),
+        'observadoEn': proof['observadoEn'], 'conciliadoEn': timezone.now().isoformat()}
+    previous = record.get('recuperacionEnvio')
+    if previous and previous['acuseSha256'] == meta['acuseSha256']:
+        return _estado_contractual(record)
+    return _cerrar_envio_otp_contractual(case, alias, key, True, proof['verificationSid'], acuse=meta)
 

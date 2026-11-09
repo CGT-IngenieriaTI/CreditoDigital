@@ -230,6 +230,26 @@ def _centrales_resultado(a,payload,proof):
 
 class SeguimientoView(InstitucionalView):
     def post(self, request):
+        if type(request.data) is dict and 'radicacion' in request.data:
+            from . import publico_seguimiento as owner
+            payload=request.data
+            if (getattr(settings,'CREDIHOY_RADICACION_TITULAR_ENABLED',False) is not True
+                    or getattr(settings,'CREDIHOY_SEGUIMIENTO_TRANSPORTE','')!='HTTP_PROPIETARIO'):
+                raise wire.NoDisponible
+            if set(payload)!={'accesoId','navegador','radicacion'} or type(payload['radicacion']) is not dict:
+                raise access.AccesoDenegado
+            a=Acceso.objects.using(state_alias()).get(pk=UUID(payload['accesoId']),
+                estado='VERIFICADO',revocado=False,sesion_expira_at__gt=timezone.now())
+            if type(payload['navegador']) is not str or not hmac.compare_digest(payload['navegador'],a.navegador_hmac):
+                raise access.AccesoDenegado
+            readonly=payload['radicacion'].get('operacion')=='consultar'
+            if not access.limite([('radicacion_lectura' if readonly else 'radicacion_personal',str(a.pk),120 if readonly else 10)],using=state_alias()):
+                raise access.AccesoDenegado
+            packet=owner.consult(a,_identity(a),payload,self.rid)
+            a.refresh_from_db(using=state_alias())
+            if a.revocado or a.estado!='VERIFICADO' or a.sesion_expira_at<=timezone.now():raise access.AccesoDenegado
+            if packet.get('sesionReferencia')!=str(a.pk):raise wire.NoDisponible
+            return self.packet(sesionReferencia=str(a.pk),radicacion=wire.project_radication(packet['radicacion']))
         if type(request.data) is dict and 'autorizacion' in request.data:
             from . import publico_seguimiento as owner
             payload=request.data

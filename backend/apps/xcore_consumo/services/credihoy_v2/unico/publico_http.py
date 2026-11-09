@@ -107,7 +107,7 @@ class SesionView(PublicView):
         channel = data.get('canal')
         contact = data.get('contacto')
         mask = '***' + contact[-2:] if channel == 'SMS' and type(contact) is str and (len(contact) >= 2) else None
-        return Response({'versionContrato': service.VERSION, 'autenticado': True, 'nombre': data['nombre'], 'expiraAt': a.sesion_expira_at.isoformat(), 'sesionReferencia': str(a.pk), 'perfil': {'correoRegistrado': email, 'correoVerificado': bool(email and channel == 'EMAIL' and (contact == email)), 'contactoEnmascarado': mask, 'fuente': 'COTEJO_INSTITUCIONAL_AUTENTICADO'}, 'acciones': {'seguimiento': getattr(settings, 'CREDIHOY_SEGUIMIENTO_ENABLED', True) is True, 'solicitar': sesion_habilitada(str(a.pk), expira_at=a.sesion_expira_at), 'simular': getattr(settings, 'CREDIHOY_COTIZACION_TITULAR_ENABLED', False) is True, 'documentos': False, **({'simuladorLocal': True} if simulador_habilitado() else {}), **({'autorizar': True} if getattr(settings, 'CREDIHOY_AUTORIZACION_TITULAR_ENABLED', False) is True else {}), **({'centralesOtp': True} if getattr(settings, 'CREDIHOY_CENTRALES_OTP_ENABLED', False) is True else {})}})
+        return Response({'versionContrato': service.VERSION, 'autenticado': True, 'nombre': data['nombre'], 'expiraAt': a.sesion_expira_at.isoformat(), 'sesionReferencia': str(a.pk), 'perfil': {'correoRegistrado': email, 'correoVerificado': bool(email and channel == 'EMAIL' and (contact == email)), 'contactoEnmascarado': mask, 'fuente': 'COTEJO_INSTITUCIONAL_AUTENTICADO'}, 'acciones': {'seguimiento': getattr(settings, 'CREDIHOY_SEGUIMIENTO_ENABLED', True) is True, 'solicitar': sesion_habilitada(str(a.pk), expira_at=a.sesion_expira_at), 'simular': getattr(settings, 'CREDIHOY_COTIZACION_TITULAR_ENABLED', False) is True, 'documentos': False, **({'simuladorLocal': True} if simulador_habilitado() else {}), **({'autorizar': True} if getattr(settings, 'CREDIHOY_AUTORIZACION_TITULAR_ENABLED', False) is True else {}), **({'centralesOtp': True} if getattr(settings, 'CREDIHOY_CENTRALES_OTP_ENABLED', False) is True else {}), 'radicar': getattr(settings, 'CREDIHOY_RADICACION_TITULAR_ENABLED', False) is True}})
 
 
 class CerrarView(PublicView):
@@ -233,6 +233,15 @@ class SolicitudesView(PublicView):
     def post(self,request):
         from .autoservicio import habilitar
         from . import publico_institucional as wire
+        if type(request.data) is dict and request.data.get('operacion')=='radicacion':
+            if getattr(settings,'CREDIHOY_RADICACION_TITULAR_ENABLED',False) is not True:raise wire.NoDisponible
+            grant,_=service.acceso(request)
+            if request.headers.get('X-Acceso-Referencia')!=str(grant.pk):raise service.AccesoDenegado
+            action={k:v for k,v in request.data.items() if k not in {'operacion','accion'}}
+            action['operacion']=request.data.get('accion')
+            packet=wire.seguimiento(grant,radicacion=action)
+            service.acceso(request)
+            return Response(packet)
         if type(request.data) is dict and request.data.get('operacion')=='autorizacion':
             if getattr(settings,'CREDIHOY_AUTORIZACION_TITULAR_ENABLED',False) is not True:raise wire.NoDisponible
             if request.data.get('accion')=='centrales_resultado':raise service.AccesoDenegado

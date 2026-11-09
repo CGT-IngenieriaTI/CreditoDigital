@@ -5,7 +5,7 @@ import {CredihoyAccesoAsociado,type SeguimientoAsociadoProps} from '../component
 import {CredihoyShell} from '../components/CredihoyShell';
 import {crearEstadoInicial} from '../state';
 import {moneda} from '../components/FormControls';
-import type {CotizacionTitular,InstitucionalPublica,SolicitudPublica,AutorizacionTitular,PeticionAutorizacion} from '../services/publico';
+import type {CotizacionTitular,InstitucionalPublica,SolicitudPublica,AutorizacionTitular,PeticionAutorizacion,PeticionRadicacion,RadicacionTitular} from '../services/publico';
 import {Aviso,Cargando,EstadoVacio,Etiqueta,NotaPrivacidad} from './ui';
 import './asociado.css';
 import {SimuladorLocal} from './SimuladorLocal';
@@ -86,7 +86,7 @@ export function DocumentosAsociado({formalizacion}:{institucion?:InstitucionalPu
   </div>;
 }
 
-export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguimientoHabilitado=true,formularioBorrador,cotizacionHabilitada=false,cotizar,horaServidor,autorizacionHabilitada=false,centralesHabilitadas=false,autorizar,simuladorLocalHabilitado=false,simular}:SeguimientoAsociadoProps){
+export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguimientoHabilitado=true,formularioBorrador,cotizacionHabilitada=false,cotizar,radicacionHabilitada=false,radicar,horaServidor,autorizacionHabilitada=false,centralesHabilitadas=false,autorizar,simuladorLocalHabilitado=false,simular}:SeguimientoAsociadoProps){
   const [vista,setVista]=useState<Vista>('estado'),[seleccion,setSeleccion]=useState('');
   const [escritorio,setEscritorio]=useState(false),[menuAbierto,setMenuAbierto]=useState(false);
   const [autorizacionesVisitadas,setAutorizacionesVisitadas]=useState(false);
@@ -249,7 +249,8 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
             <SimuladorLocal key={s.referencia} sid={s.referencia} montoInicial={s.monto} plazoInicial={s.plazoMeses}
               operar={simular} continuar={()=>setVista('evaluacion')}/>}
           {cotizacionHabilitada&&cotizar&&s.procedencia?.origen==='FUENTE_OPERATIVA'&&
-            <OfertaTitular key={s.referencia} sid={s.referencia} operar={cotizar} horaServidor={horaServidor}/>}
+            <OfertaTitular key={s.referencia} sid={s.referencia} operar={cotizar} horaServidor={horaServidor}
+              radicar={radicacionHabilitada?radicar:undefined}/>}
           {(!simuladorLocalHabilitado||!simular||s.procedencia?.origen!=='FUENTE_OPERATIVA')&&(!cotizacionHabilitada||!cotizar||s.procedencia?.origen!=='FUENTE_OPERATIVA')&&<>
           <Etiqueta tono="neutral">{quote?.origen==='REFERENCIA_INSTITUCIONAL_REGISTRADA'?'Referencia institucional':'Condiciones por confirmar'}</Etiqueta>
           <fieldset className="ca-form" disabled={!quote||busy}><legend>Condiciones de tu solicitud</legend>
@@ -612,7 +613,7 @@ export function AutorizacionPersonal({sid,operar,centralesHabilitadas=false,onAc
   </section>;
 }
 
-export function OfertaTitular({sid,operar,horaServidor=Date.now}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['cotizar']>;horaServidor?:()=>number}){
+export function OfertaTitular({sid,operar,horaServidor=Date.now,radicar}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['cotizar']>;horaServidor?:()=>number;radicar?:SeguimientoAsociadoProps['radicar']}){
   const [data,setData]=useState<CotizacionTitular|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const [acepta,setAcepta]=useState(false),[now,setNow]=useState(horaServidor);
   const [diaPago,setDiaPago]=useState('');
@@ -656,6 +657,7 @@ export function OfertaTitular({sid,operar,horaServidor=Date.now}:{sid:string;ope
     </select></label>
     <button className="btn btn-outline-primary" type="button" disabled={busy} onClick={()=>void run('consultar')}><RefreshCw size={17} aria-hidden="true"/> Consultar oferta</button>
     <button className="btn btn-brand" type="button" disabled={busy||Boolean(error)||!diaPago} onClick={()=>void run('cotizar')}><Calculator size={17} aria-hidden="true"/> Cotizar condiciones guardadas</button></>}
+    {sim&&data?.aceptacionSimulacion?.aceptada&&radicar&&<RadicacionPersonal sid={sid} operar={radicar}/>}
     {sim&&<button className="btn btn-outline-primary" type="button" disabled={busy} onClick={()=>void run('consultar')}><RefreshCw size={17} aria-hidden="true"/> Consultar condiciones</button>}
     {offer&&<><dl className="ca-metrics"><div><dt>Monto</dt><dd>{moneda(offer.monto)}</dd></div>
       <div><dt>Cuota institucional</dt><dd>{data?.cuota?moneda(data.cuota):'No disponible'}</dd></div><div><dt>Plazo</dt><dd>{offer.plazoMeses} meses</dd></div>
@@ -671,6 +673,54 @@ export function OfertaTitular({sid,operar,horaServidor=Date.now}:{sid:string;ope
           onChange={e=>setAcepta(e.target.checked)}/> He revisado y acepto expresamente estas condiciones de la oferta.</label>
         <button className="btn btn-brand" type="button" disabled={busy||vencida||!offer.condicionesCompletas||!acepta}
           onClick={()=>void run('aceptar')}><CheckCircle2 size={17} aria-hidden="true"/> Aceptar oferta</button></>}
+    </>}
+  </section>;
+}
+
+export function RadicacionPersonal({sid,operar}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['radicar']>}){
+  const [data,setData]=useState<RadicacionTitular|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  const [abierto,setAbierto]=useState(false),[fecha,setFecha]=useState(''),[acepta,setAcepta]=useState(false),[incierta,setIncierta]=useState(false);
+  const guard=useRef(false),alive=useRef(true);
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
+  const recuperar=incierta||data?.estado==='INCIERTA'||data?.estado==='EXECUTING';
+  async function run(action:PeticionRadicacion['accion']){
+    if(guard.current)return;guard.current=true;setBusy(true);setError('');
+    const base={operacion:'radicacion' as const,solicitudId:sid};
+    try{
+      const body:PeticionRadicacion=action==='preparar'?{...base,accion:action,primeraFechaPagoPropuesta:fecha}:
+        action==='confirmar'?{...base,accion:action,presentacion:data!.presentacion!,aceptaRadicar:true}:{...base,accion:action};
+      const p=await operar(body);
+      if(alive.current){setData(p);setAcepta(false);setIncierta(p.estado==='INCIERTA'||p.estado==='EXECUTING');}
+    }catch{if(alive.current){setData(null);setAcepta(false);setIncierta(true);setError('No pudimos confirmar el resultado. Consulta la operacion existente antes de continuar.');}}
+    finally{guard.current=false;if(alive.current)setBusy(false);}
+  }
+  return <section aria-label="Radicacion personal" aria-busy={busy}>
+    <h3>Radicacion de tu solicitud</h3>
+    {!abierto&&<button className="btn btn-brand" type="button" onClick={()=>{setAbierto(true);void run('consultar');}}>
+      <FileCheck2 size={17} aria-hidden="true"/> Radicar mi solicitud</button>}
+    {abierto&&<>
+      {busy&&<p role="status">Consultando la operacion institucional...</p>}
+      {error&&<Aviso tono="warning" titulo="Resultado por confirmar">{error}</Aviso>}
+      {data?.codigo&&<Aviso tono="warning" titulo="Radicacion pendiente">Referencia: {data.codigo}</Aviso>}
+      {data?.estado==='RADICADA'?<Aviso tono="success" titulo="Solicitud radicada">
+        Flujo {data.K_FLUJO??'por conciliar'}. Solicitud LINIX {data.SC??'por conciliar'}. La decision institucional y la firma contractual siguen pendientes.
+      </Aviso>:<>
+        {data&&!recuperar&&['SIN_INTENCION','PREPARADA'].includes(data.estado)&&<>
+          <label className="ch-field">Primera fecha de pago propuesta<input className="form-control" type="date" value={fecha}
+            disabled={busy||data.puedeConfirmar} onChange={e=>{setFecha(e.target.value);setAcepta(false);}}/></label>
+          <p>La fecha propuesta no reemplaza el calendario definitivo de LINIX.</p>
+          {!data.puedeConfirmar&&<button className="btn btn-outline-primary" type="button" disabled={busy||!fecha} onClick={()=>void run('preparar')}>
+            <FileCheck2 size={17} aria-hidden="true"/> Revisar radicacion</button>}
+        </>}
+        {data?.puedeConfirmar&&!recuperar&&<>
+          <label><input type="checkbox" checked={acepta} disabled={busy} onChange={e=>setAcepta(e.target.checked)}/>
+            {' '}Confirmo radicar mi solicitud con las condiciones y cuota aceptadas. La decision institucional y la firma contractual continuan pendientes.</label>
+          <button className="btn btn-brand" type="button" disabled={busy||!acepta} onClick={()=>void run('confirmar')}>
+            <ArrowRight size={17} aria-hidden="true"/> Confirmar radicacion</button>
+        </>}
+      </>}
+      <button className="btn btn-outline-primary" type="button" disabled={busy} onClick={()=>void run(recuperar?'conciliar':'consultar')}>
+        <RefreshCw size={17} aria-hidden="true"/> {recuperar?'Recuperar operacion existente':'Consultar radicacion'}</button>
     </>}
   </section>;
 }

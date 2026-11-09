@@ -19,6 +19,10 @@ class SolicitudesTitularView(InstitucionalView):
         started=time.monotonic()
         try:
             if not owner.claim_delegation(self.rid):raise ValueError('DELEGACION_YA_UTILIZADA')
+            if 'radicacion' in request.data:
+                from .cotizacion import operacion_radicacion_titular
+                result=operacion_radicacion_titular(self.identity,request.data['radicacion'],self.rid)
+                return self.packet(sesionReferencia=request.data['accesoId'],radicacion=wire.project_radication(result))
             if 'autorizacion' in request.data:
                 from .consentimiento_real import operar_autogestion
                 result=operar_autogestion(self.identity,request.data['autorizacion'])

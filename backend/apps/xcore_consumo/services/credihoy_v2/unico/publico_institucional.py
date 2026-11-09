@@ -177,7 +177,7 @@ def comprobar(acceso_id, numero_intento, codigo, contacto, canal, verification_s
                            channel='sms' if canal == 'SMS' else 'email')
 
 
-def seguimiento(grant, solicitud_id=None, *, borrador=None,autorizacion=None):
+def seguimiento(grant, solicitud_id=None, *, borrador=None,autorizacion=None,radicacion=None):
     payload = {'accesoId': str(grant.pk), 'navegador': grant.navegador_hmac}
     if solicitud_id is not None:
         payload['solicitudId'] = str(solicitud_id)
@@ -187,8 +187,14 @@ def seguimiento(grant, solicitud_id=None, *, borrador=None,autorizacion=None):
     if autorizacion is not None:
         if solicitud_id is not None or borrador is not None:raise ValueError
         payload['autorizacion']=autorizacion
+    if radicacion is not None:
+        if solicitud_id is not None or borrador is not None or autorizacion is not None:raise ValueError
+        payload['radicacion']=radicacion
     from uuid import uuid4
     p = call('seguimiento', payload, str(uuid4()))
+    if radicacion is not None:
+        if p.get('sesionReferencia')!=str(grant.pk):raise NoDisponible
+        return {'sesionReferencia':str(grant.pk),'radicacion':project_radication(p['radicacion'])}
     if autorizacion is not None:
         if p.get('sesionReferencia')!=str(grant.pk):raise NoDisponible
         return {'sesionReferencia':str(grant.pk),'autorizacion':project_authorization(p['autorizacion'])}
@@ -683,3 +689,25 @@ def project_simulacion_aceptable(row):
             ahora=t if a['aceptada'] else None)
         return json.loads(json.dumps(row))
     except (KeyError,TypeError,ValueError,AttributeError,ArithmeticError):raise NoDisponible from None
+
+
+def project_radication(row):
+    fields={'versionContrato','solicitudId','intencionId','estado','codigo','puedeConfirmar','presentacion',
+        'K_FLUJO','SC','actividadesActivas','decisionInstitucional','firmaContractual','autorizaFirma','autorizaDesembolso'}
+    if (type(row) is not dict or set(row)!=fields or row['versionContrato']!='credihoy-radicacion-personal-v1'
+            or any(str(UUID(row[k]))!=row[k] for k in ('solicitudId','intencionId'))
+            or row['estado'] not in {'SIN_INTENCION','PREPARADA','EXECUTING','INCIERTA','RADICADA','BLOQUEADA'}
+            or row['decisionInstitucional']!='PENDIENTE' or row['firmaContractual']!='PENDIENTE'
+            or row['autorizaFirma'] is not False or row['autorizaDesembolso'] is not False
+            or type(row['puedeConfirmar']) is not bool
+            or row['codigo'] is not None and (type(row['codigo']) is not str or not re.fullmatch('[A-Z][A-Z0-9_]{1,120}',row['codigo']))
+            or any(row[k] is not None and (type(row[k]) is not str or not re.fullmatch('[1-9][0-9]{0,19}',row[k])) for k in ('K_FLUJO','SC'))
+            or type(row['actividadesActivas']) is not list or len(row['actividadesActivas'])>20):raise NoDisponible
+    if row['puedeConfirmar']:
+        if row['estado']!='PREPARADA' or type(row['presentacion']) is not str or not 1<=len(row['presentacion'])<=8192:raise NoDisponible
+    elif row['presentacion'] is not None:raise NoDisponible
+    active=[]
+    for task in row['actividadesActivas']:
+        if type(task) is not dict or type(task.get('actividad')) is not int or task['actividad']<=0:raise NoDisponible
+        active.append({'actividad':task['actividad']})
+    return {**row,'actividadesActivas':active}

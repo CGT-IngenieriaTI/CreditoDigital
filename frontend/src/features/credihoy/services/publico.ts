@@ -8,7 +8,27 @@ export interface IntentoPublico { intento:string;estado:'PREPARANDO'|'CONTACTO_D
 export interface PerfilPersonal {correoRegistrado:string|null;correoVerificado:boolean;contactoEnmascarado:string|null;fuente:'COTEJO_INSTITUCIONAL_AUTENTICADO'}
 export type SesionPublica = { autenticado:false } | { autenticado:true; nombre:string|null; expiraAt:string;perfil?:PerfilPersonal;
   sesionReferencia:string;
-  acciones:{ seguimiento:boolean; solicitar:boolean; simular:boolean; documentos:false; autorizar?:boolean;centralesOtp?:boolean;simuladorLocal?:boolean } };
+  acciones:{ seguimiento:boolean; solicitar:boolean; simular:boolean; documentos:false; autorizar?:boolean;centralesOtp?:boolean;simuladorLocal?:boolean;radicar?:boolean } };
+export type PeticionRadicacion={operacion:'radicacion';solicitudId:string}&(
+  {accion:'consultar'|'conciliar'}|{accion:'preparar';primeraFechaPagoPropuesta:string}|
+  {accion:'confirmar';presentacion:string;aceptaRadicar:true});
+export interface RadicacionTitular {versionContrato:'credihoy-radicacion-personal-v1';solicitudId:string;intencionId:string;
+  estado:'SIN_INTENCION'|'PREPARADA'|'EXECUTING'|'INCIERTA'|'RADICADA'|'BLOQUEADA';codigo:string|null;
+  puedeConfirmar:boolean;presentacion:string|null;K_FLUJO:string|null;SC:string|null;actividadesActivas:{actividad:number}[];
+  decisionInstitucional:'PENDIENTE';firmaContractual:'PENDIENTE';autorizaFirma:false;autorizaDesembolso:false}
+export function validarRadicacionTitular(raw:unknown,sid:string):RadicacionTitular {
+  const p=obj(raw),identifier=(v:unknown)=>v===null||typeof v==='string'&&/^[1-9][0-9]{0,19}$/.test(v);
+  if(Object.keys(p).sort().join(',')!=='K_FLUJO,SC,actividadesActivas,autorizaDesembolso,autorizaFirma,codigo,decisionInstitucional,estado,firmaContractual,intencionId,presentacion,puedeConfirmar,solicitudId,versionContrato'
+    ||p.versionContrato!=='credihoy-radicacion-personal-v1'||p.solicitudId!==sid||!uuid.test(sid)||!uuid.test(text(p.intencionId))
+    ||!['SIN_INTENCION','PREPARADA','EXECUTING','INCIERTA','RADICADA','BLOQUEADA'].includes(text(p.estado))
+    ||p.codigo!==null&&(typeof p.codigo!=='string'||!/(^[A-Z][A-Z0-9_]{1,120}$)/.test(p.codigo))
+    ||typeof p.puedeConfirmar!=='boolean'||(p.puedeConfirmar?(p.estado!=='PREPARADA'||typeof p.presentacion!=='string'||!p.presentacion||p.presentacion.length>8192):p.presentacion!==null)
+    ||!identifier(p.K_FLUJO)||!identifier(p.SC)||p.SC!==null&&p.K_FLUJO===null
+    ||!Array.isArray(p.actividadesActivas)||p.actividadesActivas.length>20||p.actividadesActivas.some(v=>{
+      const r=obj(v);return Object.keys(r).join(',')!=='actividad'||!Number.isSafeInteger(r.actividad)||Number(r.actividad)<=0;})
+    ||p.decisionInstitucional!=='PENDIENTE'||p.firmaContractual!=='PENDIENTE'||p.autorizaFirma!==false||p.autorizaDesembolso!==false)fail();
+  return p as unknown as RadicacionTitular;
+}
 export type PeticionAutorizacion={operacion:'autorizacion';solicitudId:string}&(
   {accion:'consultar'}|{accion:'presentar';clave:string;campos:{nombre:string;ciudad:string}}|
   {accion:'aceptar';clave:string;presentacion:string;acepta:true}|{accion:'ver_firma';clave:string}|
@@ -490,7 +510,13 @@ export class AccesoAsociadoClient {
     return {autenticado:true,nombre:p.nombre===null?null:text(p.nombre,255),expiraAt:p.expiraAt as string,sesionReferencia:this.acceso,...(perfil?{perfil}:{}),
       acciones:{seguimiento:a.seguimiento as boolean,solicitar:a.solicitar as boolean,simular:a.simular as boolean,documentos:false,
         ...(a.autorizar===true?{autorizar:true}:{}),...(a.centralesOtp===true?{centralesOtp:true}:{}),
-        ...(a.simuladorLocal===true?{simuladorLocal:true}:{})}};
+        ...(a.simuladorLocal===true?{simuladorLocal:true}:{}),...(a.radicar===true?{radicar:true}:{})}};
+  }
+  async radicacion(body:PeticionRadicacion):Promise<RadicacionTitular>{
+    if(!this.acceso)throw new AccesoPublicoError(401);
+    const grant=this.acceso,p=obj(await this.request('solicitudes/',body,crypto.randomUUID()));
+    if(this.acceso!==grant||p.sesionReferencia!==grant)fail();
+    return validarRadicacionTitular(p.radicacion,body.solicitudId);
   }
   async autorizacion(body:PeticionAutorizacion):Promise<AutorizacionTitular>{
     if(!this.acceso)throw new AccesoPublicoError(401);

@@ -6,7 +6,7 @@ import {moneda} from './FormControls';
 import {ArrowLeft,ArrowRight,Clock3,Fingerprint,LockKeyhole,MessageSquare,ShieldCheck} from 'lucide-react';
 import {Aviso,Cargando,NotaPrivacidad,ProgresoAcceso} from '../asociado/ui';
 import {BorradorAsociado} from '../asociado/BorradorAsociado';
-import type {GuardarBorrador,CotizacionTitular,AutorizacionTitular,PeticionAutorizacion} from '../services/publico';
+import type {GuardarBorrador,CotizacionTitular,AutorizacionTitular,PeticionAutorizacion,PeticionRadicacion,RadicacionTitular} from '../services/publico';
 import type {OperarSimulacion} from '../asociado/SimuladorLocal';
 import './credihoy-publico.css';
 
@@ -24,7 +24,8 @@ function leerIntento():string {
 function guardarIntento(id:string,ttl?:number){try{if(id&&ttl&&ttl>0&&ttl<=300)sessionStorage.setItem(DRAFT,JSON.stringify({id,venceAt:Date.now()+ttl*1000}));else sessionStorage.removeItem(DRAFT);}catch{/* No personal data is persisted. */}}
 export interface SeguimientoAsociadoProps { solicitudes:SolicitudPublica[]|null;busy:boolean;nombre:string|null;
   actualizar:()=>void;salir:()=>void;seguimientoHabilitado?:boolean;formularioBorrador?:ReactNode;
-  cotizacionHabilitada?:boolean;horaServidor?:()=>number;
+  cotizacionHabilitada?:boolean;horaServidor?:()=>number;radicacionHabilitada?:boolean;
+  radicar?:(body:PeticionRadicacion)=>Promise<RadicacionTitular>;
   simuladorLocalHabilitado?:boolean;simular?:OperarSimulacion;
   autorizacionHabilitada?:boolean;centralesHabilitadas?:boolean;autorizar?:(body:PeticionAutorizacion)=>Promise<AutorizacionTitular>;
   cotizar?:(sid:string,operacion:'consultar'|'cotizar'|'aceptar'|'aceptar_simulacion',sha?:string,diaPago?:number)=>Promise<CotizacionTitular> }
@@ -219,6 +220,10 @@ export function CredihoyAccesoAsociado({seguimiento}:{seguimiento?:(props:Seguim
         },
         simuladorLocalHabilitado:sesion.acciones.simuladorLocal===true,simular:async(sid,escenario)=>{
           try{return await api.current.simular(sid,escenario);}
+          catch(e){if(e instanceof AccesoPublicoError&&[401,403].includes(e.status))expirarSesion();throw e;}
+        },
+        radicacionHabilitada:sesion.acciones.radicar===true,radicar:async body=>{
+          try{return await api.current.radicacion(body);}
           catch(e){if(e instanceof AccesoPublicoError&&[401,403].includes(e.status))expirarSesion();throw e;}
         },
         cotizacionHabilitada:sesion.acciones.simular,horaServidor:()=>api.current.ahoraServidor(),cotizar:async(sid,operacion,sha,diaPago)=>{

@@ -1279,3 +1279,154 @@ def comprobante_simulacion_aceptada(s,identity):
         'aceptacionAuditoriaId':rows[0]['id'],'aceptadaEn':accepted['fecha'],
         'monto':sim['monto'],'plazoMeses':sim['plazoMeses'],'periodicidad':sim['periodicidad'],
         'tasaNominalNamv':sim['tasaNominalNamv'],'cuota':sim['cuota'],'autorizaStart':False}
+
+
+def clave_tecnica_cd6_personal():
+    import hmac
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from .publico_seguimiento import key
+    return Ed25519PrivateKey.from_private_bytes(hmac.new(key().encode(),
+        b'credihoy-cd6-ejecutor-tecnico-v1',hashlib.sha256).digest())
+
+
+def fuente_radicacion_personal(s,proof,first_date):
+    from decimal import Decimal
+    from datetime import date
+    from zoneinfo import ZoneInfo
+    from apps.xcore_consumo.models import ConsentimientoConsumo
+    try:
+        first=date.fromisoformat(first_date)
+        if first<=timezone.now().astimezone(ZoneInfo('America/Bogota')).date():raise ValueError()
+    except (TypeError,ValueError):raise ValueError('RADICACION_PRIMERA_FECHA_PROPUESTA_REQUERIDA') from None
+    detail,context=_contexto(s,lock=False)
+    sim=detail.orchestration_data[KEY]['simulacion']
+    if any(Decimal(row['otros'])!=0 for row in sim['amortizacion']):
+        raise ValueError('RADICACION_CONCEPTOS_ADICIONALES_REQUIEREN_DESGLOSE')
+    rate=Decimal(proof['tasaNominalNamv'])
+    if rate!=rate.quantize(Decimal('0.01')):raise ValueError('RADICACION_PRECISION_TASA_NO_SOPORTADA_POR_CONTRATO')
+    consent=ConsentimientoConsumo.objects.using(alias_cotizacion()).values().get(solicitud_id=s.pk)
+    params={name:None for name in ('amortizacion','formaAplicarTasa','medioPago','seguroVida','modalidadCapital',
+        'porcentajeCapitalizacion','valorTotalCapitalizacion','periodoPagoCapital','periodoPagoInteres','actividadEconomica')}
+    params['amortizacion']=context['condiciones']['amortizacion']
+    payload={'versionContrato':'credihoy-radicacion-tecnica-v1','solicitudId':str(s.pk),'intencionId':None,
+        'producto':{'codigo':'390','modalidad':'111','destino':'CFA','certificacionId':'CREDIHOY_390_111_CFA_CD4D'},
+        'titular':{'tipoDocumento':s.solicitante.tipo_identificacion,'numeroDocumento':s.solicitante.numero_identificacion},
+        'credito':{'montoSolicitado':proof['monto'],'plazoMeses':proof['plazoMeses'],'periodicidad':proof['periodicidad'],
+            'moneda':'COP','tasaNominalAnual':format(rate,'.2f'),'cuotaContractual':format(Decimal(proof['cuota']),'.2f')},
+        'evidenciaTasa':{'unidad':'PORCENTAJE_NOMINAL_ANUAL_MES_VENCIDO','campoXml':'V_TASA_NOMINAL'},
+        'contextoLinix':{'kIdTerc':None,'sucursal':None,'fechaSolicitud':None,
+            'fechaCuotaOrdinaria':first.strftime('%m/%d/%Y'),'parametros':params,
+            'entrada113':{'tipoConsulta':'2','modalidadSimular':'M','datoCalcularSimulacion':'C','valorCuota':'0.00'},
+            'datosRadicacion':{'cliente':{'nombre':None,'email':s.solicitante.email,'numeroCelular':s.solicitante.celular},'promotor':None}}}
+    return {'payload':payload,'referencias':[],'perfilCore':None,'preflight':None,'simulacionAceptada':proof,
+        'evidencias':{'consentimiento':{'referencia':str(consent['id']),
+            'sha256':hashlib.sha256(json.dumps(consent,sort_keys=True,default=str).encode()).hexdigest()}}}
+
+
+def operacion_radicacion_titular(identity,payload,rid,*,transporte=None):
+    from django.conf import settings
+    from django.core import signing
+    from uuid import uuid4,uuid5,NAMESPACE_URL
+    from .publico_seguimiento import key
+    from .autoservicio import _estudio_publico_personal
+    from .publico_restringido import fuente_cotizacion
+    if (getattr(settings,'CREDIHOY_RADICACION_TITULAR_ENABLED',False) is not True
+            or not getattr(settings,'CREDIHOY_RADICACION_PERSONAL_URL','')
+            or identity.get('_scopeRadicacion')!='solicitudes:radicar'):
+        raise ValueError('RADICACION_PERSONAL_NO_HABILITADA')
+    now=timezone.now();expires=datetime.fromisoformat(identity['_sesionExpiraAt'])
+    if expires.utcoffset() is None or expires<=now:raise ValueError('RADICACION_SESION_NO_VIGENTE')
+    if type(payload) is not dict or payload.get('operacion') not in {'consultar','preparar','confirmar','conciliar'}:
+        raise ValueError('RADICACION_PETICION_INVALIDA')
+    action=payload['operacion'];fields={'solicitudId','operacion'}
+    if action=='preparar':fields.add('primeraFechaPagoPropuesta')
+    if action=='confirmar':fields|={'presentacion','aceptaRadicar'}
+    if set(payload)!=fields:raise ValueError('RADICACION_PETICION_INVALIDA')
+    sid=str(UUID(payload['solicitudId']));rid=str(UUID(rid));intent=str(uuid5(NAMESPACE_URL,'credihoy-cd6-personal:'+sid))
+    with fuente_cotizacion():
+        s=_obtener(sid,None,titular=identity)
+        proof=comprobante_simulacion_aceptada(s,identity)
+        study=_estudio_publico_personal(s,identity)
+        if not study or study.get('decisionPolitica',{}).get('continuidad',{}).get('estudioFavorable') is not True:
+            raise ValueError('RADICACION_ESTUDIO_FAVORABLE_REQUERIDO')
+        call=transporte or transporte_cd6_personal
+        body={'accion':action,'solicitudId':sid,'intencionId':intent,'requestId':rid}
+        if action=='preparar':
+            body['expediente']=fuente_radicacion_personal(s,proof,payload['primeraFechaPagoPropuesta'])
+            body['expediente']['payload']['intencionId']=intent
+        if action=='confirmar':
+            presentation=signing.loads(payload['presentacion'],key=key(),salt='credihoy-radicacion-personal-presentacion-v1',max_age=180,fallback_keys=[])
+            if (type(presentation) is not dict or set(presentation)!={'comprobante','solicitudId','intencionId','sesion','nonce','fingerprint'}
+                    or presentation['solicitudId']!=sid or presentation['intencionId']!=intent
+                    or presentation['comprobante']!=proof or presentation['sesion']!=identity['_sesionReferencia']
+                    or payload['aceptaRadicar'] is not True):raise ValueError('RADICACION_CONFIRMACION_DE_OTRAS_CONDICIONES')
+            nonce=str(UUID(presentation['nonce']))
+            # The personal act is durable before transport; native CD6 remains the sole intent journal.
+            with transaction.atomic(using=alias_cotizacion()):
+                SolicitudConsumo.objects.using(alias_cotizacion()).select_for_update().get(solicitud_id=s.pk)
+                with connections[alias_cotizacion()].cursor() as cursor:
+                    cursor.execute('SELECT registro_id FROM public.credihoy_radicacion_personal_publica '
+                        'WHERE solicitud_id=%s AND request_id=%s LIMIT 2',[sid,nonce])
+                    rows=cursor.fetchall()
+                if len(rows)>1:raise ValueError('RADICACION_CONFIRMACION_DUPLICADA_CONCILIAR')
+                if rows:
+                    body['accion']='consultar'
+                else:
+                    confirmation={k:proof[k] for k in ('aceptacionAuditoriaId','aceptacionSha256','simulacionSha256',
+                        'revisionReferencia','decisionReferencia','decisionSha256','versionCondiciones')}
+                    confirmation.update(sesionReferencia=identity['_sesionReferencia'],confirmadaEn=now.isoformat(),
+                        sesionVenceEn=expires.isoformat(),aceptaRadicar=True)
+                    confirmation['sha256']=hashlib.sha256(json.dumps({'solicitudId':sid,'intencionId':intent,
+                        'fingerprint':presentation['fingerprint'],**confirmation},sort_keys=True,default=str).encode()).hexdigest()
+                    record=AuditLog.objects.using(alias_cotizacion()).create(solicitud=s,event='CREDIHOY_RADICACION_PERSONAL_CONFIRMADA',
+                        actor='titular:'+identity['_sesionReferencia'],request_id=nonce,
+                        payload={'intencionId':intent,'fingerprint':presentation['fingerprint'],'comprobante':proof,'confirmacionPersonal':confirmation})
+                    body['confirmacionPersonal']={**confirmation,'auditoriaId':record.pk}
+        result=call(body,proof,identity)
+        response={'versionContrato':'credihoy-radicacion-personal-v1','solicitudId':sid,'intencionId':intent,
+            'estado':result['estado'],'codigo':result.get('codigo'),'puedeConfirmar':False,'presentacion':None,
+            'K_FLUJO':result.get('K_FLUJO'),'SC':result.get('SC'),'actividadesActivas':result.get('actividadesActivas',[]),
+            'decisionInstitucional':'PENDIENTE','firmaContractual':'PENDIENTE','autorizaFirma':False,'autorizaDesembolso':False}
+        if action=='preparar' and result['estado']=='PREPARADA' and result.get('puedeConfirmar') is True:
+            fingerprint=result.get('fingerprint')
+            if type(fingerprint) is not str or not __import__('re').fullmatch('[a-f0-9]{64}',fingerprint):raise ValueError('RADICACION_PREPARACION_NO_INTEGRA')
+            response.update(puedeConfirmar=True,presentacion=signing.dumps({'comprobante':proof,'solicitudId':sid,'intencionId':intent,
+                'sesion':identity['_sesionReferencia'],'nonce':str(uuid4()),'fingerprint':fingerprint},key=key(),salt='credihoy-radicacion-personal-presentacion-v1'))
+        return response
+
+
+def transporte_cd6_personal(body,proof,identity):
+    import base64
+    from datetime import timedelta
+    from django.conf import settings
+    from . import publico_institucional as wire
+    from urllib.parse import urlsplit
+    origin=getattr(settings,'CREDIHOY_RADICACION_PERSONAL_URL','')
+    parsed=urlsplit(origin)
+    if (parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path not in ('','/') or parsed.query or parsed.fragment):
+        raise ValueError('RADICACION_DESTINO_HTTPS_NO_CONFIGURADO')
+    now=timezone.now();expiry=datetime.fromisoformat(identity['_sesionExpiraAt'])
+    if expiry.utcoffset() is None or expiry<=now:raise ValueError('RADICACION_SESION_NO_VIGENTE')
+    claims={'version':'credihoy-cd6-personal-v1','audiencia':'CD6','accion':body['accion'],
+        'solicitudId':body['solicitudId'],'intencionId':body['intencionId'],'requestId':body['requestId'],
+        'titularSha256':proof['titularReferencia'],'payloadSha256':hashlib.sha256(wire.encode(body)).hexdigest(),
+        'emitidaEn':now.isoformat(),'venceEn':min(expiry,now+timedelta(seconds=120)).isoformat(),
+        'actorTecnico':'credihoy-titular-owner','autorizaStart':body['accion']=='confirmar',
+        'autorizaFirma':False,'autorizaDesembolso':False}
+    signature=clave_tecnica_cd6_personal().sign(b'credihoy-cd6-personal-v1\x00'+wire.encode(claims))
+    envelope={'algoritmo':'Ed25519','payload':claims,'firmaBase64':base64.b64encode(signature).decode()}
+    token='chcd6.'+base64.urlsafe_b64encode(wire.encode(envelope)).decode().rstrip('=')
+    try:
+        packet=wire.request_packet(origin,'/api/v1/incluirtec/credihoy-digital/radicar/',wire.encode(body),body['requestId'],
+            {'Authorization':'Bearer '+token,'X-Request-ID':body['requestId'],
+             'Accept':'application/json','Content-Type':'application/json'})
+    except wire.NoDisponible:
+        if body['accion'] in {'preparar','confirmar','conciliar'}:
+            return {'estado':'INCIERTA','solicitudId':body['solicitudId'],'intencionId':body['intencionId'],
+                'codigo':'CD6_RESPUESTA_INCIERTA_SOLO_CONCILIAR','puedeConfirmar':False}
+        raise
+    result=packet.get('radicacion')
+    if (type(result) is not dict or result.get('solicitudId')!=body['solicitudId']
+            or result.get('intencionId')!=body['intencionId']):raise ValueError('RADICACION_RESPUESTA_DE_OTRO_EXPEDIENTE')
+    return result

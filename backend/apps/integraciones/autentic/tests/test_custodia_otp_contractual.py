@@ -730,6 +730,7 @@ class ContractualOTPTests(TransactionTestCase):
         self.assertFalse(challenge.verificado_at);self.assertEqual(challenge.verification_sid,VERIFICATION_SID)
         self.assertEqual(current['aceptadoEn'],old['aceptadoEn']);self.assertEqual(current['vinculo'],old['vinculo'])
         self.assertNotIn('prueba',current);self.assertEqual(self.client.start_verification.call_count,1)
+        self.assertEqual(AuditLog.objects.get(event='credihoy_contractual_otp_envio_recuperado').actor,'sistema:contractual:conciliacion')
         self.client.check_verification.assert_not_called()
 
     def test_late_relay_ack_preserves_expiration_and_allows_only_a_fresh_personal_act(self):

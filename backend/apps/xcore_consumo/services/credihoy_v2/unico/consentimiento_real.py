@@ -916,9 +916,9 @@ def _guardar_contractual(case, alias, key, record):
     detail.save(using=alias, update_fields=['orchestration_data', 'updated_at'])
 
 
-def _auditar_contractual(case, alias, action, key, payload):
+def _auditar_contractual(case, alias, action, key, payload, *, actor='titular:contractual'):
     AuditLog.objects.using(alias).create(solicitud_id=case.pk, event='credihoy_contractual_'+action,
-        actor='titular:contractual', request_id=key, payload=payload)
+        actor=actor, request_id=key, payload=payload)
 
 
 def _exigir_auditoria_contractual(case, alias, action, key, payload):
@@ -1476,10 +1476,11 @@ def _cerrar_envio_otp_contractual(case, alias, key, success, sid, *, acuse=None)
         record['estado'] = 'OTP_EXPIRADA' if expired else 'OTP_ENVIADA' if success else 'OTP_ENVIO_INDETERMINADO'
         if acuse is not None:
             record['recuperacionEnvio'] = dict(acuse)
-            _auditar_contractual(case, alias, 'otp_envio_recuperado', key, acuse)
+            _auditar_contractual(case, alias, 'otp_envio_recuperado', key, acuse, actor='sistema:contractual:conciliacion')
         _guardar_contractual(case, alias, key, record)
         _auditar_contractual(case, alias, 'otp_enviado' if success else 'otp_incierto', key,
-            {'otpId': str(challenge.pk), 'proposito': CONTRACTUAL_PURPOSE})
+            {'otpId': str(challenge.pk), 'proposito': CONTRACTUAL_PURPOSE},
+            actor='sistema:contractual:conciliacion' if acuse is not None else 'titular:contractual')
     return _estado_contractual(record)
 
 

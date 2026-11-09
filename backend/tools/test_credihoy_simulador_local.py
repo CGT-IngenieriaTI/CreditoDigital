@@ -185,10 +185,25 @@ class OwnQuoteTests(TransactionTestCase):
                 self.assertEqual(proof['cuota'],sim['cuota']);self.assertFalse(proof['autorizaStart'])
                 with self.assertRaises(DatabaseError),transaction.atomic():
                     with connection.cursor() as c:c.execute('SELECT payload FROM public.utils_auditlog')
-            changed=deepcopy(decision);changed['resultado']['estado']='APROBADO'
+            renewed=deepcopy(decision);renewed['operacionId']=str(uuid4())
+            renewed['registradoEn']=timezone.now().isoformat()
+            renewed['sha256']=sha256(json.dumps({k:v for k,v in renewed.items() if k!='sha256'},
+                sort_keys=True,default=str).encode()).hexdigest()
+            newer=AuditLog.objects.create(solicitud=self.s,event='CREDIHOY_DECISION_DIGITAL_LOCAL',
+                actor='service',request_id=renewed['operacionId'],payload=renewed)
+            with transaction.atomic(),patch.object(self.q,'alias_cotizacion',return_value='cotizacion'),\
+                    patch.object(self.q,'connections',{'cotizacion':connection}):
+                with connection.cursor() as c:c.execute('SET LOCAL ROLE credihoy_titular_cotizacion')
+                current=self.q.comprobante_simulacion_aceptada(self.s,self.identity)
+            self.assertEqual(current['decisionReferencia'],renewed['operacionId'])
+            self.assertEqual(current['decisionSha256'],renewed['sha256'])
+            self.assertEqual({k:v for k,v in current.items() if k not in {'decisionReferencia','decisionSha256'}},
+                {k:v for k,v in proof.items() if k not in {'decisionReferencia','decisionSha256'}})
+            event.refresh_from_db();self.assertEqual(event.payload,decision)
+            changed=deepcopy(renewed);changed['resultado']['estado']='APROBADO'
             changed['sha256']=sha256(json.dumps({k:v for k,v in changed.items() if k!='sha256'},
                 sort_keys=True,default=str).encode()).hexdigest()
-            event.payload=changed;event.save(update_fields=['payload'])
+            newer.payload=changed;newer.save(update_fields=['payload'])
             with transaction.atomic(),patch.object(self.q,'alias_cotizacion',return_value='cotizacion'),\
                     patch.object(self.q,'connections',{'cotizacion':connection}):
                 with connection.cursor() as c:c.execute('SET LOCAL ROLE credihoy_titular_cotizacion')
@@ -196,6 +211,39 @@ class OwnQuoteTests(TransactionTestCase):
                     self.q.comprobante_simulacion_aceptada(self.s,self.identity)
         finally:
             with connection.cursor() as c:c.execute('DROP VIEW public.credihoy_simulacion_aceptacion_publica')
+
+    def test_backend_reconciliation_reads_current_decision_and_preserves_accepted_audit(self):
+        import io,sys
+        from pathlib import Path
+        from contextlib import redirect_stdout
+        from apps.xcore_consumo.services.credihoy_v2.unico import elegibilidad
+        sys.path.insert(0,str(Path(__file__).resolve().parents[3]/'api_data_v1/tools'))
+        from credihoy_oa01_ensamblaje import personal_evidence_backend_program
+        sim=self.calculate()
+        self.operate(operacion='aceptar_simulacion',simulacionSha256=sim['sha256'],acepta=True)
+        first={'operacionId':str(uuid4()),'solicitudId':str(self.s.pk),'revisionReferencia':self.ref,
+            'registradoEn':timezone.now().isoformat(),'resultado':{'estado':'REQUIERE_CONSEJO_ADMINISTRACION'}}
+        first['sha256']=sha256(json.dumps(first,sort_keys=True,default=str).encode()).hexdigest()
+        old=AuditLog.objects.create(solicitud=self.s,event='CREDIHOY_DECISION_DIGITAL_LOCAL',
+            request_id=first['operacionId'],actor='service',payload=first)
+        with patch.object(elegibilidad,'leer_decision_estudio',return_value=first):
+            before=self.q.comprobante_simulacion_aceptada(self.s,self.identity)
+        latest=deepcopy(first);latest.update(operacionId=str(uuid4()),registradoEn=timezone.now().isoformat())
+        latest['sha256']=sha256(json.dumps({k:v for k,v in latest.items() if k!='sha256'},sort_keys=True,default=str).encode()).hexdigest()
+        current=AuditLog.objects.create(solicitud=self.s,event='CREDIHOY_DECISION_DIGITAL_LOCAL',
+            request_id=latest['operacionId'],actor='service',payload=latest)
+        protected=[{'id':old.pk,'requestId':first['operacionId']}]
+        program=personal_evidence_backend_program(str(self.s.pk),'pass',before,protected)
+        original=list(AuditLog.objects.order_by('pk').values())
+        output=io.StringIO()
+        with patch.object(elegibilidad,'leer_decision_estudio',return_value=latest),redirect_stdout(output):
+            exec(compile(program,'synthetic-backend-reconciliation','exec'),{})
+        report=json.loads(output.getvalue())
+        self.assertEqual(report['comprobante']['aceptacionAuditoriaId'],before['aceptacionAuditoriaId'])
+        self.assertEqual(report['cadenaDecisiones']['anterior']['id'],old.pk)
+        self.assertEqual(report['cadenaDecisiones']['vigente']['id'],current.pk)
+        self.assertTrue(report['cadenaDecisiones']['lecturaNativaVerificada'])
+        self.assertEqual(list(AuditLog.objects.order_by('pk').values()),original)
 
     def test_reject_cross_holder_changed_revision_changed_catalog_and_payload_injection(self):
         sim=self.calculate()

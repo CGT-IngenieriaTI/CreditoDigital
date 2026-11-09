@@ -145,6 +145,26 @@ class ContractualStagingDocumentTests(TransactionTestCase):
 
 
 class ContractualOffTests(SimpleTestCase):
+    def test_private_http_diagnostic_retains_tls_redirect_and_single_attempt_guards(self):
+        from apps.xcore_consumo.services.credihoy_v2.unico import publico_institucional as wire
+        import requests
+        rid=str(uuid4())
+        for status in (401,403,503):
+            response=Mock(status_code=status,headers={'Content-Type':'application/json'})
+            response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)
+            diagnostic={}
+            with patch.object(wire.requests,'post',return_value=response) as post:
+                with self.assertRaises(wire.NoDisponible):
+                    wire.request_packet('https://relay.example.invalid',wire.BASE+'seguimiento/',b'{}',rid,{},diagnostico=diagnostic)
+                self.assertEqual(post.call_count,1);self.assertIs(post.call_args.kwargs['verify'],True)
+                self.assertIs(post.call_args.kwargs['allow_redirects'],False)
+            self.assertEqual(diagnostic,{'codigo':'HTTP_'+str(status)})
+        diagnostic={}
+        with patch.object(wire.requests,'post',side_effect=requests.exceptions.SSLError('SYNTHETIC_PRIVATE_DETAIL')):
+            with self.assertRaises(wire.NoDisponible):
+                wire.request_packet('https://relay.example.invalid',wire.BASE+'seguimiento/',b'{}',rid,{},diagnostico=diagnostic)
+        self.assertEqual(diagnostic,{'codigo':'TLS_ERROR'})
+
     def test_flag_off_blocks_before_models_or_provider(self):
         with override_settings(CREDIHOY_OTP_CONTRACTUAL_ENABLED=False), patch.object(service, 'Solicitud') as query:
             with self.assertRaisesRegex(ValueError, 'OTP_CONTRACTUAL_NO_HABILITADO'):
@@ -316,8 +336,11 @@ class ContractualOTPTests(TransactionTestCase):
         observed=[]
         def relay(origin,path,body,rid,headers):
             self.assertEqual(origin,'https://relay.example.invalid')
+            # The installed institutional proxy intentionally strips Authorization.
+            forwarded={k:v for k,v in headers.items() if k.lower()!='authorization'}
+            self.assertIn('X-Credihoy-Delegacion-Contractual',forwarded)
             request=SimpleNamespace(method='POST',is_secure=lambda:True,content_type='application/json',
-                path=path,body=body,headers=headers)
+                path=path,body=body,headers=forwarded)
             self.assertEqual(_autorizar_verify_contractual(request),rid)
             packet=json.loads(body);observed.append(packet)
             self.assertEqual(packet['otpId'],record['otpId'])

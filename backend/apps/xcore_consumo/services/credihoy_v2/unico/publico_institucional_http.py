@@ -389,12 +389,12 @@ def _autorizar_verify_contractual(request):
     from django.core import signing
     from .publico_seguimiento import key
     if getattr(settings,'CREDIHOY_CONTRACTUAL_RELE_ENABLED',False) is not True:raise wire.NoDisponible
-    rid=request.headers.get('X-Request-ID','');authorization=request.headers.get('Authorization','')
+    rid=request.headers.get('X-Request-ID','');authorization=request.headers.get('X-Credihoy-Delegacion-Contractual','')
     if (request.method!='POST' or not request.is_secure() or request.content_type!='application/json'
             or request.path!=wire.BASE+'seguimiento/' or len(request.body)>4096
-            or str(UUID(rid))!=rid or not authorization.startswith('Bearer chcontractual.')
+            or str(UUID(rid))!=rid or not authorization.startswith('chcontractual.')
             or len(authorization)>8192):raise access.AccesoDenegado
-    proof=signing.loads(authorization[len('Bearer chcontractual.'):],key=key(),
+    proof=signing.loads(authorization[len('chcontractual.'):],key=key(),
         salt='credihoy-verify-contractual-rele-v1',max_age=30,fallback_keys=[])
     if (type(proof) is not dict or set(proof)!={'version','aud','requestId','bodySha256'}
             or proof['version']!='CREDIHOY_VERIFY_CONTRACTUAL_RELE_V1' or proof['aud']!=request.path

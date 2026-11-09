@@ -131,32 +131,37 @@ def call(action, payload, rid):
     return request_packet(origin,path,body,rid,headers(path,body,rid))
 
 
-def request_packet(origin, path, body, rid, request_headers):
+def request_packet(origin, path, body, rid, request_headers, *, diagnostico=None):
     """Common verified HTTPS transport; never retry a provider-bearing request."""
+    if diagnostico is not None and type(diagnostico) is not dict:raise NoDisponible
+    def diagnostic(code):
+        if diagnostico is not None:diagnostico['codigo']=code
     u = urlsplit(origin)
     if (u.scheme != 'https' or not u.hostname or u.username or u.password
             or u.query or u.fragment or u.path not in ('', '/')):
-        raise NoDisponible
+        diagnostic('URL_INVALIDA');raise NoDisponible
     try:
         with requests.post(origin.rstrip('/') + path, data=body, headers=request_headers,
                 timeout=(5, 20), allow_redirects=False, verify=True) as response:
-            if response.status_code in (403,409,410,503) and response.headers.get('X-Request-ID')==rid and 'application/json' in response.headers.get('Content-Type',''):
-                rejection=response.json()
-                code=rejection.get('codigo') if type(rejection) is dict else None
-                if (code in RECHAZOS and RECHAZOS[code][0]==response.status_code
-                        and rejection.get('versionContrato')==VERSION and rejection.get('requestId')==rid):
-                    raise RechazoOperacion(code)
+            diagnostic('HTTP_'+str(response.status_code))
             if response.status_code == 404:
                 raise NoEncontrado
-            if (response.status_code != 200 or response.headers.get('X-Request-ID') != rid
-                    or 'application/json' not in response.headers.get('Content-Type', '')):
-                raise NoDisponible
+            if response.status_code != 200:raise NoDisponible
+            if response.headers.get('X-Request-ID') != rid:
+                diagnostic('CORRELACION_INVALIDA');raise NoDisponible
+            if 'application/json' not in response.headers.get('Content-Type', ''):
+                diagnostic('CONTENIDO_NO_JSON');raise NoDisponible
             packet = response.json()
-    except (requests.RequestException, ValueError):
+    except requests.RequestException as error:
+        diagnostic('TLS_ERROR' if isinstance(error,requests.exceptions.SSLError) else
+            'TIMEOUT' if isinstance(error,requests.Timeout) else 'CONEXION_ERROR')
+        raise NoDisponible from None
+    except ValueError:
+        diagnostic('RESPUESTA_JSON_INVALIDA')
         raise NoDisponible from None
     if (type(packet) is not dict or packet.get('versionContrato') != VERSION
             or packet.get('requestId') != rid):
-        raise NoDisponible
+        diagnostic('CONTRATO_RESPUESTA_INVALIDO');raise NoDisponible
     return packet
 
 
@@ -865,7 +870,7 @@ def cliente_verify_contractual(service,identity,record,*,comprobacion_id=None):
             'bodySha256':hashlib.sha256(raw).hexdigest()},key=key(),salt='credihoy-verify-contractual-rele-v1')
         result=request_packet(getattr(settings,'CREDIHOY_CONTRACTUAL_RELE_URL',''),path,raw,rid,
             {'Content-Type':'application/json','Accept':'application/json','X-Request-ID':rid,
-             'Authorization':'Bearer chcontractual.'+proof})['verifyContractual']
+             'X-Credihoy-Delegacion-Contractual':'chcontractual.'+proof})['verifyContractual']
         if (set(result)!={'verificationSid','estadoProveedor'} or not re.fullmatch('VE[a-fA-F0-9]{32}',result['verificationSid'])
                 or result['estadoProveedor'] not in {'pending','approved'}
                 or verification_sid is not None and result['verificationSid']!=verification_sid):raise NoDisponible
@@ -889,9 +894,13 @@ def comprobar_rele_contractual():
     body=encode({'operacion':'verify_contractual_preflight','solicitudId':scope['solicitudId'],'pdfSha256':scope['pdfSha256']})
     proof=signing.dumps({'version':'CREDIHOY_VERIFY_CONTRACTUAL_RELE_V1','aud':path,'requestId':rid,
         'bodySha256':hashlib.sha256(body).hexdigest()},key=key(),salt='credihoy-verify-contractual-rele-v1')
-    response=request_packet(getattr(settings,'CREDIHOY_CONTRACTUAL_RELE_URL',''),path,body,rid,
-        {'Content-Type':'application/json','Accept':'application/json','X-Request-ID':rid,
-         'Authorization':'Bearer chcontractual.'+proof})
+    diagnostic={}
+    try:
+        response=request_packet(getattr(settings,'CREDIHOY_CONTRACTUAL_RELE_URL',''),path,body,rid,
+            {'Content-Type':'application/json','Accept':'application/json','X-Request-ID':rid,
+             'X-Credihoy-Delegacion-Contractual':'chcontractual.'+proof},diagnostico=diagnostic)
+    except NoDisponible:
+        raise ValueError('CONTRACTUAL_RELE_'+diagnostic.get('codigo','RESPUESTA_NO_ACREDITADA')) from None
     result=response['configuracionContractual']
     sid=getattr(settings,'CREDIHOY_OTP_CONTRACTUAL_VERIFY_SID','')
     if (type(result) is not dict or set(result)!={'ambiente','serviceSha256','SIDIndependiente','SMS','firma'}

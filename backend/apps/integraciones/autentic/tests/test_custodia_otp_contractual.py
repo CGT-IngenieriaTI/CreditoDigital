@@ -136,22 +136,38 @@ class ContractualStagingDocumentTests(TransactionTestCase):
     def test_official_pdf_custody_preserves_v2_study_inputs_but_keeps_independent_integrity(self):
         from apps.documentos import formularios_credihoy as forms
         from apps.xcore_consumo.services.credihoy_v2.unico.funcional import huella_consumo_estudio
+        from apps.xcore_consumo.services.credihoy_v2.unico.autoservicio import verificar_custodia_contractual_posterior
         version='credihoy-estudio-tecnico-firmado-v2'
+        older=str(uuid4());cutoff=timezone.now()
+        data=deepcopy(self.detail.orchestration_data)
+        data['credihoy_pdf_oficiales_v1']={older:{'creadoEn':(cutoff-timedelta(days=2)).isoformat(),
+            'metadata':{'codigo':'COLO-FO.023','pdfSha256':'f'*64},'contenidoCifrado':'SYNTHETIC_PRIOR_CUSTODY'}}
+        self.detail.orchestration_data=data;self.detail.save(update_fields=['orchestration_data'])
         detail=SolicitudConsumo.objects.values().get(pk=self.detail.pk)
         expected=huella_consumo_estudio(detail,version);old_version=huella_consumo_estudio(detail)
+        body={'version':version,'solicitudId':str(self.case.pk),'consumoSha256':expected}
         operation=str(uuid4())
         with override_settings(CREDIHOY_AUTENTIC_STAGING_DOCUMENTAL=self.scope):
             forms.custodiar_colo001_staging(self.case.pk,actor=self.actor,fuente=self.source,clave_idempotencia=operation)
         updated=SolicitudConsumo.objects.values().get(pk=self.detail.pk)
-        self.assertEqual(huella_consumo_estudio(updated,version),expected)
+        self.assertNotEqual(huella_consumo_estudio(updated,version),expected)
         self.assertNotEqual(huella_consumo_estudio(updated),old_version)
+        before=deepcopy(updated)
+        self.assertTrue(verificar_custodia_contractual_posterior(updated,body,cutoff))
+        self.assertEqual(updated,before)
+        changed_old=deepcopy(updated);changed_old['orchestration_data']['credihoy_pdf_oficiales_v1'][older]['metadata']['pdfSha256']='e'*64
+        self.assertFalse(verificar_custodia_contractual_posterior(changed_old,body,cutoff))
         pdf,meta=forms.recuperar_formato(self.case.pk,actor=self.actor,operacion_id=operation)
         self.assertEqual(sha256(pdf).hexdigest(),meta['pdfSha256'])
         for field in ('form_data','core_data','selected_hc2_keys'):
             altered=deepcopy(updated);altered[field]={'altered':True}
             self.assertNotEqual(huella_consumo_estudio(altered,version),expected)
+            self.assertFalse(verificar_custodia_contractual_posterior(altered,body,cutoff))
         altered=deepcopy(updated);altered['orchestration_data']['evidence_not_downstream']={'altered':True}
         self.assertNotEqual(huella_consumo_estudio(altered,version),expected)
+        self.assertFalse(verificar_custodia_contractual_posterior(altered,body,cutoff))
+        unrelated=deepcopy(updated);unrelated['orchestration_data']['credihoy_pdf_oficiales_v1'][operation]['metadata']['codigo']='COLO-FO.023'
+        self.assertFalse(verificar_custodia_contractual_posterior(unrelated,body,cutoff))
         self.detail.refresh_from_db();data=self.detail.orchestration_data
         data['credihoy_pdf_oficiales_v1'][operation]['metadata']['pdfSha256']='0'*64
         self.detail.orchestration_data=data;self.detail.save(update_fields=['orchestration_data'])

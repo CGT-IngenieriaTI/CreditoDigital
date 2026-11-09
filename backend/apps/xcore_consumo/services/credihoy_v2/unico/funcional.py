@@ -807,7 +807,7 @@ def huella_consumo_estudio(detail,version='credihoy-estudio-tecnico-firmado-v1')
             'credihoy_calendario_pago_v1_revalidacion_historial','credihoy_composiciones_contractuales_v1',
             'credihoy_ofertas_linix_v1','credihoy_oferta_linix_actual','credihoy_aceptaciones_oferta_v1',
             'credihoy_autentic_envios_v1','credihoy_autentic_identidad_v1','credihoy_formalizacion_autentic_v1',
-            'credihoy_otp_contractual_v1','credihoy_pdf_oficiales_v1'}
+            'credihoy_otp_contractual_v1'}
         value['orchestration_data']={k:deepcopy(v) for k,v in detail['orchestration_data'].items() if k not in downstream}
     else:raise ValueError('HUELLA_ESTUDIO_VERSION_NO_ADMITIDA')
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True,default=str).encode()).hexdigest()

@@ -352,47 +352,80 @@ COMPLEMENTO_PERSONAL = 'credihoy_complemento_personal_v1'
 
 
 def _estudio_publico_personal(s, identity):
-    import base64, hashlib, json
+    import base64,hashlib,json
     from django.db import transaction
-    from apps.xcore_consumo.models import EvaluacionConsumo, ConsentimientoConsumo, SolicitudConsumo
+    from apps.xcore_consumo.models import EvaluacionConsumo,ConsentimientoConsumo,SolicitudConsumo
     from cryptography.exceptions import InvalidSignature
-
-    def canonical(value):
-        return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, default=str).encode()
-
-    def digest(value):
-        return hashlib.sha256(canonical(value)).hexdigest()
-    alias = getattr(settings, 'CREDIHOY_AUTORIZACION_DB_ALIAS', '')
-    if not alias:
-        return None
+    def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True,default=str).encode()
+    def digest(value):return hashlib.sha256(canonical(value)).hexdigest()
+    alias=getattr(settings,'CREDIHOY_AUTORIZACION_DB_ALIAS','')
+    if not alias:return None
     with transaction.atomic(using=alias):
+        with connections[alias].cursor() as cursor:cursor.execute('SET TRANSACTION READ ONLY')
         with connections[alias].cursor() as cursor:
-            cursor.execute('SET TRANSACTION READ ONLY')
-        with connections[alias].cursor() as cursor:
-            cursor.execute('SELECT resumen_tecnico FROM public.credihoy_estudio_publico WHERE solicitud_id=%s ORDER BY registrado_en DESC,registro_id DESC LIMIT 1', [str(s.pk)])
-            row = cursor.fetchone()
-        if row is None:
-            return None
+            cursor.execute('SELECT resumen_tecnico,registrado_en FROM public.credihoy_estudio_publico '
+                'WHERE solicitud_id=%s ORDER BY registrado_en DESC,registro_id DESC LIMIT 1',[str(s.pk)])
+            row=cursor.fetchone()
+        if row is None:return None
         from . import centrales_personal as central
         try:
-            envelope = row[0]
-            if type(envelope) is str:
-                envelope = json.loads(envelope)
-            if type(envelope) is not dict or set(envelope) != {'algoritmo', 'payload', 'firmaBase64'} or envelope['algoritmo'] != 'Ed25519':
-                raise ValueError
-            body = envelope['payload']
-            if type(body) is not dict or set(body) != {'version', 'proposito', 'solicitudId', 'titularSha256', 'evaluacionBaseSha256', 'consentimientoSha256', 'consumoSha256', 'estudio'}:
-                raise ValueError
-            central._clave_publica(owner=True).verify(base64.b64decode(envelope['firmaBase64'], validate=True), 'credihoy-estudio-publico-tecnico-v1\x00'.encode() + canonical(body))
-            if body['version'] not in ('credihoy-estudio-tecnico-firmado-v1', 'credihoy-estudio-tecnico-firmado-v2') or body['proposito'] != 'LECTURA_ESTUDIO_NO_DECISION' or body['solicitudId'] != str(s.pk) or (body['titularSha256'] != hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()):
-                raise ValueError
-            study = wire.project_study(body['estudio'], str(s.pk))
-            evaluation = EvaluacionConsumo.objects.using(alias).values().get(pk=study['evaluacionBaseId'], solicitud_id=s.pk)
-            consent = ConsentimientoConsumo.objects.using(alias).values().get(solicitud_id=s.pk)
-            detail = SolicitudConsumo.objects.using(alias).values().get(solicitud_id=s.pk)
+            envelope=row[0]
+            if type(envelope) is str:envelope=json.loads(envelope)
+            if type(envelope) is not dict or set(envelope)!={'algoritmo','payload','firmaBase64'} or envelope['algoritmo']!='Ed25519':raise ValueError
+            body=envelope['payload']
+            if type(body) is not dict or set(body)!={'version','proposito','solicitudId','titularSha256',
+                    'evaluacionBaseSha256','consentimientoSha256','consumoSha256','estudio'}:raise ValueError
+            central._clave_publica(owner=True).verify(base64.b64decode(envelope['firmaBase64'],validate=True),
+                'credihoy-estudio-publico-tecnico-v1\x00'.encode()+canonical(body))
+            if (body['version'] not in ('credihoy-estudio-tecnico-firmado-v1','credihoy-estudio-tecnico-firmado-v2')
+                    or body['proposito']!='LECTURA_ESTUDIO_NO_DECISION' or body['solicitudId']!=str(s.pk)
+                    or body['titularSha256']!=hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()):raise ValueError
+            study=wire.project_study(body['estudio'],str(s.pk))
+            evaluation=EvaluacionConsumo.objects.using(alias).values().get(pk=study['evaluacionBaseId'],solicitud_id=s.pk)
+            consent=ConsentimientoConsumo.objects.using(alias).values().get(solicitud_id=s.pk)
+            detail=SolicitudConsumo.objects.using(alias).values().get(solicitud_id=s.pk)
             from .funcional import huella_consumo_estudio
-            if digest(evaluation) != body['evaluacionBaseSha256'] or digest(consent) != body['consentimientoSha256'] or huella_consumo_estudio(detail, version=body['version']) != body['consumoSha256']:
-                raise ValueError
+            if (digest(evaluation)!=body['evaluacionBaseSha256'] or digest(consent)!=body['consentimientoSha256']
+                    or (huella_consumo_estudio(detail,version=body['version'])!=body['consumoSha256']
+                        and not verificar_custodia_contractual_posterior(detail,body,row[1]))):raise ValueError
             return study
-        except (ValueError, TypeError, KeyError, AttributeError, InvalidSignature, EvaluacionConsumo.DoesNotExist, ConsentimientoConsumo.DoesNotExist, SolicitudConsumo.DoesNotExist):
+        except (ValueError,TypeError,KeyError,AttributeError,InvalidSignature,
+                EvaluacionConsumo.DoesNotExist,ConsentimientoConsumo.DoesNotExist,SolicitudConsumo.DoesNotExist):
             raise wire.NoDisponible from None
+
+
+def verificar_custodia_contractual_posterior(detail,body,registrado_en):
+    """Match the signed input snapshot without deleting later document revisions."""
+    from copy import deepcopy
+    from datetime import datetime,timezone
+    from uuid import UUID
+    import re
+    from .funcional import huella_consumo_estudio
+    try:
+        if body['version']!='credihoy-estudio-tecnico-firmado-v2':return False
+        cutoff=registrado_en if isinstance(registrado_en,datetime) else datetime.fromisoformat(registrado_en)
+        if cutoff.utcoffset() is None or cutoff>datetime.now(timezone.utc):return False
+        data=detail['orchestration_data'];history=data.get('credihoy_pdf_oficiales_v1')
+        if type(history) is not dict or not 1<=len(history)<=20:return False
+        retained={};removed=[]
+        for key,entry in history.items():
+            if str(UUID(key))!=key or type(entry) is not dict:return False
+            created=datetime.fromisoformat(entry['creadoEn'])
+            if created.utcoffset() is None or created>datetime.now(timezone.utc):return False
+            if created<=cutoff:retained[key]=entry;continue
+            meta=entry['metadata']
+            if (meta['codigo']!='COLO-FO.001' or meta['version']!='13'
+                    or meta['solicitudId']!=body['solicitudId']
+                    or meta['originalSha256']!='93a8f53214a95fdbeb249572f40cac9c751d3b8ac481372e9d11dfa75899cc9e'
+                    or not re.fullmatch('[a-f0-9]{64}',meta['pdfSha256'])
+                    or type(entry['contenidoCifrado']) is not str or not entry['contenidoCifrado']):return False
+            removed.append(key)
+        if not removed:return False
+        snapshot=deepcopy(detail);snapshot['orchestration_data']['credihoy_pdf_oficiales_v1']=retained
+        if huella_consumo_estudio(snapshot,body['version'])==body['consumoSha256']:return True
+        if not retained:
+            snapshot['orchestration_data'].pop('credihoy_pdf_oficiales_v1')
+            return huella_consumo_estudio(snapshot,body['version'])==body['consumoSha256']
+        return False
+    except (ValueError,KeyError,TypeError,AttributeError):return False
+

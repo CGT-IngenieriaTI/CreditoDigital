@@ -694,7 +694,7 @@ def project_simulacion_aceptable(row):
 def project_radication(row):
     fields={'versionContrato','solicitudId','intencionId','estado','codigo','puedeConfirmar','presentacion',
         'K_FLUJO','SC','actividadesActivas','decisionInstitucional','firmaContractual','autorizaFirma','autorizaDesembolso'}
-    if (type(row) is not dict or set(row)!=fields or row['versionContrato']!='credihoy-radicacion-personal-v1'
+    if (type(row) is not dict or set(row) not in (fields,fields|{'calendarioPropuesto'}) or row['versionContrato']!='credihoy-radicacion-personal-v1'
             or any(str(UUID(row[k]))!=row[k] for k in ('solicitudId','intencionId'))
             or row['estado'] not in {'SIN_INTENCION','PREPARADA','EXECUTING','INCIERTA','RADICADA','BLOQUEADA'}
             or row['decisionInstitucional']!='PENDIENTE' or row['firmaContractual']!='PENDIENTE'
@@ -704,8 +704,18 @@ def project_radication(row):
             or any(row[k] is not None and (type(row[k]) is not str or not re.fullmatch('[1-9][0-9]{0,19}',row[k])) for k in ('K_FLUJO','SC'))
             or type(row['actividadesActivas']) is not list or len(row['actividadesActivas'])>20):raise NoDisponible
     if row['puedeConfirmar']:
-        if row['estado']!='PREPARADA' or type(row['presentacion']) is not str or not 1<=len(row['presentacion'])<=8192:raise NoDisponible
+        if row['estado']!='PREPARADA' or type(row['presentacion']) is not str or not 1<=len(row['presentacion'])<=8192 or 'calendarioPropuesto' not in row:raise NoDisponible
     elif row['presentacion'] is not None:raise NoDisponible
+    if 'calendarioPropuesto' in row:
+        from datetime import date
+        p=row['calendarioPropuesto']
+        try:
+            if (type(p) is not dict or set(p)!={'diaPago','primerVencimiento','versionRegla','tipoBase','definitivo'}
+                    or type(p['diaPago']) is not int or not 1<=p['diaPago']<=20
+                    or p['versionRegla']!='CREDIHOY_DIA_PAGO_30_CALENDARIO_20261028_V2'
+                    or p['tipoBase']!='PROYECTADO' or p['definitivo'] is not False
+                    or date.fromisoformat(p['primerVencimiento']).day!=p['diaPago']):raise ValueError()
+        except (KeyError,TypeError,ValueError):raise NoDisponible from None
     active=[]
     for task in row['actividadesActivas']:
         if type(task) is not dict or type(task.get('actividad')) is not int or task['actividad']<=0:raise NoDisponible

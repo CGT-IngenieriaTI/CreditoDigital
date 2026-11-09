@@ -1289,16 +1289,18 @@ def clave_tecnica_cd6_personal():
         b'credihoy-cd6-ejecutor-tecnico-v1',hashlib.sha256).digest())
 
 
-def fuente_radicacion_personal(s,proof,first_date):
+def fuente_radicacion_personal(s,proof,payment_day):
     from decimal import Decimal
-    from datetime import date
     from zoneinfo import ZoneInfo
     from apps.xcore_consumo.models import ConsentimientoConsumo
-    try:
-        first=date.fromisoformat(first_date)
-        if first<=timezone.now().astimezone(ZoneInfo('America/Bogota')).date():raise ValueError()
-    except (TypeError,ValueError):raise ValueError('RADICACION_PRIMERA_FECHA_PROPUESTA_REQUERIDA') from None
+    from .condiciones_producto import preparar_calendario
+    if type(payment_day) is not int or not 1<=payment_day<=20:raise ValueError('RADICACION_DIA_PAGO_ENTRE_1_Y_20_REQUERIDO')
     detail,context=_contexto(s,lock=False)
+    medium={'N':'NOMINA','V':'VENTANILLA'}.get(context['condiciones']['tipoPagaduria'])
+    calendar=preparar_calendario(timezone.now().astimezone(ZoneInfo('America/Bogota')).date(),payment_day,
+        medio_pago=medium,tipo_base='PROYECTADO',referencia_base='PROPUESTA_PERSONAL_RADICACION:'+str(s.pk))
+    from datetime import date
+    first=date.fromisoformat(calendar['primerVencimientoProyectado'])
     sim=detail.orchestration_data[KEY]['simulacion']
     if any(Decimal(row['otros'])!=0 for row in sim['amortizacion']):
         raise ValueError('RADICACION_CONCEPTOS_ADICIONALES_REQUIEREN_DESGLOSE')
@@ -1319,7 +1321,7 @@ def fuente_radicacion_personal(s,proof,first_date):
             'entrada113':{'tipoConsulta':'2','modalidadSimular':'M','datoCalcularSimulacion':'C','valorCuota':'0.00'},
             'datosRadicacion':{'cliente':{'nombre':None,'email':s.solicitante.email,'numeroCelular':s.solicitante.celular},'promotor':None}}}
     return {'payload':payload,'referencias':[],'perfilCore':None,'preflight':None,'simulacionAceptada':proof,
-        'evidencias':{'consentimiento':{'referencia':str(consent['id']),
+        'evidencias':{'calendarioPropuesto':calendar,'consentimiento':{'referencia':str(consent['id']),
             'sha256':hashlib.sha256(json.dumps(consent,sort_keys=True,default=str).encode()).hexdigest()}}}
 
 
@@ -1339,7 +1341,7 @@ def operacion_radicacion_titular(identity,payload,rid,*,transporte=None):
     if type(payload) is not dict or payload.get('operacion') not in {'consultar','preparar','confirmar','conciliar'}:
         raise ValueError('RADICACION_PETICION_INVALIDA')
     action=payload['operacion'];fields={'solicitudId','operacion'}
-    if action=='preparar':fields.add('primeraFechaPagoPropuesta')
+    if action=='preparar':fields.add('diaPagoPropuesto')
     if action=='confirmar':fields|={'presentacion','aceptaRadicar'}
     if set(payload)!=fields:raise ValueError('RADICACION_PETICION_INVALIDA')
     sid=str(UUID(payload['solicitudId']));rid=str(UUID(rid));intent=str(uuid5(NAMESPACE_URL,'credihoy-cd6-personal:'+sid))
@@ -1352,7 +1354,7 @@ def operacion_radicacion_titular(identity,payload,rid,*,transporte=None):
         call=transporte or transporte_cd6_personal
         body={'accion':action,'solicitudId':sid,'intencionId':intent,'requestId':rid}
         if action=='preparar':
-            body['expediente']=fuente_radicacion_personal(s,proof,payload['primeraFechaPagoPropuesta'])
+            body['expediente']=fuente_radicacion_personal(s,proof,payload['diaPagoPropuesto'])
             body['expediente']['payload']['intencionId']=intent
         if action=='confirmar':
             presentation=signing.loads(payload['presentacion'],key=key(),salt='credihoy-radicacion-personal-presentacion-v1',max_age=180,fallback_keys=[])
@@ -1392,6 +1394,10 @@ def operacion_radicacion_titular(identity,payload,rid,*,transporte=None):
             if type(fingerprint) is not str or not __import__('re').fullmatch('[a-f0-9]{64}',fingerprint):raise ValueError('RADICACION_PREPARACION_NO_INTEGRA')
             response.update(puedeConfirmar=True,presentacion=signing.dumps({'comprobante':proof,'solicitudId':sid,'intencionId':intent,
                 'sesion':identity['_sesionReferencia'],'nonce':str(uuid4()),'fingerprint':fingerprint},key=key(),salt='credihoy-radicacion-personal-presentacion-v1'))
+            calendar=body['expediente']['evidencias']['calendarioPropuesto']
+            response['calendarioPropuesto']={'diaPago':calendar['diaSeleccionado'],
+                'primerVencimiento':calendar['primerVencimientoProyectado'],'versionRegla':calendar['version'],
+                'tipoBase':'PROYECTADO','definitivo':False}
         return response
 
 

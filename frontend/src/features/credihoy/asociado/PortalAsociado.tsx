@@ -680,7 +680,7 @@ export function OfertaTitular({sid,operar,horaServidor=Date.now,radicar}:{sid:st
 
 export function RadicacionPersonal({sid,operar}:{sid:string;operar:NonNullable<SeguimientoAsociadoProps['radicar']>}){
   const [data,setData]=useState<RadicacionTitular|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
-  const [abierto,setAbierto]=useState(false),[fecha,setFecha]=useState(''),[acepta,setAcepta]=useState(false),[incierta,setIncierta]=useState(false);
+  const [abierto,setAbierto]=useState(false),[diaPago,setDiaPago]=useState(''),[acepta,setAcepta]=useState(false),[incierta,setIncierta]=useState(false);
   const guard=useRef(false),alive=useRef(true);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
   const recuperar=incierta||data?.estado==='INCIERTA'||data?.estado==='EXECUTING';
@@ -688,7 +688,7 @@ export function RadicacionPersonal({sid,operar}:{sid:string;operar:NonNullable<S
     if(guard.current)return;guard.current=true;setBusy(true);setError('');
     const base={operacion:'radicacion' as const,solicitudId:sid};
     try{
-      const body:PeticionRadicacion=action==='preparar'?{...base,accion:action,primeraFechaPagoPropuesta:fecha}:
+      const body:PeticionRadicacion=action==='preparar'?{...base,accion:action,diaPagoPropuesto:Number(diaPago)}:
         action==='confirmar'?{...base,accion:action,presentacion:data!.presentacion!,aceptaRadicar:true}:{...base,accion:action};
       const p=await operar(body);
       if(alive.current){setData(p);setAcepta(false);setIncierta(p.estado==='INCIERTA'||p.estado==='EXECUTING');}
@@ -707,15 +707,18 @@ export function RadicacionPersonal({sid,operar}:{sid:string;operar:NonNullable<S
         Flujo {data.K_FLUJO??'por conciliar'}. Solicitud LINIX {data.SC??'por conciliar'}. La decision institucional y la firma contractual siguen pendientes.
       </Aviso>:<>
         {data&&!recuperar&&['SIN_INTENCION','PREPARADA'].includes(data.estado)&&<>
-          <label className="ch-field">Primera fecha de pago propuesta<input className="form-control" type="date" value={fecha}
-            disabled={busy||data.puedeConfirmar} onChange={e=>{setFecha(e.target.value);setAcepta(false);}}/></label>
-          <p>La fecha propuesta no reemplaza el calendario definitivo de LINIX.</p>
-          {!data.puedeConfirmar&&<button className="btn btn-outline-primary" type="button" disabled={busy||!fecha} onClick={()=>void run('preparar')}>
+          <label className="ch-field">Dia mensual de pago<select className="form-select" value={diaPago}
+            disabled={busy||data.puedeConfirmar} onChange={e=>{setDiaPago(e.target.value);setAcepta(false);}}>
+            <option value="">Seleccionar</option>{Array.from({length:20},(_,i)=><option key={i+1} value={i+1}>{i+1}</option>)}
+          </select></label>
+          <p>El primer vencimiento propuesto respeta un minimo de 30 dias. LINIX conserva el calendario definitivo.</p>
+          {!data.puedeConfirmar&&<button className="btn btn-outline-primary" type="button" disabled={busy||!diaPago} onClick={()=>void run('preparar')}>
             <FileCheck2 size={17} aria-hidden="true"/> Revisar radicacion</button>}
         </>}
         {data?.puedeConfirmar&&!recuperar&&<>
+          {data.calendarioPropuesto&&<p>Primer vencimiento propuesto: {data.calendarioPropuesto.primerVencimiento}. No es el calendario definitivo del desembolso.</p>}
           <label><input type="checkbox" checked={acepta} disabled={busy} onChange={e=>setAcepta(e.target.checked)}/>
-            {' '}Confirmo radicar mi solicitud con las condiciones y cuota aceptadas. La decision institucional y la firma contractual continuan pendientes.</label>
+            {' '}Confirmo radicar mi solicitud con las condiciones y cuota aceptadas, el dia de pago seleccionado y el vencimiento propuesto. La decision institucional y la firma contractual continuan pendientes.</label>
           <button className="btn btn-brand" type="button" disabled={busy||!acepta} onClick={()=>void run('confirmar')}>
             <ArrowRight size={17} aria-hidden="true"/> Confirmar radicacion</button>
         </>}

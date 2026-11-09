@@ -13,7 +13,10 @@ test('radicacion mantiene decision y firma pendientes y rechaza cruces o faculta
     assert.throws(()=>validarRadicacionTitular({...packet(),...changes},id));
 });
 test('preparada requiere presentacion, incertidumbre no permite confirmar',()=>{
-  assert.equal(validarRadicacionTitular({...packet(),estado:'PREPARADA',puedeConfirmar:true,presentacion:'signed'},id).puedeConfirmar,true);
+  const calendar={diaPago:10,primerVencimiento:'2026-12-10',versionRegla:'CREDIHOY_DIA_PAGO_30_CALENDARIO_20261028_V2',tipoBase:'PROYECTADO',definitivo:false};
+  assert.equal(validarRadicacionTitular({...packet(),estado:'PREPARADA',puedeConfirmar:true,presentacion:'signed',calendarioPropuesto:calendar},id).puedeConfirmar,true);
+  for(const diaPago of [0,21,true,'10'])assert.throws(()=>validarRadicacionTitular({...packet(),calendarioPropuesto:{...calendar,diaPago}},id));
+  assert.throws(()=>validarRadicacionTitular({...packet(),estado:'PREPARADA',puedeConfirmar:true,presentacion:'signed'},id));
   assert.throws(()=>validarRadicacionTitular({...packet(),estado:'INCIERTA',puedeConfirmar:true,presentacion:'signed'},id));
 });
 test('pantalla inicial exige accion personal y nunca inicia transporte al renderizar',()=>{

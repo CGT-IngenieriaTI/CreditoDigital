@@ -10,23 +10,30 @@ export type SesionPublica = { autenticado:false } | { autenticado:true; nombre:s
   sesionReferencia:string;
   acciones:{ seguimiento:boolean; solicitar:boolean; simular:boolean; documentos:false; autorizar?:boolean;centralesOtp?:boolean;simuladorLocal?:boolean;radicar?:boolean } };
 export type PeticionRadicacion={operacion:'radicacion';solicitudId:string}&(
-  {accion:'consultar'|'conciliar'}|{accion:'preparar';primeraFechaPagoPropuesta:string}|
+  {accion:'consultar'|'conciliar'}|{accion:'preparar';diaPagoPropuesto:number}|
   {accion:'confirmar';presentacion:string;aceptaRadicar:true});
 export interface RadicacionTitular {versionContrato:'credihoy-radicacion-personal-v1';solicitudId:string;intencionId:string;
   estado:'SIN_INTENCION'|'PREPARADA'|'EXECUTING'|'INCIERTA'|'RADICADA'|'BLOQUEADA';codigo:string|null;
   puedeConfirmar:boolean;presentacion:string|null;K_FLUJO:string|null;SC:string|null;actividadesActivas:{actividad:number}[];
-  decisionInstitucional:'PENDIENTE';firmaContractual:'PENDIENTE';autorizaFirma:false;autorizaDesembolso:false}
+  decisionInstitucional:'PENDIENTE';firmaContractual:'PENDIENTE';autorizaFirma:false;autorizaDesembolso:false;
+  calendarioPropuesto?:{diaPago:number;primerVencimiento:string;versionRegla:string;tipoBase:'PROYECTADO';definitivo:false}}
 export function validarRadicacionTitular(raw:unknown,sid:string):RadicacionTitular {
   const p=obj(raw),identifier=(v:unknown)=>v===null||typeof v==='string'&&/^[1-9][0-9]{0,19}$/.test(v);
-  if(Object.keys(p).sort().join(',')!=='K_FLUJO,SC,actividadesActivas,autorizaDesembolso,autorizaFirma,codigo,decisionInstitucional,estado,firmaContractual,intencionId,presentacion,puedeConfirmar,solicitudId,versionContrato'
+  if(Object.keys(p).filter(k=>k!=='calendarioPropuesto').sort().join(',')!=='K_FLUJO,SC,actividadesActivas,autorizaDesembolso,autorizaFirma,codigo,decisionInstitucional,estado,firmaContractual,intencionId,presentacion,puedeConfirmar,solicitudId,versionContrato'
     ||p.versionContrato!=='credihoy-radicacion-personal-v1'||p.solicitudId!==sid||!uuid.test(sid)||!uuid.test(text(p.intencionId))
     ||!['SIN_INTENCION','PREPARADA','EXECUTING','INCIERTA','RADICADA','BLOQUEADA'].includes(text(p.estado))
     ||p.codigo!==null&&(typeof p.codigo!=='string'||!/(^[A-Z][A-Z0-9_]{1,120}$)/.test(p.codigo))
-    ||typeof p.puedeConfirmar!=='boolean'||(p.puedeConfirmar?(p.estado!=='PREPARADA'||typeof p.presentacion!=='string'||!p.presentacion||p.presentacion.length>8192):p.presentacion!==null)
+    ||typeof p.puedeConfirmar!=='boolean'||(p.puedeConfirmar?(p.estado!=='PREPARADA'||typeof p.presentacion!=='string'||!p.presentacion||p.presentacion.length>8192||p.calendarioPropuesto===undefined):p.presentacion!==null)
     ||!identifier(p.K_FLUJO)||!identifier(p.SC)||p.SC!==null&&p.K_FLUJO===null
     ||!Array.isArray(p.actividadesActivas)||p.actividadesActivas.length>20||p.actividadesActivas.some(v=>{
       const r=obj(v);return Object.keys(r).join(',')!=='actividad'||!Number.isSafeInteger(r.actividad)||Number(r.actividad)<=0;})
     ||p.decisionInstitucional!=='PENDIENTE'||p.firmaContractual!=='PENDIENTE'||p.autorizaFirma!==false||p.autorizaDesembolso!==false)fail();
+  if(p.calendarioPropuesto!==undefined){const c=obj(p.calendarioPropuesto),date=String(c.primerVencimiento);
+    if(Object.keys(c).sort().join(',')!=='definitivo,diaPago,primerVencimiento,tipoBase,versionRegla'
+      ||!Number.isInteger(c.diaPago)||Number(c.diaPago)<1||Number(c.diaPago)>20
+      ||c.versionRegla!=='CREDIHOY_DIA_PAGO_30_CALENDARIO_20261028_V2'||c.tipoBase!=='PROYECTADO'||c.definitivo!==false
+      ||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date+'T12:00:00Z'))
+      ||new Date(date+'T12:00:00Z').toISOString().slice(0,10)!==date||Number(date.slice(-2))!==c.diaPago)fail();}
   return p as unknown as RadicacionTitular;
 }
 export type PeticionAutorizacion={operacion:'autorizacion';solicitudId:string}&(

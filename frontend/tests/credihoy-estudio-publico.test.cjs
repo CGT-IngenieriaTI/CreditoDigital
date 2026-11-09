@@ -72,7 +72,7 @@ test('documentos del canal no muestran pagare de LINIX ni infieren una firma por
  const pending=renderToStaticMarkup(React.createElement(DocumentosAsociado,{institucion:{estado:'APROBADA_PENDIENTE_FIRMA'}}));
  assert.match(pending,/Preparacion documental pendiente/);
  assert.match(pending,/No hay un documento contractual disponible para firmar/);
- assert.match(pending,/pagare LINPAG es un proceso diferente/);
+ assert.match(pending,/pagare se gestiona por el canal institucional/);
  assert.doesNotMatch(pending,/Documento firmado y verificado|Firmar pagare|<button|<a /);
  const verified=renderToStaticMarkup(React.createElement(DocumentosAsociado,{formalizacion:{documento:'COLO-FO.001',firmaAcreditada:true}}));
  assert.match(verified,/COLO-FO.001/);assert.match(verified,/Documento firmado y verificado/);

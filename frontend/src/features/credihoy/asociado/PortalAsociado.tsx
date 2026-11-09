@@ -5,7 +5,7 @@ import {CredihoyAccesoAsociado,type SeguimientoAsociadoProps} from '../component
 import {CredihoyShell} from '../components/CredihoyShell';
 import {crearEstadoInicial} from '../state';
 import {moneda} from '../components/FormControls';
-import type {CotizacionTitular,InstitucionalPublica,SolicitudPublica,AutorizacionTitular,PeticionAutorizacion,PeticionRadicacion,RadicacionTitular} from '../services/publico';
+import type {CotizacionTitular,InstitucionalPublica,SolicitudPublica,AutorizacionTitular,PeticionAutorizacion,PeticionRadicacion,RadicacionTitular,EventoHistorial} from '../services/publico';
 import {Aviso,Cargando,EstadoVacio,Etiqueta,NotaPrivacidad} from './ui';
 import './asociado.css';
 import {SimuladorLocal} from './SimuladorLocal';
@@ -48,6 +48,12 @@ export function fechaHoraPublica(value:string){
   return /^\d{4}-\d{2}-\d{2}$/.test(value)?fechaPublica(value):new Date(value).toLocaleString('es-CO',
     {timeZone:'America/Bogota',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
 }
+export function textoEventoHistorial(event:EventoHistorial){
+  if(event.codigo==='FORMALIZACION')return {titulo:'Formalizacion contractual',
+    descripcion:event.estado==='CONFIRMADO'?'Documento contractual firmado y verificado.':'La firma de COLO-FO.001 sigue pendiente.'};
+  if(event.codigo==='PAGARE')return {titulo:'Pagare',descripcion:'El pagare se gestiona por el canal institucional en su oportunidad.'};
+  return {titulo:event.titulo,descripcion:event.descripcion};
+}
 const INCIDENCIAS={NO_DISPONIBLE:'No hay informacion de incidencias disponible al corte.',
   EN_REVISION:'Congente esta revisando una incidencia del tramite.',
   ANTECEDENTES_SIN_PENDIENTE_ACTIVO:'El tramite conserva antecedentes de revision, sin incidencias activas registradas al corte.',
@@ -81,14 +87,14 @@ export function ProgresoSolicitud({solicitud}:{solicitud:SolicitudPublica}){
 
 export function DocumentosAsociado({formalizacion}:{institucion?:InstitucionalPublica|null;formalizacion?:SolicitudPublica['formalizacionDocumental']}){
   return <div className="ca-documents">
-    <section className="ca-document-band" aria-labelledby="ca-autentic-title">
+    <section className="ca-document-band" aria-labelledby="ca-document-title">
       <div className="ca-band-heading"><span className="ca-icon-tile"><FileCheck2 size={23} aria-hidden="true"/></span>
-        <div><p className="ch-eyebrow">Documentos del canal</p><h3 id="ca-autentic-title">Documentos y firma electronica</h3></div></div>
+        <div><p className="ch-eyebrow">Documentos del canal</p><h3 id="ca-document-title">Documentos y firma electronica</h3></div></div>
       <dl className="ca-authorizations">
         <div><dt>Documento contractual</dt><dd>{formalizacion?.documento??'Preparacion documental pendiente.'}</dd></div>
         <div><dt>Firma electronica</dt><dd>{formalizacion?.firmaAcreditada?'Documento firmado y verificado.':formalizacion?'Validacion documental pendiente.':'No hay un documento contractual disponible para firmar.'}</dd></div>
       </dl>
-      <p className="ca-notice">La formalizacion de COLO-FO.001 utiliza AutenTIC. El pagare LINPAG es un proceso diferente, gestionado por LINIX en su oportunidad.</p>
+      <p className="ca-notice">La formalizacion de COLO-FO.001 utiliza firma electronica. El pagare se gestiona por el canal institucional en su oportunidad.</p>
     </section>
   </div>;
 }
@@ -389,7 +395,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
             <span className={'ca-history-mark'+(event.estado==='CONFIRMADO'?' ca-history-mark--success':'')}>
               {event.estado==='CONFIRMADO'?<CheckCircle2 size={18} aria-hidden="true"/>:<Clock3 size={18} aria-hidden="true"/>}</span>
             <div>{event.fecha?<time dateTime={event.fecha}>{fechaHoraPublica(event.fecha)}</time>:<span className="ca-muted">{event.estado==='CONFIRMADO'?'Fecha por acreditar':'Pendiente'}</span>}
-              <h3>{event.titulo}</h3><p>{event.descripcion}</p></div></li>)}</ol>:<ol className="ca-history">
+              <h3>{textoEventoHistorial(event).titulo}</h3><p>{textoEventoHistorial(event).descripcion}</p></div></li>)}</ol>:<ol className="ca-history">
             <li><span className="ca-history-mark"><Files size={18} aria-hidden="true"/></span><div>
               <time dateTime={s.fechaCreacion}>{fechaPublica(s.fechaCreacion)}</time><h3>Solicitud registrada</h3><p>Tu solicitud forma parte de este tramite.</p></div></li>
             {institucion?<>

@@ -6,6 +6,18 @@ const {RadicacionPersonal}=load('asociado/PortalAsociado.tsx');
 function packet(){return {versionContrato:'credihoy-radicacion-personal-v1',solicitudId:id,intencionId:id,
   estado:'SIN_INTENCION',codigo:null,puedeConfirmar:false,presentacion:null,K_FLUJO:null,SC:null,
   actividadesActivas:[],decisionInstitucional:'PENDIENTE',firmaContractual:'PENDIENTE',autorizaFirma:false,autorizaDesembolso:false};}
+
+test('textos visibles omiten proveedores sin cambiar evidencia ni acreditar firma pendiente',()=>{
+  const {textoEventoHistorial,DocumentosAsociado}=load('asociado/PortalAsociado.tsx');
+  for(const codigo of ['FORMALIZACION','PAGARE'])for(const estado of ['PENDIENTE','CONFIRMADO']){
+    const event={codigo,estado,fecha:null,titulo:'AutenTIC LINPAG',descripcion:'AutenTIC LINPAG'};
+    const original=JSON.stringify(event),visible=textoEventoHistorial(event);
+    assert.doesNotMatch(JSON.stringify(visible),/AutenTIC|LINPAG|LINIX/i);
+    assert.equal(JSON.stringify(event),original);
+    if(codigo==='FORMALIZACION'&&estado==='PENDIENTE')assert.match(visible.descripcion,/pendiente/);
+  }
+  assert.doesNotMatch(renderToStaticMarkup(React.createElement(DocumentosAsociado,{})),/AutenTIC|LINPAG|LINIX/i);
+});
 test('radicacion mantiene decision y firma pendientes y rechaza cruces o facultades financieras',()=>{
   assert.equal(validarRadicacionTitular(packet(),id).estado,'SIN_INTENCION');
   for(const changes of [{solicitudId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'},{autorizaFirma:true},{autorizaDesembolso:true},

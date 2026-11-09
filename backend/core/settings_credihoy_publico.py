@@ -36,9 +36,12 @@ def secreto(name):
 
 DEBUG = False
 CREDIHOY_PERFIL_DISPONIBILIDAD = os.environ.get('CREDIHOY_PERFIL_DISPONIBILIDAD', 'PILOT_WINDOW')
-if CREDIHOY_PERFIL_DISPONIBILIDAD not in ('PILOT_WINDOW', 'PERMANENT_PRIVATE_V1'):
+if CREDIHOY_PERFIL_DISPONIBILIDAD not in ('PILOT_WINDOW', 'PERMANENT_PRIVATE_V1', 'PUBLICO_HTTPS'):
     raise ImproperlyConfigured('Perfil de disponibilidad desconocido')
 _privado_permanente = CREDIHOY_PERFIL_DISPONIBILIDAD == 'PERMANENT_PRIVATE_V1'
+_publico_permanente = CREDIHOY_PERFIL_DISPONIBILIDAD == 'PUBLICO_HTTPS'
+if _publico_permanente and os.environ.get('DJANGO_SETTINGS_MODULE') != 'core.settings_credihoy_publico':
+    raise ImproperlyConfigured('Disponibilidad publica requiere perfil publico explicito')
 if _privado_permanente and os.environ.get('DJANGO_SETTINGS_MODULE') != 'core.settings_credihoy_institucional':
     raise ImproperlyConfigured('Disponibilidad privada requiere perfil institucional explicito')
 _ensayo_privado = os.environ.get('DJANGO_SETTINGS_MODULE') in {
@@ -84,7 +87,12 @@ try:
     if type(CREDIHOY_AUTOSERVICIO_ENABLED) is not bool:
         raise ValueError
     access_times = validar_plazos(CREDIHOY_PUBLICO_VALIDACION)
-    if _privado_permanente:
+    if _publico_permanente:
+        if (cfg.get('disponibilidad') != 'PUBLICO_HTTPS' or cfg.get('ensayo') or CREDIHOY_ADMISION_ENSAYO
+                or CREDIHOY_PUBLICO_IDENTIDADES_HMAC != [] or CREDIHOY_PUBLICO_AUTORIZACION_HASTA != ''
+                or cfg.get('bordeBasicExterno',False) is not False or url.port not in (None,443,18449)):
+            raise ValueError
+    elif _privado_permanente:
         if (cfg.get('disponibilidad') != CREDIHOY_PERFIL_DISPONIBILIDAD or cfg.get('ensayo')
                 or CREDIHOY_ADMISION_ENSAYO or CREDIHOY_PUBLICO_IDENTIDADES_HMAC != []
                 or CREDIHOY_PUBLICO_AUTORIZACION_HASTA != ''):
@@ -145,6 +153,8 @@ if CREDIHOY_IDENTIDAD_GRANTS_ENABLED:
     CREDIHOY_IDENTIDAD_CREDENTIAL_FILE = requerido('CREDIHOY_IDENTIDAD_CREDENTIAL_FILE')
     if not Path(CREDIHOY_IDENTIDAD_CREDENTIAL_FILE).is_absolute():
         raise ImproperlyConfigured('Politica identidad requiere referencia absoluta')
+if _publico_permanente and not CREDIHOY_IDENTIDAD_GRANTS_ENABLED:
+    raise ImproperlyConfigured('Disponibilidad publica requiere grants individuales de identidad')
 if urlsplit(API_DATA_CREDIHOY_BASE_URL).scheme != 'https':
     raise ImproperlyConfigured('API_DATA requiere HTTPS verificado')
 DATABASES = {'default': {'ENGINE': 'django.db.backends.postgresql',
@@ -175,6 +185,9 @@ SESSION_COOKIE_SAMESITE = CSRF_COOKIE_SAMESITE = 'Strict'
 SESSION_COOKIE_AGE = access_times['sesionSegundos']
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 SECURE_HSTS_SECONDS = 31536000
+if _publico_permanente and url.port == 18449:
+    # HSTS is hostname-wide, even when learned on a nonstandard HTTPS port.
+    SECURE_HSTS_SECONDS = 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_HSTS_PRELOAD = False
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
@@ -211,6 +224,17 @@ RISK_GATEWAY_ORCHESTRATION_ENABLED = RISK_GATEWAY_CONSUMO_ENABLED = False
 RISK_GATEWAY_ENABLED = 'N'
 XCORE_CONSUMO_ORACLE_ENABLED = CREDIT_PIPELINE_ASYNC = CREDIT_USE_MOCK_SERVICES = False
 EMAIL_BACKEND = 'django.core.mail.backends.dummy.EmailBackend'
+
+if _publico_permanente:
+    CREDIHOY_PUBLICO_AUDITORIA_AISLADA = True
+    CREDIHOY_PUBLICO_SOLICITUDES_POR_API = True
+    CREDIHOY_PUBLICO_BORDE_BASIC_EXTERNO = False
+    CREDIHOY_SEGUIMIENTO_ENABLED = cfg.get('seguimientoHabilitado',False)
+    CREDIHOY_COTIZACION_TITULAR_ENABLED = cfg.get('cotizacionHabilitada',False)
+    if any(type(value) is not bool for value in (CREDIHOY_SEGUIMIENTO_ENABLED,CREDIHOY_COTIZACION_TITULAR_ENABLED)):
+        raise ImproperlyConfigured('Capacidades personales publicas invalidas')
+    DATABASE_ROUTERS = ['apps.xcore_consumo.services.credihoy_v2.unico.publico_restringido.AlmacenamientoAisladoRouter']
+    CELERY_TASK_ALWAYS_EAGER = False
 
 # Deployment metadata only. Credential contents are loaded by the existing task.
 from apps.integraciones.autentic.pdf_criptografia import referencias_registro_sello

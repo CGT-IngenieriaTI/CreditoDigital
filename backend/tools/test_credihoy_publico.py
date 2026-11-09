@@ -1,4 +1,5 @@
-"""Public identity regression on isolated SQLite; all institutional IO is mocked."""
+"""Public identity regression on disposable databases; institutional IO is mocked."""
+import base64
 import json
 from hashlib import sha256
 from io import StringIO
@@ -25,6 +26,7 @@ SID='VE'+'a'*32
 
 
 @override_settings(ROOT_URLCONF='core.urls_credihoy_publico',CREDIHOY_PUBLICO_ENABLED=True,DEBUG=False,
+    OTP_AES_KEY_B64=base64.b64encode(b'a'*32).decode(),
     SESSION_COOKIE_NAME='credihoy_publico_session',CSRF_COOKIE_NAME='credihoy_publico_csrf',
     SESSION_COOKIE_SECURE=True,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Strict',
     CSRF_COOKIE_SECURE=True,CSRF_COOKIE_HTTPONLY=True,CSRF_COOKIE_SAMESITE='Strict',

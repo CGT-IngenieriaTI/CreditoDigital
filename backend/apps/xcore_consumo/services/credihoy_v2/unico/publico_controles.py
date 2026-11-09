@@ -70,43 +70,52 @@ def _borde_basic_externo():
 
 
 def validar_habilitacion():
-    restricted = getattr(settings, 'CREDIHOY_PUBLICO_RESTRINGIDO', None)
-    if type(restricted) is not bool:
-        raise AccesoDenegado
+    restricted=getattr(settings,'CREDIHOY_PUBLICO_RESTRINGIDO',None)
+    if type(restricted) is not bool:raise AccesoDenegado
     availability = getattr(settings, 'CREDIHOY_PERFIL_DISPONIBILIDAD', 'PILOT_WINDOW')
-    if availability not in ('PILOT_WINDOW', 'PERMANENT_PRIVATE_V1'):
-        raise AccesoDenegado
+    if availability not in ('PILOT_WINDOW', 'PERMANENT_PRIVATE_V1', 'PUBLICO_HTTPS'):raise AccesoDenegado
+    if availability == 'PUBLICO_HTTPS':
+        if (restricted or getattr(settings,'SETTINGS_MODULE','')!='core.settings_credihoy_publico'
+                or getattr(settings,'CREDIHOY_PUBLICO_BORDE_BASIC_EXTERNO',False) is not False
+                or getattr(settings,'CREDIHOY_PUBLICO_AUTORIZACION_HASTA',None)!=''
+                or getattr(settings,'CREDIHOY_PUBLICO_IDENTIDADES_HMAC',None)!=[]
+                or getattr(settings,'CREDIHOY_ADMISION_ENSAYO',{})
+                or getattr(settings,'CREDIHOY_IDENTIDAD_GRANTS_ENABLED',False) is not True):
+            raise AccesoDenegado
     permanent = availability == 'PERMANENT_PRIVATE_V1'
     if permanent:
-        modules = {'INSTITUTIONAL_PERMANENT': 'core.settings_credihoy_institucional', 'OWNER_PERMANENT': 'core.settings_credihoy_titular'}
-        if not restricted or modules.get(getattr(settings, 'CREDIHOY_PUBLICO_MODO', '')) != getattr(settings, 'SETTINGS_MODULE', '') or getattr(settings, 'CREDIHOY_PUBLICO_BORDE_BASIC_EXTERNO', False) is not False or getattr(settings, 'CREDIHOY_ADMISION_ENSAYO', {}):
+        modules = {'INSTITUTIONAL_PERMANENT': 'core.settings_credihoy_institucional',
+                   'OWNER_PERMANENT': 'core.settings_credihoy_titular'}
+        if (not restricted or modules.get(getattr(settings, 'CREDIHOY_PUBLICO_MODO', ''))
+                != getattr(settings, 'SETTINGS_MODULE', '')
+                or getattr(settings, 'CREDIHOY_PUBLICO_BORDE_BASIC_EXTERNO', False) is not False
+                or getattr(settings, 'CREDIHOY_ADMISION_ENSAYO', {})):
             raise AccesoDenegado
     if restricted:
-        deadline = parse_datetime(getattr(settings, 'CREDIHOY_PUBLICO_AUTORIZACION_HASTA', ''))
-        if deadline and timezone.is_aware(deadline) and (deadline <= timezone.now()):
+        deadline=parse_datetime(getattr(settings,'CREDIHOY_PUBLICO_AUTORIZACION_HASTA',''))
+        if deadline and timezone.is_aware(deadline) and deadline<=timezone.now():
             raise AccesoDenegado('ACCESS_WINDOW_EXPIRED')
     _borde_basic_externo()
     if not restricted or permanent:
         from urllib.parse import urlsplit
-        proxies = getattr(settings, 'CREDIHOY_PUBLICO_PROXIES', ())
-        origins = getattr(settings, 'CSRF_TRUSTED_ORIGINS', ())
+        proxies=getattr(settings,'CREDIHOY_PUBLICO_PROXIES',())
+        origins=getattr(settings,'CSRF_TRUSTED_ORIGINS',())
         try:
-            if not permanent and getattr(settings, 'CREDIHOY_PUBLICO_MODO', None) != 'PUBLICO_HTTPS' or type(proxies) not in (tuple, list) or (not proxies) or (type(origins) not in (tuple, list)) or (len(origins) != 1):
-                raise ValueError
+            if ((not permanent and getattr(settings,'CREDIHOY_PUBLICO_MODO',None)!='PUBLICO_HTTPS')
+                    or type(proxies) not in (tuple,list) or not proxies
+                    or type(origins) not in (tuple,list) or len(origins)!=1):raise ValueError
             for value in proxies:
-                network = ip_network(value)
-                if network.prefixlen != network.max_prefixlen:
-                    raise ValueError
-            origin = urlsplit(origins[0])
-            origin.port
-            if origin.scheme != 'https' or origin.hostname != getattr(settings, 'CREDIHOY_PUBLICO_HOST', None) or origin.username or origin.password or origin.path or origin.query or origin.fragment or (permanent and origin.port not in (None, 443)):
-                raise ValueError
-        except (ValueError, TypeError):
-            raise AccesoDenegado from None
+                network=ip_network(value)
+                if network.prefixlen!=network.max_prefixlen:raise ValueError
+            origin=urlsplit(origins[0]);origin.port
+            if (origin.scheme!='https' or origin.hostname!=getattr(settings,'CREDIHOY_PUBLICO_HOST',None)
+                    or origin.username or origin.password or origin.path or origin.query or origin.fragment
+                    or availability=='PUBLICO_HTTPS' and origin.port not in (None,443,18449)
+                    or permanent and origin.port not in (None, 443)):raise ValueError
+        except (ValueError,TypeError):raise AccesoDenegado from None
         if not restricted:
             from . import publico_privacidad as privacy
-            privacy.validar_aviso()
-            privacy.validar_antibot()
+            privacy.validar_aviso();privacy.validar_antibot()
     if restricted:
         identities = getattr(settings, 'CREDIHOY_PUBLICO_IDENTIDADES_HMAC', ())
         networks = getattr(settings, 'CREDIHOY_PUBLICO_REDES', ())
@@ -114,13 +123,17 @@ def validar_habilitacion():
         try:
             deadline = getattr(settings, 'CREDIHOY_PUBLICO_AUTORIZACION_HASTA', '')
             expires = parse_datetime(deadline)
-            if expires and timezone.is_aware(expires) and (expires <= timezone.now()):
+            if expires and timezone.is_aware(expires) and expires<=timezone.now():
                 raise AccesoDenegado('ACCESS_WINDOW_EXPIRED')
-            valid = bool(getattr(settings, 'CREDIHOY_PUBLICO_AUTORIZACION_REFERENCIA', '')) and type(networks) in (tuple, list) and bool(networks) and (type(proxies) in (tuple, list))
+            valid = (bool(getattr(settings, 'CREDIHOY_PUBLICO_AUTORIZACION_REFERENCIA', ''))
+                and type(networks) in (tuple, list) and bool(networks)
+                and type(proxies) in (tuple, list))
             if permanent:
-                valid = valid and deadline == '' and (identities == []) and bool(proxies)
+                valid = valid and deadline == '' and identities == [] and bool(proxies)
             else:
-                valid = valid and expires and timezone.is_aware(expires) and (expires > timezone.now()) and (type(identities) in (tuple, list)) and (1 <= len(identities) <= 2) and all((type(v) is str and re.fullmatch('[a-f0-9]{64}', v) for v in identities))
+                valid = (valid and expires and timezone.is_aware(expires) and expires > timezone.now()
+                    and type(identities) in (tuple, list) and 1 <= len(identities) <= 2
+                    and all(type(v) is str and re.fullmatch(r'[a-f0-9]{64}', v) for v in identities))
             if not valid:
                 raise ValueError
             for value in (*networks, *proxies):

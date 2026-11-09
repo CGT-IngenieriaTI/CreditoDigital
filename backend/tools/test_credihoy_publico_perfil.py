@@ -14,6 +14,30 @@ from django.test import SimpleTestCase
 
 
 class ProfileTests(SimpleTestCase):
+    def test_continuous_public_18449_is_explicit_keeps_private_state_and_individual_sessions(self):
+        self.env.update(DJANGO_SETTINGS_MODULE='core.settings_credihoy_publico',
+            CREDIHOY_PERFIL_DISPONIBILIDAD='PUBLICO_HTTPS',CREDIHOY_IDENTIDAD_GRANTS_ENABLED='1',
+            CREDIHOY_IDENTIDAD_CREDENTIAL_FILE=str(self.root/'synthetic-metadata-only-policy'))
+        self.config.update(origen='https://consulta.congente.coop:18449',disponibilidad='PUBLICO_HTTPS',
+            autorizacionHasta='',identidadesHmac=[],seguimientoHabilitado=True,cotizacionHabilitada=True)
+        (self.root/'CREDIHOY_PUBLICO_CONFIG').write_text(json.dumps(self.config))
+        p=self.load()
+        self.assertEqual(p['CREDIHOY_PUBLICO_MODO'],'PUBLICO_HTTPS')
+        self.assertFalse(p['CREDIHOY_PUBLICO_RESTRINGIDO']);self.assertFalse(p['CREDIHOY_PUBLICO_BORDE_BASIC_EXTERNO'])
+        self.assertTrue(p['CREDIHOY_PUBLICO_AUDITORIA_AISLADA']);self.assertTrue(p['CREDIHOY_PUBLICO_SOLICITUDES_POR_API'])
+        self.assertTrue(p['SESSION_COOKIE_SECURE']);self.assertTrue(p['SESSION_COOKIE_HTTPONLY'])
+        self.assertEqual(p['SESSION_COOKIE_AGE'],900);self.assertEqual(p['SESSION_COOKIE_SAMESITE'],'Strict')
+        self.assertFalse(p['CELERY_TASK_ALWAYS_EAGER']);self.assertTrue(p['CELERY_BROKER_URL'])
+        self.assertEqual(p['SECURE_HSTS_SECONDS'],0)
+        self.assertTrue(p['CREDIHOY_COTIZACION_TITULAR_ENABLED'])
+        for changes in ({'autorizacionHasta':'2099-01-01T00:00:00Z'},{'bordeBasicExterno':True},
+                {'admisionEnsayo':{'version':'OLD'}},{'ensayo':{'modo':'OLD'}},{'identidadesHmac':['a'*64]}):
+            (self.root/'CREDIHOY_PUBLICO_CONFIG').write_text(json.dumps({**self.config,**changes}))
+            with self.subTest(fields=tuple(changes)),self.assertRaises(ImproperlyConfigured):self.load()
+        (self.root/'CREDIHOY_PUBLICO_CONFIG').write_text(json.dumps(self.config))
+        self.env['CREDIHOY_IDENTIDAD_GRANTS_ENABLED']='0'
+        with self.assertRaises(ImproperlyConfigured):self.load()
+
     def test_health_remains_registered_when_identity_or_relay_is_enabled(self):
         from core.views import HealthcheckView
         from django.test import RequestFactory,override_settings

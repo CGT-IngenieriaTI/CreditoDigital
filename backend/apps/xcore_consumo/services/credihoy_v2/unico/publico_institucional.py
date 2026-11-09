@@ -497,6 +497,7 @@ def project_row(row):
                     or Decimal(estimate['resultado']['monto'])!=Decimal(row['monto'])
                     or estimate['resultado']['plazoMeses']!=row['plazoMeses']):raise ValueError
             clean['simulacionLocal']=estimate
+        clean['historial']=project_digital_history(clean)
         return clean
     except (TypeError,KeyError,ValueError,AttributeError):
         raise NoDisponible from None
@@ -767,7 +768,7 @@ def project_intake_tracking(value):
     fields={'versionContrato','estado','confirmada','consultadoEn','cuotaAceptada','aceptadaEn',
         'decisionInstitucional','firmaContractual'}
     try:
-        if (type(value) is not dict or set(value)!=fields
+        if (type(value) is not dict or set(value) not in (fields,fields|{'radicadaEn'})
                 or value['versionContrato']!='credihoy-seguimiento-radicacion-v1'
                 or value['estado'] not in {'SIN_INTENCION','PREPARADA','EN_PROCESO','RADICADA','POR_CONFIRMAR','NO_DISPONIBLE'}
                 or type(value['confirmada']) is not bool or value['confirmada']!=(value['estado']=='RADICADA')
@@ -782,5 +783,32 @@ def project_intake_tracking(value):
                     or Decimal(value['cuotaAceptada'])<=0):raise ValueError()
             accepted=datetime.fromisoformat(value['aceptadaEn'])
             if accepted.utcoffset() is None or accepted>observed:raise ValueError()
+        if 'radicadaEn' in value:
+            registered=datetime.fromisoformat(value['radicadaEn'])
+            if (not value['confirmada'] or registered.utcoffset() is None
+                    or not accepted<=registered<=observed):raise ValueError()
     except (ValueError,TypeError,KeyError):raise NoDisponible from None
     return dict(value)
+
+
+def project_digital_history(row):
+    """One chronology from already validated owner facts; no new business events."""
+    tracking=row.get('seguimientoRadicacion') or {};study=row.get('estudio') or {}
+    document=row.get('formalizacionDocumental') or {};institution=row.get('institucional') or {}
+    def event(code,title,when,description,confirmed=False):
+        return {'codigo':code,'titulo':title,'fecha':when,'estado':'CONFIRMADO' if confirmed else 'PENDIENTE',
+            'descripcion':description}
+    rows=[event('SOLICITUD','Solicitud registrada',row['fechaCreacion'],'Tu solicitud fue registrada.',True),
+        event('ESTUDIO','Estudio digital',study.get('fechaEvaluacion'),
+            'Estudio digital aprobado; no equivale a la decision institucional.' if study.get('decisionPolitica',{}).get('continuidad',{}).get('estudioFavorable') else 'Consulta las validaciones acreditadas de tu estudio.',bool(study)),
+        event('CUOTA','Cuota y condiciones aceptadas',tracking.get('aceptadaEn'),
+            'Tu aceptacion personal de la simulacion se conserva.' if tracking.get('aceptadaEn') else 'Aceptacion de condiciones pendiente.',bool(tracking.get('aceptadaEn'))),
+        event('RADICACION','Radicacion confirmada',tracking.get('radicadaEn'),
+            'Confirmaste personalmente la radicacion. La solicitud esta registrada y en revision institucional.' if tracking.get('confirmada') else 'No hay una radicacion confirmada.',tracking.get('confirmada') is True),
+        event('FORMALIZACION','Formalizacion contractual AutenTIC',document.get('actualizadoAt') if document.get('firmaAcreditada') else None,
+            'Documento contractual firmado y verificado.' if document.get('firmaAcreditada') else 'La firma de COLO-FO.001 sigue pendiente. No es el pagare LINPAG.',document.get('firmaAcreditada') is True),
+        event('DECISION','Decision institucional',institution.get('fechaDecision'),
+            'Aprobacion institucional registrada; no acredita firma ni desembolso.' if institution else 'Tu solicitud se encuentra en revision institucional.' if tracking.get('confirmada') else 'Decision institucional pendiente.',bool(institution)),
+        event('DESEMBOLSO','Desembolso',None,'Sin confirmacion institucional de desembolso.')]
+    if institution:rows.append(event('PAGARE','Pagare LINPAG',None,'LINIX gestiona el pagare en su oportunidad; no se firma desde este portal.'))
+    return sorted(rows,key=lambda item:(item['fecha'] is None,item['fecha'] or '',item['codigo']))

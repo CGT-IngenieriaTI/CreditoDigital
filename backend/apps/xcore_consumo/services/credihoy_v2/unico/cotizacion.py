@@ -1471,8 +1471,19 @@ def seguimiento_radicacion_titular(identity,rows):
             confirmed=state['estado']=='RADICADA' and bool(state.get('K_FLUJO') and state.get('SC'))
             tracking.update(estado='RADICADA' if confirmed else stages[state['estado']] if state['estado']!='RADICADA' else 'POR_CONFIRMAR',
                 confirmada=confirmed,cuotaAceptada=proof['cuota'],aceptadaEn=proof['aceptadaEn'])
+            if confirmed:
+                with fuente_cotizacion():
+                    with transaction.atomic(using=alias_cotizacion()):
+                        with connections[alias_cotizacion()].cursor() as cursor:
+                            cursor.execute('SET TRANSACTION READ ONLY')
+                            cursor.execute('SELECT confirmado_en FROM public.credihoy_radicacion_personal_publica '
+                                'WHERE solicitud_id=%s ORDER BY registro_id LIMIT 2',[sid])
+                            events=cursor.fetchall()
+                if len(events)!=1:raise ValueError('RADICACION_FECHA_NO_UNIVOCA')
+                tracking['radicadaEn']=events[0][0].isoformat()
         except Exception as exc:
             import logging
             logging.getLogger('credito.publico').warning('seguimiento_radicacion_no_disponible tipo=%s',type(exc).__name__)
+        tracking['consultadoEn']=timezone.now().isoformat()
         result.append({**row,'seguimientoRadicacion':project_intake_tracking(tracking)})
     return result

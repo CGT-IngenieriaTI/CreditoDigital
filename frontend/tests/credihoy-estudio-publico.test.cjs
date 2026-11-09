@@ -72,10 +72,11 @@ test('documentos del canal no muestran pagare de LINIX ni infieren una firma por
  const pending=renderToStaticMarkup(React.createElement(DocumentosAsociado,{institucion:{estado:'APROBADA_PENDIENTE_FIRMA'}}));
  assert.match(pending,/Preparacion documental pendiente/);
  assert.match(pending,/No hay un documento contractual disponible para firmar/);
- assert.doesNotMatch(pending,/Pagare|pagare|LINPAG|Documento firmado y verificado|<button|<a /);
+ assert.match(pending,/pagare LINPAG es un proceso diferente/);
+ assert.doesNotMatch(pending,/Documento firmado y verificado|Firmar pagare|<button|<a /);
  const verified=renderToStaticMarkup(React.createElement(DocumentosAsociado,{formalizacion:{documento:'COLO-FO.001',firmaAcreditada:true}}));
  assert.match(verified,/COLO-FO.001/);assert.match(verified,/Documento firmado y verificado/);
- assert.doesNotMatch(verified,/Pagare|pagare|LINPAG/);
+ assert.doesNotMatch(verified,/Firmar pagare|Firma del pagare/);
 });
 
 test('V8 consume capacidad disponible y residual separados sin reinterpretar el legacy',()=>{

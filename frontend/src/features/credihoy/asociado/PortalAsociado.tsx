@@ -44,6 +44,10 @@ export function fechaPublica(value:string){
   return new Date(/^\d{4}-\d{2}-\d{2}$/.test(value)?value+'T12:00:00-05:00':value)
     .toLocaleDateString('es-CO',{timeZone:'America/Bogota'});
 }
+export function fechaHoraPublica(value:string){
+  return /^\d{4}-\d{2}-\d{2}$/.test(value)?fechaPublica(value):new Date(value).toLocaleString('es-CO',
+    {timeZone:'America/Bogota',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
 const INCIDENCIAS={NO_DISPONIBLE:'No hay informacion de incidencias disponible al corte.',
   EN_REVISION:'Congente esta revisando una incidencia del tramite.',
   ANTECEDENTES_SIN_PENDIENTE_ACTIVO:'El tramite conserva antecedentes de revision, sin incidencias activas registradas al corte.',
@@ -84,6 +88,7 @@ export function DocumentosAsociado({formalizacion}:{institucion?:InstitucionalPu
         <div><dt>Documento contractual</dt><dd>{formalizacion?.documento??'Preparacion documental pendiente.'}</dd></div>
         <div><dt>Firma electronica</dt><dd>{formalizacion?.firmaAcreditada?'Documento firmado y verificado.':formalizacion?'Validacion documental pendiente.':'No hay un documento contractual disponible para firmar.'}</dd></div>
       </dl>
+      <p className="ca-notice">La formalizacion de COLO-FO.001 utiliza AutenTIC. El pagare LINPAG es un proceso diferente, gestionado por LINIX en su oportunidad.</p>
     </section>
   </div>;
 }
@@ -187,7 +192,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
         {vista==='solicitud'&&editando&&formularioBorrador}
         {s?.procedencia&&!editando&&<p className="ca-notice" role="status">
           {s.procedencia.origen==='HISTORICO_PILOTO'?'Solicitud anterior para consulta':'Informacion de tu solicitud'}.
-          {' Actualizada el '+fechaPublica(s.procedencia.actualizadoAt)+'.'}
+          {' Datos actualizados el '+fechaPublica(s.procedencia.actualizadoAt)+'. Estado consultado el '+fechaHoraPublica(s.seguimientoRadicacion?.consultadoEn??s.procedencia.consultadoAt)+'.'}
           {s.procedencia.origen==='HISTORICO_PILOTO'&&' Esta lectura no acredita aprobacion, firma del pagare ni avances de otro expediente.'}
         </p>}
         {!seguimientoHabilitado&&<EstadoVacio titulo="Tu acceso esta listo" icono={ShieldCheck}>
@@ -380,7 +385,11 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
           {estudioFavorable&&puedeConsultarCuota&&!s.formalizacionDocumental&&<button className="btn btn-outline-primary" type="button"
             disabled={busy} onClick={()=>setVista('simulador')}><Calculator size={17} aria-hidden="true"/>Revisar cuota y condiciones</button>}</>}
         {s&&vista==='historial'&&<>
-          <ol className="ca-history">
+          {s.historial?<ol className="ca-history">{s.historial.map(event=><li key={s.referencia+event.codigo}>
+            <span className={'ca-history-mark'+(event.estado==='CONFIRMADO'?' ca-history-mark--success':'')}>
+              {event.estado==='CONFIRMADO'?<CheckCircle2 size={18} aria-hidden="true"/>:<Clock3 size={18} aria-hidden="true"/>}</span>
+            <div>{event.fecha?<time dateTime={event.fecha}>{fechaHoraPublica(event.fecha)}</time>:<span className="ca-muted">{event.estado==='CONFIRMADO'?'Fecha por acreditar':'Pendiente'}</span>}
+              <h3>{event.titulo}</h3><p>{event.descripcion}</p></div></li>)}</ol>:<ol className="ca-history">
             <li><span className="ca-history-mark"><Files size={18} aria-hidden="true"/></span><div>
               <time dateTime={s.fechaCreacion}>{fechaPublica(s.fechaCreacion)}</time><h3>Solicitud registrada</h3><p>Tu solicitud forma parte de este tramite.</p></div></li>
             {institucion?<>
@@ -389,7 +398,7 @@ export function EspacioAsociado({solicitudes,busy,nombre,actualizar,salir,seguim
               <li><span className="ca-history-mark"><Clock3 size={18} aria-hidden="true"/></span><div>
                 <time dateTime={institucion.actualizadoAt}>{fechaPublica(institucion.actualizadoAt)}</time><h3>Firma pendiente al corte consultado</h3><p>Sin evidencia de firma disponible en esta consulta.</p></div></li>
             </>:<li><span className="ca-history-mark"><Clock3 size={18} aria-hidden="true"/></span><div><h3>{s.titulo}</h3><p>No hay una decision institucional acreditada disponible en esta vista.</p></div></li>}
-          </ol>{institucion&&<Aviso>{INCIDENCIAS[institucion.incidencias]}</Aviso>}
+          </ol>}{institucion&&<Aviso>{INCIDENCIAS[institucion.incidencias]}</Aviso>}
         </>}
         <div className="ca-bottom-actions"><button className="btn btn-outline-primary" onClick={actualizar} disabled={busy||!seguimientoHabilitado}>
           <RefreshCw size={16} aria-hidden="true"/>Actualizar estado</button></div>

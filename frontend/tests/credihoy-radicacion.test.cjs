@@ -32,6 +32,20 @@ test('seguimiento persistido dirige al estado institucional y nunca solicita otr
   const action=resolverSiguienteAccion({seguimientoRadicacion:t});
   assert.equal(action.estado,'COMPLETADO');assert.equal(action.destino,null);assert.match(action.mensaje,/revision institucional/);
 });
+test('historial conserva fechas originales y rechaza aprobacion o desembolso no acreditados',()=>{
+  const {publicInstitutionalFixture}=require('./helpers/cd8-fixture.cjs');
+  const {validarSolicitudPublica}=load('services/publico');
+  const now=Date.now(),created=new Date(now-7*86400000).toISOString(),accepted=new Date(now-2*86400000).toISOString(),registered=new Date(now-86400000).toISOString();
+  const s={...publicInstitutionalFixture(),institucional:null,fechaCreacion:created,
+    seguimientoRadicacion:{versionContrato:'credihoy-seguimiento-radicacion-v1',estado:'RADICADA',confirmada:true,
+      consultadoEn:new Date(now-100).toISOString(),cuotaAceptada:'204448',aceptadaEn:accepted,radicadaEn:registered,decisionInstitucional:'PENDIENTE',firmaContractual:'PENDIENTE'}};
+  const dates={SOLICITUD:created,ESTUDIO:null,CUOTA:accepted,RADICACION:registered,FORMALIZACION:null,DECISION:null,DESEMBOLSO:null};
+  s.historial=Object.entries(dates).map(([codigo,fecha])=>({codigo,fecha,titulo:codigo,descripcion:'SYNTHETIC',estado:fecha?'CONFIRMADO':'PENDIENTE'}));
+  assert.equal(validarSolicitudPublica(s,now).historial.find(e=>e.codigo==='RADICACION').fecha,registered);
+  for(const bad of [e=>e.codigo==='RADICACION'?{...e,fecha:created}:e,e=>e.codigo==='DESEMBOLSO'?{...e,estado:'CONFIRMADO'}:e])
+    assert.throws(()=>validarSolicitudPublica({...s,historial:s.historial.map(bad)},now));
+  assert.throws(()=>validarSolicitudPublica({...s,seguimientoRadicacion:{...s.seguimientoRadicacion,radicadaEn:created}},now));
+});
 test('aceptacion historica vigente al aceptar se conserva sin extender TTL ni permitir nueva aceptacion tardia',()=>{
   const now=Date.now(),begin=now-7200000,end=now-3600000;
   const s={version:'credihoy-simulacion-aceptable-v1',solicitudId:id,sha256:'a'.repeat(64),revisionReferencia:id,

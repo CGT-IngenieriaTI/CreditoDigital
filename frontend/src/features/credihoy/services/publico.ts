@@ -158,23 +158,28 @@ export type GuardarBorrador={operacion:'borrador';accion:'guardar'|'enviar';clav
   aceptacion:{version:string;sha256:string;presentacion:string;acepta:true}};
 export interface SeguimientoRadicacion {versionContrato:'credihoy-seguimiento-radicacion-v1';
   estado:'SIN_INTENCION'|'PREPARADA'|'EN_PROCESO'|'RADICADA'|'POR_CONFIRMAR'|'NO_DISPONIBLE';confirmada:boolean;
-  consultadoEn:string;cuotaAceptada:string|null;aceptadaEn:string|null;decisionInstitucional:'PENDIENTE';firmaContractual:'PENDIENTE'}
+  consultadoEn:string;cuotaAceptada:string|null;aceptadaEn:string|null;radicadaEn?:string;decisionInstitucional:'PENDIENTE';firmaContractual:'PENDIENTE'}
 export function validarSeguimientoRadicacion(raw:unknown,now=Date.now()):SeguimientoRadicacion {
   const p=obj(raw),date=(v:unknown)=>typeof v==='string'&&/(Z|[+-]\d{2}:\d{2})$/.test(v)&&Number.isFinite(Date.parse(v));
-  if(Object.keys(p).sort().join(',')!=='aceptadaEn,confirmada,consultadoEn,cuotaAceptada,decisionInstitucional,estado,firmaContractual,versionContrato'
+  if(Object.keys(p).filter(k=>k!=='radicadaEn').sort().join(',')!=='aceptadaEn,confirmada,consultadoEn,cuotaAceptada,decisionInstitucional,estado,firmaContractual,versionContrato'
     ||p.versionContrato!=='credihoy-seguimiento-radicacion-v1'||!['SIN_INTENCION','PREPARADA','EN_PROCESO','RADICADA','POR_CONFIRMAR','NO_DISPONIBLE'].includes(String(p.estado))
     ||typeof p.confirmada!=='boolean'||p.confirmada!==(p.estado==='RADICADA')||!date(p.consultadoEn)||Date.parse(String(p.consultadoEn))>now
     ||p.decisionInstitucional!=='PENDIENTE'||p.firmaContractual!=='PENDIENTE'
     ||(p.cuotaAceptada===null?(p.aceptadaEn!==null||p.estado!=='NO_DISPONIBLE'):
       (typeof p.cuotaAceptada!=='string'||!/^\d{1,12}(\.\d{1,2})?$/.test(p.cuotaAceptada)||Number(p.cuotaAceptada)<=0
         ||!date(p.aceptadaEn)||Date.parse(String(p.aceptadaEn))>Date.parse(String(p.consultadoEn)))))fail();
+  if(p.radicadaEn!==undefined&&(!p.confirmada||!date(p.radicadaEn)
+    ||Date.parse(String(p.radicadaEn))<Date.parse(String(p.aceptadaEn))||Date.parse(String(p.radicadaEn))>Date.parse(String(p.consultadoEn))))fail();
   return p as unknown as SeguimientoRadicacion;
 }
+export interface EventoHistorial {codigo:'SOLICITUD'|'ESTUDIO'|'CUOTA'|'RADICACION'|'FORMALIZACION'|'DECISION'|'PAGARE'|'DESEMBOLSO';
+  titulo:string;fecha:string|null;estado:'CONFIRMADO'|'PENDIENTE';descripcion:string}
 export interface SolicitudPublica { referencia:string; titulo:string; monto:string; plazoMeses:number;
   periodicidad:'Mensual'; fechaCreacion:string; requisitosCumplidos:number|null; pendientes:string[];
   siguientePaso:string; ofertaDisponible:false; acciones:{ radicar:false; firmar:false };simulacion?:SimulacionPublica|null;
   institucional?:InstitucionalPublica|null; estudio?:EstudioPublico|null;
   seguimientoRadicacion?:SeguimientoRadicacion;
+  historial?:EventoHistorial[];
   formalizacionDocumental?:{versionContrato:'credihoy-formalizacion-publica-v1';documento:'COLO-FO.001';
     estado:'DOCUMENTO_VERIFICADO'|'VALIDACION_PENDIENTE';firmaAcreditada:boolean;actualizadoAt:string;
     continuacionInstitucionalPendiente:true};
@@ -463,12 +468,31 @@ export function validarSolicitudPublica(raw:unknown,now=Date.now()):SolicitudPub
       ||typeof f.actualizadoAt!=='string'||!Number.isFinite(Date.parse(f.actualizadoAt))||Date.parse(f.actualizadoAt)>now)fail();
     formalizacionDocumental=f as unknown as NonNullable<SolicitudPublica['formalizacionDocumental']>;
   }
+  const seguimientoRadicacion=p.seguimientoRadicacion===undefined?undefined:validarSeguimientoRadicacion(p.seguimientoRadicacion,now);
+  let historial:EventoHistorial[]|undefined;
+  if(p.historial!==undefined){
+    if(!Array.isArray(p.historial)||p.historial.length<7||p.historial.length>8)fail();
+    const dates:Record<string,string|null>={SOLICITUD:String(p.fechaCreacion),ESTUDIO:estudio?.fechaEvaluacion??null,
+      CUOTA:seguimientoRadicacion?.aceptadaEn??null,RADICACION:seguimientoRadicacion?.radicadaEn??null,
+      FORMALIZACION:formalizacionDocumental?.firmaAcreditada?formalizacionDocumental.actualizadoAt:null,
+      DECISION:institucional?.fechaDecision??null,PAGARE:null,DESEMBOLSO:null};
+    const confirmed:Record<string,boolean>={SOLICITUD:true,ESTUDIO:Boolean(estudio),CUOTA:Boolean(seguimientoRadicacion?.aceptadaEn),
+      RADICACION:seguimientoRadicacion?.confirmada===true,FORMALIZACION:formalizacionDocumental?.firmaAcreditada===true,
+      DECISION:Boolean(institucional),PAGARE:false,DESEMBOLSO:false};
+    const seen=new Set<string>();
+    historial=(p.historial as unknown[]).map(raw=>{const e=obj(raw),code=String(e.codigo);
+      if(Object.keys(e).sort().join(',')!=='codigo,descripcion,estado,fecha,titulo'||!(code in dates)||seen.has(code)
+        ||code==='PAGARE'&&!institucional||e.fecha!==dates[code]||e.estado!==(confirmed[code]?'CONFIRMADO':'PENDIENTE')
+        ||typeof e.titulo!=='string'||e.titulo.length>100||typeof e.descripcion!=='string'||e.descripcion.length>250)fail();
+      seen.add(code);return e as unknown as EventoHistorial;});
+    if(['SOLICITUD','ESTUDIO','CUOTA','RADICACION','FORMALIZACION','DECISION','DESEMBOLSO'].some(c=>!seen.has(c)))fail();
+  }
   return {referencia:p.referencia as string,titulo:p.titulo as string,monto:p.monto as string,plazoMeses:p.plazoMeses as number,
     periodicidad:'Mensual',fechaCreacion:p.fechaCreacion as string,requisitosCumplidos:p.requisitosCumplidos as number|null,
     pendientes:[...p.pendientes as string[]],siguientePaso:p.siguientePaso as string,ofertaDisponible:false,acciones:{radicar:false,firmar:false},simulacion,institucional,
     ...(procedencia?{procedencia}:{}),...(estudio?{estudio}:{}),...(envio?{envio}:{}),...(simulacionLocal?{simulacionLocal}:{}),
     ...(formalizacionDocumental?{formalizacionDocumental}:{}),
-    ...(p.seguimientoRadicacion!==undefined?{seguimientoRadicacion:validarSeguimientoRadicacion(p.seguimientoRadicacion,now)}:{})};
+    ...(seguimientoRadicacion?{seguimientoRadicacion}:{}),...(historial?{historial}:{})};
 }
 
 export class AccesoAsociadoClient {

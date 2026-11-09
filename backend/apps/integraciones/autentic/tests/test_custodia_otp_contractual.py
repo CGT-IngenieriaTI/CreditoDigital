@@ -206,6 +206,47 @@ class ContractualStagingDocumentTests(TransactionTestCase):
 
 
 class ContractualOffTests(SimpleTestCase):
+    @override_settings(CREDIHOY_TITULAR_SECRET=SIGNING_KEY,CREDIHOY_IDENTIDAD_GRANTS_ENABLED=False,
+        CREDIHOY_INSTITUCIONAL_SECRET='other-synthetic-key')
+    def test_actual_signer_attestation_fails_without_native_identity_authorizer_and_keeps_controls(self):
+        import inspect
+        from apps.xcore_consumo.services.credihoy_v2.unico import publico_proveedores as pp,publico_institucional_http as http
+        from apps.xcore_consumo.public_access_models import OperacionVerifyCredihoy
+        namespace=dict(pp.__dict__);namespace.pop('_authorize_identity')
+        exec(compile(inspect.getsource(pp.acreditar_firmante),'native-relay-missing-dependency','exec'),namespace)
+        now=timezone.now();grant=SimpleNamespace(pk=uuid4(),estado='VERIFICADO',revocado=False,
+            verificado_at=now,sesion_expira_at=now+timedelta(minutes=10),verification_sid=VERIFICATION_SID,
+            verification_check_sid=VERIFICATION_SID,refresh_from_db=Mock())
+        identity=dict(numeroDocumento='900000001',primerApellido='PERSON',fechaExpedicion='2000-01-01',
+            canal='SMS',contacto='+573000000001',avisoVersion='SYNTHETIC')
+        raw=dict(primerNombre='SYNTHETIC',segundoNombre='',primerApellido='PERSON',segundoApellido='',
+            fechaExpedicion='01/01/2000',movilTelefono='3000000001',email='test@example.invalid')
+        client=Mock();client.consultar_socio.return_value=raw
+        args=dict(solicitud_id=str(uuid4()),pdf_sha256='a'*64,clave=str(uuid4()),request_id=str(uuid4()),
+            autoriza_firma=False,presentacion_contractual=True)
+        with patch.object(http,'_identity',return_value=identity),patch.object(http,'state_alias',return_value='default'), \
+                patch.object(OperacionVerifyCredihoy.objects,'using') as manager, \
+                patch.object(namespace['ConfiguracionApiDataV2'],'desde_settings',return_value=object()), \
+                patch.dict(namespace,{'ApiDataCrediHoyV2Client':Mock(return_value=client)}):
+            manager.return_value.filter.return_value.exists.return_value=True
+            with self.assertRaisesRegex(NameError,'_authorize_identity'):namespace['acreditar_firmante'](grant,**args)
+            client.consultar_socio.assert_not_called()
+            namespace['_authorize_identity']=pp._authorize_identity
+            import sys,types
+            producer=types.ModuleType('incluirtec.services.identity_credential')
+            producer.authorize_access_request=Mock(return_value=False)
+            with patch.object(pp,'_grants_enabled',return_value=True),patch.dict(sys.modules,{producer.__name__:producer}):
+                with self.assertRaisesRegex(ValueError,'IDENTITY_GRANT_DENIED'):namespace['acreditar_firmante'](grant,**args)
+                producer.authorize_access_request.assert_called_once()
+                client.consultar_socio.assert_not_called()
+            proof=namespace['acreditar_firmante'](grant,**args)
+            decoded=signing.loads(proof,key=SIGNING_KEY,salt='credihoy-firmante-institucional-v1')
+            self.assertIs(decoded['actoPersonalFirma'],False);self.assertIs(decoded['OTP9AEsFirma'],False)
+            self.assertEqual(decoded['pdfSha256'],args['pdf_sha256']);self.assertEqual(client.consultar_socio.call_count,1)
+            grant.verificado_at=now-timedelta(seconds=601)
+            with self.assertRaisesRegex(ValueError,'SESION_PERSONAL_RECIENTE'):namespace['acreditar_firmante'](grant,**args)
+            self.assertEqual(client.consultar_socio.call_count,1)
+
     @override_settings(CREDIHOY_CONTRACTUAL_RELE_ENABLED=True,CREDIHOY_TITULAR_SECRET=SIGNING_KEY,
         CREDIHOY_OTP_CONTRACTUAL_VERIFY_SID=SERVICE_SID,CREDIHOY_PUBLICO_VERIFY_SID='VA'+'c'*32,
         TWILIO_VERIFY_SID='VA'+'d'*32,TWILIO_VERIFY_API_KEY_SECRET='synthetic-relay-only-key')

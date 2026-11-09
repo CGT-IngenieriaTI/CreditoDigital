@@ -34,6 +34,94 @@ SERVICE_SID = 'VA'+'a'*32
 VERIFICATION_SID = 'VE'+'b'*32
 
 
+@override_settings(OTP_AES_KEY_B64=base64.b64encode(b'e'*32).decode())
+class ContractualStagingDocumentTests(TransactionTestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from apps.xcore_consumo.tasas_models import SeleccionTarifaCredihoy
+        from apps.xcore_consumo.services.credihoy_v2.unico.cotizacion import KEY,_huella_simulacion
+        self.actor=get_user_model().objects.create_user('synthetic-contractual-custodian',is_staff=True,is_superuser=True)
+        self.holder=Solicitante.objects.create(tipo_identificacion='CC',numero_identificacion='900000001',
+            primer_apellido='PERSON',fecha_expedicion=date(2000,1,1))
+        self.case=Solicitud.objects.create(solicitante=self.holder,producto=service.PRODUCTO,metadatos={'datosSinteticos':True})
+        now=timezone.now();self.session=str(uuid4());self.intent=str(uuid4())
+        sim=dict(version='credihoy-simulacion-aceptable-v1',solicitudId=str(self.case.pk),revisionReferencia=str(uuid4()),
+            versionCondiciones='a'*64,monto='400000.00',plazoMeses=2,tasaNominalNamv='16.670000',periodicidad='MENSUAL',
+            cuota='204448',calculadoEn=(now-timedelta(minutes=5)).isoformat(),vigenteHasta=(now+timedelta(minutes=5)).isoformat(),
+            planAproximado=True,firmaContractual=False,aprobacionInstitucional=False)
+        sim['sha256']=_huella_simulacion(sim)
+        accepted=dict(solicitudId=str(self.case.pk),simulacionSha256=sim['sha256'],versionCondiciones=sim['versionCondiciones'],
+            revisionReferencia=sim['revisionReferencia'],titularReferencia=sha256(self.holder.numero_identificacion.encode()).hexdigest(),
+            sesionReferencia=self.session,fecha=(now-timedelta(minutes=1)).isoformat(),requestId=str(uuid4()),acepta=True,
+            textoVersion='credihoy-aceptacion-simulacion-v1',firmaContractual=False,autorizaStart=False,autorizaDesembolso=False)
+        accepted['sha256']=_huella_simulacion(accepted)
+        audit=AuditLog.objects.create(solicitud=self.case,event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR',
+            actor='titular:'+self.session,request_id=accepted['requestId'],payload={'simulacionSha256':sim['sha256'],
+                'aceptacionSha256':accepted['sha256'],'autorizaStart':False,'autorizaDesembolso':False})
+        confirmation=AuditLog.objects.create(solicitud=self.case,event='CREDIHOY_RADICACION_PERSONAL_CONFIRMADA',
+            request_id=str(uuid4()),payload={'intencionId':self.intent,'comprobante':{'aceptacionAuditoriaId':audit.pk,
+                'simulacionSha256':sim['sha256'],'aceptacionSha256':accepted['sha256']}})
+        tariff=SeleccionTarifaCredihoy.objects.create(solicitud=self.case,responsable=self.actor,request_id=str(uuid4()),
+            evidencia={'fuente':'SYNTHETIC_ONLY'},evidencia_sha256='c'*64,
+            resultado={'tasaComercialNamv':'16.670000','tasaComercialEa':'18.01'})
+        self.detail=SolicitudConsumo.objects.create(solicitud=self.case,orchestration_data={KEY:{'motor':'PROPIO_390_111_CFA',
+            'simulacion':sim,'aceptacionesSimulacion':{sim['sha256']:accepted}},'originalPreservado':{'hash':'d'*64}})
+        self.source=dict(version='CREDIHOY_FUENTE_DOCUMENTAL_CD6_V1',solicitudId=str(self.case.pk),
+            titularReferencia=accepted['titularReferencia'],ambienteFirma='STAGING',estadoJournal='RADICADA',
+            autorizaDesembolso=False,intencionId=self.intent,fingerprint='f'*64,SC='SYNTHETIC_SC',K_FLUJO='SYNTHETIC_FLOW',
+            aceptacionAuditoriaId=audit.pk,confirmacionAuditoriaId=confirmation.pk,seleccionComercialId=tariff.pk,
+            perfilCore={'tipoNomina':'N'},payload={'solicitudId':str(self.case.pk),'intencionId':self.intent,
+                'titular':{'tipoDocumento':'CC','numeroDocumento':self.holder.numero_identificacion},
+                'producto':{'codigo':'390','modalidad':'111','destino':'CFA'},
+                'credito':{'montoSolicitado':'400000.00','tasaNominalAnual':'16.67','cuotaContractual':'204448.00',
+                    'plazoMeses':2,'periodicidad':'MENSUAL'},'contextoLinix':{'sucursal':'1','fechaSolicitud':'11/08/2026',
+                    'fechaCuotaOrdinaria':'01/01/2027','datosRadicacion':{'cliente':{'nombre':'SYNTHETIC PERSON',
+                        'email':'test@example.invalid','numeroCelular':'3000000001'}}}})
+        self.scope=dict(solicitudId=str(self.case.pk),titularReferencia=accepted['titularReferencia'],
+            fuenteSha256=sha256(json.dumps(self.source,sort_keys=True,separators=(',',':')).encode()).hexdigest())
+
+    def test_official_three_pages_custody_is_idempotent_without_productive_offer_or_personal_act(self):
+        from apps.documentos import formularios_credihoy as forms
+        from pypdf import PdfReader
+        key=str(uuid4());original=deepcopy(self.detail.orchestration_data)
+        with override_settings(CREDIHOY_AUTENTIC_STAGING_DOCUMENTAL=self.scope),patch.object(
+                forms,'_exigir_condiciones_definitivas',side_effect=AssertionError('MUST_NOT_FAKE_PRODUCTIVE_OFFER')):
+            one=forms.custodiar_colo001_staging(self.case.pk,actor=self.actor,fuente=self.source,clave_idempotencia=key)
+            two=forms.custodiar_colo001_staging(self.case.pk,actor=self.actor,fuente=self.source,clave_idempotencia=key)
+        self.assertEqual(one,two)
+        pdf,meta=forms.recuperar_formato(self.case.pk,actor=self.actor,operacion_id=key)
+        reader=PdfReader(BytesIO(pdf));self.assertEqual(len(reader.pages),3)
+        fields=reader.get_fields()
+        self.assertEqual(fields[MAPA['COLO-FO.001']['tasaEA']]['/V'],'18.01')
+        self.assertEqual(fields[MAPA['COLO-FO.001']['monto']]['/V'],'400000.00')
+        self.assertEqual(fields['Check Box4']['/V'],'/S\u00ed')
+        self.assertEqual(meta['ambienteFirma'],'STAGING');self.assertFalse(meta['firmaProductivaAcreditada'])
+        self.assertEqual(meta['cuotaAceptada'],'204448');self.assertFalse(meta['autorizaDesembolso'])
+        self.detail.refresh_from_db()
+        self.assertEqual({k:v for k,v in self.detail.orchestration_data.items() if k!='credihoy_pdf_oficiales_v1'},original)
+        self.assertFalse(OtpChallenge.objects.exists())
+        self.assertFalse(AuditLog.objects.filter(event__startswith='credihoy_contractual_').exists())
+        for original_page,final_page in zip(PdfReader(BytesIO(forms.original('COLO-FO.001')[0])).pages,reader.pages):
+            self.assertEqual(original_page.extract_text(),final_page.extract_text())
+
+    def test_unconfigured_or_other_holder_cannot_prepare_staging(self):
+        from apps.documentos import formularios_credihoy as forms
+        for scope in (None,{**self.scope,'solicitudId':str(uuid4())},{**self.scope,'titularReferencia':'f'*64}):
+            with override_settings(CREDIHOY_AUTENTIC_STAGING_DOCUMENTAL=scope):
+                with self.assertRaisesRegex(ValueError,'FUENTE_DOCUMENTAL_STAGING_NO_ACREDITADA'):
+                    forms.custodiar_colo001_staging(self.case.pk,actor=self.actor,fuente=self.source,clave_idempotencia=str(uuid4()))
+
+    def test_changed_financial_source_cannot_override_accepted_conditions(self):
+        from apps.documentos import formularios_credihoy as forms
+        for key,value in (('montoSolicitado','1'),('tasaNominalAnual','1'),('cuotaContractual','1')):
+            changed=deepcopy(self.source);changed['payload']['credito'][key]=value
+            # A changed deployment hash cannot override accepted financial evidence.
+            scope={**self.scope,'fuenteSha256':sha256(json.dumps(changed,sort_keys=True,separators=(',',':')).encode()).hexdigest()}
+            with override_settings(CREDIHOY_AUTENTIC_STAGING_DOCUMENTAL=scope):
+                with self.assertRaisesRegex(ValueError,'CONDICIONES_DOCUMENTALES_STAGING_NO_CONCORDANTES'):
+                    forms.custodiar_colo001_staging(self.case.pk,actor=self.actor,fuente=changed,clave_idempotencia=str(uuid4()))
+
+
 class ContractualOffTests(SimpleTestCase):
     def test_flag_off_blocks_before_models_or_provider(self):
         with override_settings(CREDIHOY_OTP_CONTRACTUAL_ENABLED=False), patch.object(service, 'Solicitud') as query:

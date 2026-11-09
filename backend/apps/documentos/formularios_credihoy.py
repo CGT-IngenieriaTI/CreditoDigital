@@ -77,7 +77,7 @@ def _diligenciar(codigo, campos, *, seleccion_comunicaciones=None, perfil=None):
     is guessed. Rendering is deliberately separate from acceptance and sending.
     """
     data,spec=original(codigo); mapping=MAPA[codigo]; values={}; evidence={}
-    extra={'medioPago'} if codigo=='COLO-FO.001' else set()
+    extra={'medioPago','tipoIdentificacion'} if codigo=='COLO-FO.001' else set()
     if type(campos) is not dict or set(campos)-set(mapping)-extra:raise ValueError('CAMPO_NO_MAPEADO_NO_AUTOCOMPLETAR')
     for key,item in campos.items():
         if (type(item) is not dict or set(item)!={'valor','referencia','verificado'} or item['verificado'] is not True
@@ -87,6 +87,9 @@ def _diligenciar(codigo, campos, *, seleccion_comunicaciones=None, perfil=None):
             if item['valor'] not in MEDIOS_PAGO:raise ValueError('MEDIO_PAGO_NO_ACREDITADO')
             for option,field in MEDIOS_PAGO.items():
                 values[field]='/S\u00ed' if option==item['valor'] else '/Off'
+        elif key=='tipoIdentificacion':
+            if item['valor']!='CC':raise ValueError('TIPO_IDENTIFICACION_DOCUMENTAL_NO_ACREDITADO')
+            values.update({'Check Box'+str(number):'/S\u00ed' if number==4 else '/Off' for number in range(4,9)})
         else:values[mapping[key]]=item['valor']
         evidence[key]=item['referencia']
     classification=None
@@ -858,3 +861,120 @@ def _validar_formato_titular(codigo,titular):
     from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import CONTRACTUAL_SCOPE
     expected='COLO-FO.001' if titular.get('_scopeContractual')==CONTRACTUAL_SCOPE else 'COLO-FO.023'
     if codigo!=expected:raise ValueError('FORMATO_NO_CORRESPONDE_AL_PROPOSITO_PERSONAL')
+
+
+def _validar_condiciones_staging(case, fuente, *, alias):
+    """An accepted own calculation is not a LINIX quote or a productive credit approval."""
+    from datetime import datetime
+    from decimal import Decimal
+    from django.conf import settings
+    from apps.utils.models import AuditLog
+    from apps.xcore_consumo.models import SolicitudConsumo
+    from apps.xcore_consumo.tasas_models import SeleccionTarifaCredihoy
+    from apps.xcore_consumo.services.credihoy_v2.unico.cotizacion import (
+        KEY, _validar_aceptacion_simulacion, _huella_simulacion)
+    scope = getattr(settings, 'CREDIHOY_AUTENTIC_STAGING_DOCUMENTAL', None)
+    if (type(scope) is not dict or set(scope) != {'solicitudId', 'titularReferencia', 'fuenteSha256'}
+            or scope['solicitudId'] != str(case.pk)
+            or scope['titularReferencia'] != sha256(case.solicitante.numero_identificacion.encode()).hexdigest()
+            or type(fuente) is not dict or fuente.get('version') != 'CREDIHOY_FUENTE_DOCUMENTAL_CD6_V1'
+            or fuente.get('solicitudId') != str(case.pk)
+            or fuente.get('titularReferencia') != scope['titularReferencia']
+            or scope['fuenteSha256'] != sha256(json.dumps(fuente, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            or fuente.get('ambienteFirma') != 'STAGING'
+            or fuente.get('estadoJournal') != 'RADICADA'
+            or fuente.get('autorizaDesembolso') is not False):
+        raise ValueError('FUENTE_DOCUMENTAL_STAGING_NO_ACREDITADA')
+    detail = SolicitudConsumo.objects.using(alias).get(solicitud=case)
+    entry = detail.orchestration_data.get(KEY, {})
+    try:
+        sim = entry['simulacion']
+        accepted = entry['aceptacionesSimulacion'][sim['sha256']]
+        _validar_aceptacion_simulacion(sim, accepted, scope['titularReferencia'])
+        if (entry['motor'] != 'PROPIO_390_111_CFA' or sim['sha256'] != _huella_simulacion({k:v for k,v in sim.items() if k != 'sha256'})
+                or not datetime.fromisoformat(sim['calculadoEn']) <= datetime.fromisoformat(accepted['fecha']) < datetime.fromisoformat(sim['vigenteHasta'])):
+            raise ValueError
+        audit = AuditLog.objects.using(alias).get(pk=fuente['aceptacionAuditoriaId'], solicitud=case,
+            event='CREDIHOY_SIMULACION_ACEPTADA_TITULAR', request_id=accepted['requestId'])
+        if (audit.payload != {'simulacionSha256':sim['sha256'], 'aceptacionSha256':accepted['sha256'],
+                'autorizaStart':False, 'autorizaDesembolso':False}
+                or audit.actor != 'titular:' + accepted['sesionReferencia']):
+            raise ValueError
+        confirmation = AuditLog.objects.using(alias).get(pk=fuente['confirmacionAuditoriaId'], solicitud=case,
+            event='CREDIHOY_RADICACION_PERSONAL_CONFIRMADA')
+        if (confirmation.payload['intencionId'] != fuente['intencionId']
+                or confirmation.payload['comprobante']['aceptacionAuditoriaId'] != audit.pk
+                or confirmation.payload['comprobante']['simulacionSha256'] != sim['sha256']
+                or confirmation.payload['comprobante']['aceptacionSha256'] != accepted['sha256']):
+            raise ValueError
+        payload = fuente['payload']
+        credit = payload['credito']
+        if (payload['solicitudId'] != str(case.pk) or payload['intencionId'] != fuente['intencionId']
+                or payload['titular']['numeroDocumento'] != case.solicitante.numero_identificacion
+                or payload['titular']['tipoDocumento'] != case.solicitante.tipo_identificacion
+                or payload['producto']['codigo'] != '390' or payload['producto']['modalidad'] != '111'
+                or payload['producto']['destino'] != 'CFA'
+                or any(Decimal(credit[key]) != Decimal(sim[other]) for key,other in (
+                    ('montoSolicitado','monto'),('tasaNominalAnual','tasaNominalNamv'),('cuotaContractual','cuota')))
+                or credit['plazoMeses'] != sim['plazoMeses'] or credit['periodicidad'] != sim['periodicidad']
+                or not fuente['SC'] or not fuente['K_FLUJO']):
+            raise ValueError
+        if (sim.get('version') != 'credihoy-simulacion-aceptable-v1' or sim.get('planAproximado') is not True
+                or sim.get('firmaContractual') is not False or sim.get('aprobacionInstitucional') is not False):
+            raise ValueError
+        selection = SeleccionTarifaCredihoy.objects.using(alias).get(pk=fuente['seleccionComercialId'], solicitud=case)
+        if (Decimal(selection.resultado['tasaComercialNamv']) != Decimal(sim['tasaNominalNamv'])
+                or Decimal(selection.resultado['tasaComercialEa']) <= 0):
+            raise ValueError
+        return {'simulacion':sim, 'aceptacion':accepted, 'tasaEA':selection.resultado['tasaComercialEa'],
+            'referenciaTarifa':'SELECCION_COMERCIAL:'+str(selection.pk)+':'+selection.evidencia_sha256,
+            'fuenteSha256':scope['fuenteSha256']}
+    except (KeyError,TypeError,ValueError,AttributeError):
+        raise ValueError('CONDICIONES_DOCUMENTALES_STAGING_NO_CONCORDANTES') from None
+
+
+def custodiar_colo001_staging(solicitud_id, *, actor, fuente, clave_idempotencia):
+    """Prepare the official three pages in native encrypted custody; no personal act or send."""
+    from datetime import datetime
+    from uuid import UUID
+    from django.db import transaction
+    key = str(UUID(str(clave_idempotencia)))
+    case, alias, actor_ref = _contexto_formato(solicitud_id, actor, None, 'add_eventodocumental')
+    conditions = _validar_condiciones_staging(case, fuente, alias=alias)
+    context = fuente['payload']['contextoLinix']
+    customer = context['datosRadicacion']['cliente']
+    date = datetime.strptime(context['fechaSolicitud'], '%m/%d/%Y').date()
+    first = datetime.strptime(context['fechaCuotaOrdinaria'], '%m/%d/%Y').date()
+    if not customer['nombre'] or not customer['email'] or not customer['numeroCelular']:
+        raise ValueError('IDENTIDAD_DOCUMENTAL_STAGING_INCOMPLETA')
+    ref = 'JOURNAL_CD6:' + fuente['fingerprint']
+    fields = {'sucursal':str(context['sucursal']), 'nombre':customer['nombre'],
+        'identificacion':case.solicitante.numero_identificacion, 'tipoIdentificacion':case.solicitante.tipo_identificacion,
+        'celular':customer['numeroCelular'],
+        'correo':customer['email'], 'monto':conditions['simulacion']['monto'],
+        'plazo':str(conditions['simulacion']['plazoMeses']), 'periodicidad':conditions['simulacion']['periodicidad'],
+        'destino':fuente['payload']['producto']['destino'], 'tasaEA':conditions['tasaEA'],
+        'primerVencimiento':first.isoformat(), 'fechaDia':str(date.day), 'fechaMes':str(date.month), 'fechaAnio':str(date.year)}
+    medium = {'N':'NOMINA','V':'VENTANILLA'}.get(fuente['perfilCore']['tipoNomina'])
+    if medium is None:
+        raise ValueError('FORMA_PAGO_DOCUMENTAL_NO_ACREDITADA')
+    fields['medioPago'] = medium
+    verified = {name:{'valor':str(value), 'referencia':conditions['referenciaTarifa'] if name == 'tasaEA' else ref,
+        'verificado':True} for name,value in fields.items()}
+    pdf, meta = _diligenciar('COLO-FO.001', verified, perfil=('390','111','CFA'))
+    if len(PdfReader(BytesIO(pdf)).pages) != 3:
+        raise ValueError('COLO001_STAGING_REQUIERE_TRES_PAGINAS')
+    meta.update(solicitudId=str(case.pk), ambienteFirma='STAGING', firmaProductivaAcreditada=False,
+        fuenteDocumentalSha256=conditions['fuenteSha256'], simulacionSha256=conditions['simulacion']['sha256'],
+        aceptacionSimulacionSha256=conditions['aceptacion']['sha256'],
+        cuotaAceptada=conditions['simulacion']['cuota'], tasaNominalNamv=conditions['simulacion']['tasaNominalNamv'],
+        SC=fuente['SC'], K_FLUJO=fuente['K_FLUJO'],
+        tipoFechaPlan='SOLICITADA_EN_RADICACION_NO_CALENDARIO_DESEMBOLSO',
+        autorizaStart=False, autorizaDesembolso=False)
+    with transaction.atomic(using=alias):
+        case, _, _ = _contexto_formato(solicitud_id, actor, None, 'add_eventodocumental', bloquear=True)
+        repeated = _validar_condiciones_staging(case, fuente, alias=alias)
+        if repeated != conditions:
+            raise ValueError('CONDICIONES_DOCUMENTALES_CAMBIARON')
+        return _custodiar_pdf(case, actor=actor, titular=None, alias=alias, actor_ref=actor_ref,
+            key=key, pdf=pdf, meta=meta, event='CREDIHOY_PDF_OFICIAL_CUSTODIADO')

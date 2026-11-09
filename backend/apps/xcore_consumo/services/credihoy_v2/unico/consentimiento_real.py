@@ -1343,6 +1343,7 @@ def operar_contractual(identity,action):
     sid,key=str(UUID(action['solicitudId'])),str(UUID(action['clave']))
     scope=alcance_contractual(sid,identity)
     name=action['accion'];document=None;pending=[];signed=None
+    independent_verified=False
     if name=='contractual_presentar':
         document=presentar_documento_contractual(sid,identity,documento_operacion_id=scope['documentoOperacionId'],clave=key)
     elif name=='contractual_aceptar':
@@ -1407,6 +1408,7 @@ def operar_contractual(identity,action):
                 try:
                     result=inspeccionar_evidencia_custodiada(sid,actor=None,titular=identity,envio_id=key)
                     pending=result.get('pendientes',[])
+                    independent_verified=bool(scope.get('documentoPrueba') and result.get('firmaAcreditada') is True)
                 except (ImportError,ModuleNotFoundError):pending=['VERIFICADOR_DOCUMENTAL_NO_DISPONIBLE_EN_RUNTIME']
         finally:client.close()
     case,alias=_contexto_contractual(sid,identity)
@@ -1417,7 +1419,7 @@ def operar_contractual(identity,action):
     if getattr(settings,'CREDIHOY_AUTENTIC_CONTRACTUAL_STAGING_ENVIO_ENABLED',False) is not True:
         pending.append('TRANSPORTE_FIRMA_STAGING_NO_HABILITADO')
     return {'versionContrato':'credihoy-contractual-staging-v1','solicitudId':sid,'operacionFirmaId':key,
-        'ambiente':'STAGING','estado':sent['estado'] if sent else record['estado'],
+        'ambiente':'STAGING','estado':'PRUEBA_FIRMA_VERIFICADA' if independent_verified else sent['estado'] if sent else record['estado'],
         'pdfSha256':scope['pdfSha256'],'documento':document,'firmado':signed,'pendientes':pending,
         'otpProveedor':'TWILIO_VERIFY','otpVerificado':record['estado']=='OTP_VALIDADA',
         'firmaProductivaAcreditada':False,'autorizaDesembolso':False}

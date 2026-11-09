@@ -103,7 +103,8 @@ export function EstadoContractual({estado}:{estado:string}){
     FIRMA_REPORTADA_NO_VERIFICADA:'Respuesta de firma recibida. El documento y su evidencia aun deben verificarse.',
     FALLO_DEFINITIVO_DOCUMENTADO:'El servicio informo que la firma no se completo. Congente debe revisar el resultado antes de otro intento.',
     CONCILIADA_PROCESADA:'El servicio confirmo el procesamiento. La recuperacion y verificacion documental siguen pendientes.',
-    CONCILIADA_NO_PROCESADA:'Se confirmo que este envio no fue procesado. Otro intento requiere habilitacion y un nuevo acto personal.'};
+    CONCILIADA_NO_PROCESADA:'Se confirmo que este envio no fue procesado. Otro intento requiere habilitacion y un nuevo acto personal.',
+    PRUEBA_FIRMA_VERIFICADA:'Prueba independiente de firma verificada. No formaliza tu credito ni resuelve el envio anterior.'};
   return <p role="status">{textos[estado]??'La formalizacion esta pendiente de revision. Consulta su estado sin repetir el envio.'}</p>;
 }
 

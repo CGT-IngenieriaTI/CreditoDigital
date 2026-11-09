@@ -146,8 +146,10 @@ def read_owned(identity, payload):
     from .autoservicio import leer_enviadas
     submitted = leer_enviadas(identity, payload)
     if submitted and 'solicitudId' in payload:
-        from .cotizacion import seguimiento_radicacion_titular
-        return seguimiento_radicacion_titular(identity, submitted)
+        if getattr(settings, 'CREDIHOY_RADICACION_TITULAR_ENABLED', False) is True:
+            from .cotizacion import seguimiento_radicacion_titular
+            return seguimiento_radicacion_titular(identity, submitted)
+        return submitted
     alias = getattr(settings, 'CREDIHOY_SEGUIMIENTO_DB_ALIAS', '')
     if alias not in {'default', 'historico'} or alias not in settings.DATABASES or (not getattr(settings, 'CREDIHOY_SEGUIMIENTO_SOURCE_REFERENCE', '')):
         raise wire.NoDisponible
@@ -187,8 +189,10 @@ def read_owned(identity, payload):
             row = {'referencia': str(s.pk), 'titulo': 'Estamos verificando tu solicitud', 'monto': str(s.monto_solicitado), 'plazoMeses': s.plazo_solicitado, 'periodicidad': 'Mensual', 'fechaCreacion': s.created_at.isoformat(), 'requisitosCumplidos': None, 'pendientes': ['Comunicate con Congente para revisar el estado.'], 'siguientePaso': 'Espera la revision de Congente.', 'ofertaDisponible': False, 'acciones': {'radicar': False, 'firmar': False}, 'institucional': None, 'simulacion': None} if alias == 'historico' else estado_publico(s)
             row['procedencia'] = {'origen': 'HISTORICO_PILOTO' if alias == 'historico' else 'FUENTE_OPERATIVA', 'estadoRegistrado': s.get_estado_display(), 'actualizadoAt': s.updated_at.isoformat(), 'consultadoAt': timezone.now().isoformat()}
             rows.append(wire.project_row(row))
-    from .cotizacion import seguimiento_radicacion_titular
-    return seguimiento_radicacion_titular(identity, (submitted + rows)[:20])
+    if getattr(settings, 'CREDIHOY_RADICACION_TITULAR_ENABLED', False) is True:
+        from .cotizacion import seguimiento_radicacion_titular
+        return seguimiento_radicacion_titular(identity, (submitted + rows)[:20])
+    return (submitted + rows)[:20]
 
 
 def claim_delegation(rid):

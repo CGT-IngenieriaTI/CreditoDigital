@@ -203,7 +203,7 @@ export function DocumentosAsociado({formalizacion,staging}:{institucion?:Institu
       <div className="ca-band-heading"><span className="ca-icon-tile"><FileCheck2 size={23} aria-hidden="true"/></span>
         <div><p className="ch-eyebrow">Documentos del canal</p><h3 id="ca-document-title">Documentos y firma electronica</h3></div></div>
       <dl className="ca-authorizations">
-        <div><dt>Documento contractual</dt><dd>{formalizacion?.documento??staging?.documento??'Preparacion documental pendiente.'}</dd></div>
+        <div><dt>{staging?.documento==='PRUEBA-FIRMA-STAGING'?'Documento de prueba':'Documento contractual'}</dt><dd>{staging?.documento==='PRUEBA-FIRMA-STAGING'?'Documento independiente autorizado':formalizacion?.documento??staging?.documento??'Preparacion documental pendiente.'}</dd></div>
         <div><dt>Firma electronica</dt><dd>{formalizacion?.firmaAcreditada?'Documento firmado y verificado.':staging?'Recorrido STAGING disponible. La firma productiva sigue pendiente.':formalizacion?'Validacion documental pendiente.':'No hay un documento contractual disponible para firmar.'}</dd></div>
       </dl>
       <p className="ca-notice">La formalizacion de COLO-FO.001 utiliza firma electronica. El pagare se gestiona por el canal institucional en su oportunidad.</p>

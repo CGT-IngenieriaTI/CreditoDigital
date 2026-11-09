@@ -175,7 +175,17 @@ class ContractualStagingDocumentTests(TransactionTestCase):
         with_act=deepcopy(updated)
         with_act['orchestration_data']['credihoy_otp_contractual_v1']={act:{
             'sha256':service._digest_contractual(record),'contenidoCifrado':encrypt_text(service._json_contractual(record))}}
-        self.assertTrue(verificar_custodia_contractual_posterior(with_act,body,cutoff,self.case))
+        import ast,inspect
+        from apps.xcore_consumo.services.credihoy_v2.unico import funcional
+        tree=ast.parse(inspect.getsource(huella_consumo_estudio))
+        for node in ast.walk(tree):
+            if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='downstream' for t in node.targets):
+                node.value.elts=[e for e in node.value.elts if e.value not in {'credihoy_otp_contractual_v1','credihoy_formalizacion_autentic_v1'}]
+        namespace=dict(huella_consumo_estudio.__globals__);exec(compile(tree,'native-v19-study-hash','exec'),namespace)
+        native_hash=namespace['huella_consumo_estudio']
+        self.assertNotEqual(native_hash(with_act,version),expected)
+        with patch.object(funcional,'huella_consumo_estudio',native_hash):
+            self.assertTrue(verificar_custodia_contractual_posterior(with_act,body,cutoff,self.case))
         self.assertFalse(verificar_custodia_contractual_posterior(with_act,body,cutoff))
         corrupted=deepcopy(with_act);corrupted['orchestration_data']['credihoy_otp_contractual_v1'][act]['sha256']='0'*64
         self.assertFalse(verificar_custodia_contractual_posterior(corrupted,body,cutoff,self.case))

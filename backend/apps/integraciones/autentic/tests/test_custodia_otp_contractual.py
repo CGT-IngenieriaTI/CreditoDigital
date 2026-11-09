@@ -155,6 +155,38 @@ class ContractualOTPTests(TransactionTestCase):
         return service.presentar_documento_contractual(self.case.pk, self.identity,
             documento_operacion_id=self.doc, clave=self.send)
 
+    def test_native_contractual_scope_can_custody_official_three_page_form_without_signing(self):
+        from apps.documentos import formularios_credihoy as forms
+        fields={k:{'valor':v,'referencia':'SYNTHETIC_VERIFIED_CONDITIONS','verificado':True}
+            for k,v in {'identificacion':self.holder.numero_identificacion,'nombre':'SYNTHETIC PERSON',
+                'monto':'400000','plazo':'2','tasaEA':'18.01','periodicidad':'MENSUAL',
+                'primerVencimiento':'2026-12-10'}.items()}
+        conditions={'condicionesSolicitadas':{'monto':'400000','numeroCuotas':2,'periodicidad':'MENSUAL'},
+            'tasaEaPorcentaje':'18.01','primeraFechaPago':'2026-12-10','composicionSha256':'a'*64}
+        key=str(uuid4())
+        with patch.object(forms,'_exigir_condiciones_definitivas',return_value=conditions):
+            first=forms.custodiar_formato(self.case.pk,actor=None,titular=self.identity,codigo='COLO-FO.001',
+                campos=fields,clave_idempotencia=key)
+            repeated=forms.custodiar_formato(self.case.pk,actor=None,titular=self.identity,codigo='COLO-FO.001',
+                campos=fields,clave_idempotencia=key)
+        pdf,meta=forms.recuperar_formato(self.case.pk,actor=None,titular=self.identity,operacion_id=key)
+        from pypdf import PdfReader
+        self.assertEqual(len(PdfReader(BytesIO(pdf)).pages),3)
+        self.assertEqual(first,repeated);self.assertEqual(meta['pdfSha256'],sha256(pdf).hexdigest())
+        self.assertFalse(meta['firmaAcreditada']);self.assertFalse(meta['envioHabilitado'])
+        self.assertEqual(self.client.mock_calls,[]);self.assertFalse(OtpChallenge.objects.exists())
+
+    def test_document_scope_cannot_replace_centrals_contract_or_expired_session(self):
+        from apps.documentos import formularios_credihoy as forms
+        with self.assertRaisesRegex(ValueError,'FORMATO_NO_CORRESPONDE'):
+            forms.diligenciar_para_expediente(self.case.pk,actor=None,titular=self.identity,
+                codigo='COLO-FO.023',campos={})
+        for identity in ({**self.identity,'_sesionExpiraAt':(timezone.now()-timedelta(seconds=1)).isoformat()},
+                {**self.identity,'numeroDocumento':'900000002'}):
+            with self.assertRaises((ValueError,Solicitud.DoesNotExist)):
+                forms.diligenciar_para_expediente(self.case.pk,actor=None,titular=identity,
+                    codigo='COLO-FO.001',campos={})
+
     def accept(self):
         presented = self.present()
         return service.aceptar_documento_contractual(self.case.pk, self.identity,

@@ -116,6 +116,11 @@ class PersonalConfirmationTests(TransactionTestCase):
             change=personal_history_view_change(definition,role,[{'grantee':role,'privilege':'SELECT','grantable':False}])
             cursor.execute(change['forward'])
             cursor.execute('SELECT registro_id,confirmado_en FROM public.credihoy_radicacion_personal_publica')
+            original_rows=cursor.fetchall()
+            cursor.execute('SELECT to_json(confirmado_en) FROM public.credihoy_radicacion_personal_publica')
+            from datetime import datetime
+            self.assertEqual(datetime.fromisoformat(cursor.fetchone()[0]),original_rows[0][1])
+            cursor.execute('SELECT registro_id,confirmado_en FROM public.credihoy_radicacion_personal_publica')
             self.assertEqual(cursor.fetchall(),[(event.pk,event.created_at)])
             cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='credihoy_radicacion_personal_publica'")
             self.assertNotIn('payload',[r[0] for r in cursor.fetchall()])

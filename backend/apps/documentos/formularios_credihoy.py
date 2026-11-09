@@ -144,7 +144,7 @@ def _contexto_formato(solicitud_id, actor, titular, permiso, *, bloquear=False):
 
 def diligenciar_para_expediente(solicitud_id, *, actor, codigo, campos, seleccion_comunicaciones=None,titular=None):
     case,_,_=_contexto_formato(solicitud_id,actor,titular,'view_versiondocumental')
-    if titular is not None and codigo!='COLO-FO.023':raise ValueError('CANAL_TITULAR_SOLO_COLO023')
+    _validar_formato_titular(codigo,titular)
     if case.producto!='CREDIHOY UNICO (NUEVO)':raise ValueError('FORMATO_DE_OTRO_PRODUCTO')
     quote=_validar_condiciones_en_campos(case,campos) if codigo=='COLO-FO.001' else None
     pdf,evidence=_diligenciar(codigo,campos,seleccion_comunicaciones=seleccion_comunicaciones,
@@ -537,7 +537,7 @@ def custodiar_formato(solicitud_id, *, actor, codigo, campos, clave_idempotencia
     from uuid import UUID
     from django.db import transaction
     _,alias,actor_ref=_contexto_formato(solicitud_id,actor,titular,'add_eventodocumental')
-    if titular is not None and codigo!='COLO-FO.023':raise ValueError('CANAL_TITULAR_SOLO_COLO023')
+    _validar_formato_titular(codigo,titular)
     key=str(UUID(str(clave_idempotencia)))
     prepared=None
     if codigo=='COLO-FO.023':
@@ -851,3 +851,10 @@ def recuperar_firmas_contractuales(*, actor, cliente, referencia_autorizacion, l
     return {'estado': 'RECUPERACION_CONCILIADA', 'procesadas': len(results), 'estados': results, 'firmasEnviadas': 0, 'START': 0, 'SC': 0}
 
 _RECUPERACION_TECNICA=ContextVar('credihoy_recuperacion_documental',default=None)
+
+
+def _validar_formato_titular(codigo,titular):
+    if titular is None:return
+    from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import CONTRACTUAL_SCOPE
+    expected='COLO-FO.001' if titular.get('_scopeContractual')==CONTRACTUAL_SCOPE else 'COLO-FO.023'
+    if codigo!=expected:raise ValueError('FORMATO_NO_CORRESPONDE_AL_PROPOSITO_PERSONAL')

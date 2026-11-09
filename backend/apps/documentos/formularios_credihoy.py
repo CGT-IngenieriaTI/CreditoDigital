@@ -360,6 +360,12 @@ def enviar_formato_custodiado(solicitud_id, *, actor, operacion_id, metadata,
         if proof['documentoOperacionId']!=str(operacion_id):raise ValueError('PDF_DE_OTRA_ACEPTACION')
         metadata=request.payload['metadata']
     else:request=preparar_firma(metadata,{document['codigo']+'.pdf':pdf})
+    accepted=None
+    if titular is not None and document['codigo']=='COLO-FO.001' and document.get('ambienteFirma')=='STAGING':
+        from apps.xcore_consumo.services.credihoy_v2.unico.cotizacion import comprobante_simulacion_aceptada
+        from apps.xcore_consumo.services.credihoy_v2.unico.publico_restringido import fuente_cotizacion
+        with fuente_cotizacion():
+            accepted=comprobante_simulacion_aceptada(case,titular)
     history_key='credihoy_autentic_envios_v1'
     with transaction.atomic(using=alias):
         case,_,_=_contexto_formato(solicitud_id,actor,titular,'add_eventodocumental',bloquear=True)
@@ -390,9 +396,16 @@ def enviar_formato_custodiado(solicitud_id, *, actor, operacion_id, metadata,
                 raise ValueError('FIRMA_CONTRACTUAL_REQUIERE_ACTO_PERSONAL_Y_OTP')
             if document.get('ambienteFirma')=='STAGING':
                 from apps.xcore_consumo.services.credihoy_v2.unico.publico_institucional import alcance_contractual
-                from apps.xcore_consumo.services.credihoy_v2.unico.cotizacion import comprobante_simulacion_aceptada
+                from apps.xcore_consumo.services.credihoy_v2.unico.cotizacion import KEY,_simulacion_persistida_para_continuidad
                 scope=alcance_contractual(case.pk,titular)
-                accepted=comprobante_simulacion_aceptada(case,titular)
+                simulation,current_acceptance=_simulacion_persistida_para_continuidad(data.get(KEY,{}),str(case.pk),
+                    sha256(case.solicitante.numero_identificacion.encode()).hexdigest())
+                if (accepted is None or current_acceptance is None
+                        or simulation['sha256']!=accepted['simulacionSha256']
+                        or current_acceptance['sha256']!=accepted['aceptacionSha256']
+                        or simulation['versionCondiciones']!=accepted['versionCondiciones']
+                        or simulation['revisionReferencia']!=accepted['revisionReferencia']):
+                    raise ValueError('SIMULACION_ACEPTADA_CAMBIO_DURANTE_FIRMA')
                 if (getattr(cliente.config,'perfil',None)!='STAGING' or cliente.config.ambiente!='DEV'
                         or str(operacion_id)!=scope['documentoOperacionId'] or document['pdfSha256']!=scope['pdfSha256']
                         or document.get('firmaProductivaAcreditada') is not False

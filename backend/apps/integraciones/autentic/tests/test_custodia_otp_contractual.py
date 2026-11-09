@@ -518,13 +518,30 @@ class ContractualOTPTests(TransactionTestCase):
         params=dict(actor=None,titular=self.identity,operacion_id=self.doc,metadata=None,clave_idempotencia=self.send,
             cliente=client,registro=RegistroFirmasExpediente(self.case.pk,self.send),
             referencia_autorizacion='SYNTHETIC-STAGING-PERSONAL',autoriza_firma=True)
+        from django.db import connections
+        from apps.xcore_consumo.services.credihoy_v2.unico.publico_restringido import fuente_cotizacion
+        accepted={'simulacionSha256':'d'*64,'aceptacionSha256':'e'*64,'cuota':'204448',
+            'versionCondiciones':'f'*64,'revisionReferencia':str(uuid4())}
+        def accepted_read(*args):
+            self.assertFalse(connections['default'].in_atomic_block)
+            return accepted
+        simulation={'sha256':'d'*64,'versionCondiciones':accepted['versionCondiciones'],'revisionReferencia':accepted['revisionReferencia']}
         with override_settings(CREDIHOY_AUTENTIC_TITULAR_ENVIO_ENABLED=False,
                 CREDIHOY_AUTENTIC_CONTRACTUAL_STAGING_ENVIO_ENABLED=True,CREDIHOY_CONTRACTUAL_STAGING_ALCANCE=self.staging_scope()),\
                 patch('apps.xcore_consumo.services.credihoy_v2.unico.cotizacion.comprobante_simulacion_aceptada',
-                    return_value={'simulacionSha256':'d'*64,'aceptacionSha256':'e'*64,'cuota':'204448'}),\
+                    side_effect=accepted_read),\
+                patch('apps.xcore_consumo.services.credihoy_v2.unico.publico_restringido.fuente_cotizacion',wraps=fuente_cotizacion) as source,\
+                patch('apps.xcore_consumo.services.credihoy_v2.unico.cotizacion._simulacion_persistida_para_continuidad',
+                    return_value=(simulation,{'sha256':'e'*64})) as locked_simulation,\
                 patch.object(forms,'_exigir_condiciones_definitivas',side_effect=AssertionError('NO_FAKE_PRODUCTIVE_APPROVAL')):
+            locked_simulation.return_value=({**simulation,'sha256':'a'*64},{'sha256':'e'*64})
+            with self.assertRaisesRegex(ValueError,'SIMULACION_ACEPTADA_CAMBIO_DURANTE_FIRMA'):
+                forms.enviar_formato_custodiado(self.case.pk,**params)
+            self.assertEqual(len(session.calls),0)
+            locked_simulation.return_value=(simulation,{'sha256':'e'*64})
             first=forms.enviar_formato_custodiado(self.case.pk,**params)
             second=forms.enviar_formato_custodiado(self.case.pk,**params)
+            self.assertEqual(source.call_count,3)
         self.assertEqual(len(session.calls),2)
         self.assertEqual(first['estado'],'FIRMA_REPORTADA_NO_VERIFICADA');self.assertFalse(first['firmaAcreditada'])
         self.assertFalse(second['reenvioPermitido'])

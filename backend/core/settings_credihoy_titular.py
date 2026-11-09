@@ -45,7 +45,8 @@ def configurar_otp_contractual(environ, databases, *, session_key, delegation_ke
             raise ValueError
         result = {'ENABLED': flags[0] == '1', 'ENVIO_ENABLED': flags[1] == '1',
                   'HMAC_KEY': '', 'DB_ALIAS': '', 'VERIFY_SID': ''}
-        if result['ENABLED']:
+        provisioned = any(environ.get(prefix + name, '') for name in ('VERIFY_SID', 'HMAC_KEY_FILE'))
+        if result['ENABLED'] or provisioned:
             key = privado(environ.get(prefix + 'HMAC_KEY_FILE', ''))
             alias = environ.get(prefix + 'DB_ALIAS', 'default')
             sid = environ.get(prefix + 'VERIFY_SID', '')
@@ -300,8 +301,10 @@ LOGGING = {'version': 1, 'disable_existing_loggers': False,
 
 _otp_contractual = configurar_otp_contractual(os.environ, DATABASES,
     session_key=SECRET_KEY, delegation_key=CREDIHOY_TITULAR_SECRET,
-    login_sid=globals().get('CREDIHOY_PUBLICO_VERIFY_SID', '') or os.environ.get('CREDIHOY_PUBLICO_VERIFY_SID', ''),
-    centrales_sid=globals().get('TWILIO_VERIFY_SID', '') or os.environ.get('TWILIO_VERIFY_SID', ''))
+    login_sid=globals().get('CREDIHOY_PUBLICO_VERIFY_SID', '') or os.environ.get('CREDIHOY_PUBLICO_VERIFY_SID', '')
+        or os.environ.get('CREDIHOY_OTP_CONTRACTUAL_INGRESO_SID_REFERENCIA', ''),
+    centrales_sid=globals().get('TWILIO_VERIFY_SID', '') or os.environ.get('TWILIO_VERIFY_SID', '')
+        or os.environ.get('CREDIHOY_OTP_CONTRACTUAL_CENTRALES_SID_REFERENCIA', ''))
 CREDIHOY_OTP_CONTRACTUAL_ENABLED = _otp_contractual['ENABLED']
 CREDIHOY_OTP_CONTRACTUAL_ENVIO_ENABLED = _otp_contractual['ENVIO_ENABLED']
 CREDIHOY_OTP_CONTRACTUAL_HMAC_KEY = _otp_contractual['HMAC_KEY']

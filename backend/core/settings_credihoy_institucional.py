@@ -41,3 +41,29 @@ if CREDIHOY_SEGUIMIENTO_ENABLED or cfg.get('titularUrl'):
     CREDIHOY_TITULAR_SECRET = secreto('CREDIHOY_TITULAR_SECRET')
     if (len(CREDIHOY_TITULAR_SECRET)<48 or CREDIHOY_TITULAR_SECRET==CREDIHOY_INSTITUCIONAL_SECRET):
         raise ImproperlyConfigured('Credencial de seguimiento independiente requerida')
+
+
+def configurar_verify_contractual(environ, *, login_sid, centrales_sid):
+    """Provision the separate service without enabling sends or changing other purposes."""
+    import re
+    prefix = 'CREDIHOY_OTP_CONTRACTUAL_'
+    sid = environ.get(prefix + 'VERIFY_SID', '')
+    if not sid and not any(name.startswith(prefix) for name in environ):
+        return ''
+    if (any(environ.get(prefix + name, '0') != '0' for name in ('ENABLED', 'ENVIO_ENABLED'))
+            or environ.get(prefix + 'AMBIENTE') != 'STAGING'
+            or any(type(value) is not str or not re.fullmatch(r'VA[a-fA-F0-9]{32}', value)
+                   for value in (sid, login_sid, centrales_sid))
+            or sid.lower() in {login_sid.lower(), centrales_sid.lower()}):
+        raise ImproperlyConfigured('CONFIGURACION_VERIFY_CONTRACTUAL_INVALIDA')
+    return sid
+
+
+CREDIHOY_OTP_CONTRACTUAL_VERIFY_SID = configurar_verify_contractual(os.environ,
+    login_sid=CREDIHOY_PUBLICO_VERIFY_SID, centrales_sid=TWILIO_VERIFY_SID)
+
+
+CREDIHOY_OTP_CONTRACTUAL_ENABLED = False
+
+
+CREDIHOY_OTP_CONTRACTUAL_ENVIO_ENABLED = False

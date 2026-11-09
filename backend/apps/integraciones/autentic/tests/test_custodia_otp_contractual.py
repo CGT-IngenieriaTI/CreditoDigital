@@ -663,6 +663,42 @@ class ContractualOTPTests(TransactionTestCase):
                 presentacion=presented['presentacion'], acepta=True, clave=str(uuid4()))
         self.assertEqual(self.client.mock_calls, [])
 
+    def test_contractual_form_reader_reuses_bounded_audit_and_rejects_trial_collisions(self):
+        from apps.documentos import formularios_credihoy as forms
+        with patch.object(service,'_auditorias_contractuales',wraps=service._auditorias_contractuales) as audit:
+            pdf,meta=forms.recuperar_formato(self.case.pk,actor=None,titular=self.identity,operacion_id=self.doc)
+            self.assertEqual(pdf,self.pdf);self.assertEqual(meta['pdfSha256'],self.pdf_sha)
+            events=[call.args[2] for call in audit.call_args_list]
+            self.assertIn('CREDIHOY_PDF_ENSAYO_SIMULACION_CUSTODIADO',events)
+            self.assertIn('CREDIHOY_PDF_OFICIAL_CUSTODIADO',events)
+        trial=AuditLog.objects.create(solicitud=self.case,event='CREDIHOY_PDF_ENSAYO_SIMULACION_CUSTODIADO',request_id=self.doc,payload={})
+        with self.assertRaisesRegex(ValueError,'PDF_SIMULACION_REQUIERE_PROPOSITO_EXPLICITO'):
+            forms.recuperar_formato(self.case.pk,actor=None,titular=self.identity,operacion_id=self.doc)
+        AuditLog.objects.create(solicitud=self.case,event=trial.event,request_id=self.doc,payload={})
+        with self.assertRaisesRegex(ValueError,'CUSTODIA_DOCUMENTAL_DUPLICADA'):
+            forms.recuperar_formato(self.case.pk,actor=None,titular=self.identity,operacion_id=self.doc)
+        self.assertEqual(self.client.mock_calls, [])
+
+    def test_expired_verified_confirmed_but_unclaimed_staging_act_can_only_start_a_new_personal_review(self):
+        self.full_act();case=self.case;record=self.record();now=timezone.now()
+        confirmation={'confirmadaEn':now.isoformat(),'requestId':str(uuid4()),'pdfSha256':self.pdf_sha,'ambiente':'STAGING'}
+        record['confirmacionFirma']=confirmation
+        service._guardar_contractual(case,'default',self.send,record)
+        service._auditar_contractual(case,'default','firma_confirmada',self.send,confirmation)
+        self.detail.refresh_from_db();data=deepcopy(self.detail.orchestration_data)
+        meta=data['credihoy_pdf_oficiales_v1'][self.doc]['metadata'];meta.update(ambienteFirma='STAGING',firmaProductivaAcreditada=False)
+        envelope=json.loads(decrypt_text(data['credihoy_pdf_oficiales_v1'][self.doc]['contenidoCifrado']));envelope['metadata']=meta
+        data['credihoy_pdf_oficiales_v1'][self.doc]['contenidoCifrado']=encrypt_text(json.dumps(envelope))
+        self.detail.orchestration_data=data;self.detail.save(update_fields=['orchestration_data'])
+        record=self.record()
+        with override_settings(CREDIHOY_CONTRACTUAL_AMBIENTE='STAGING'):
+            self.assertFalse(service.puede_renovar_revision_contractual(case,'default',record,self.send))
+            with patch.object(service.timezone,'now',return_value=now+timedelta(minutes=21)):
+                self.assertTrue(service.puede_renovar_revision_contractual(case,'default',record,self.send))
+                case.consumo_detail.orchestration_data['credihoy_autentic_envios_v1']={'different':{'vinculo':{'pdfSha256':self.pdf_sha},'estado':'INDETERMINADA'}}
+                self.assertFalse(service.puede_renovar_revision_contractual(case,'default',record,self.send))
+        self.client.start_verification.assert_called_once();self.client.check_verification.assert_called_once()
+
     def test_institutional_assertion_keeps_existing_exact_keys_act_time_and_reference_checks(self):
         token = self.identity['_firmanteInstitucional']
         original = signing.loads(token, key=SIGNING_KEY, salt='credihoy-firmante-institucional-v1')

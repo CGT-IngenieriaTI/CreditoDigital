@@ -1408,7 +1408,25 @@ def operar_contractual(identity,action):
 
 
 def puede_renovar_revision_contractual(case, alias, record, key):
-    """Renew only expired unsent acts or acknowledged, unused expired deliveries."""
+    """Allow a new personal review only after an expired act without a signature claim."""
+    claims = case.consumo_detail.orchestration_data.get('credihoy_autentic_envios_v1', {})
+    if any(entry.get('vinculo', {}).get('pdfSha256') == record['vinculo']['pdfSha256'] for entry in claims.values()):
+        return False
+    if record['estado'] == 'OTP_VALIDADA' and record.get('confirmacionFirma'):
+        if getattr(settings, 'CREDIHOY_CONTRACTUAL_AMBIENTE', '') != 'STAGING':
+            return False
+        if _digest_contractual(record) != _digest_contractual(_leer_contractual(case, key)):
+            return False
+        proof = _validar_prueba_contractual(case, key, record['vinculo']['pdfSha256'], alias)
+        _, meta = _documento_contractual(case, record['vinculo']['documentoOperacionId'], historico=True)
+        challenge = _challenge_contractual(case, alias, record)
+        confirmation = record['confirmacionFirma']
+        _exigir_auditoria_contractual(case, alias, 'firma_confirmada', key, confirmation)
+        end = min(challenge.expira_at, _fecha_contractual(record['vinculo']['sesionExpiraAt']))
+        return (meta.get('ambienteFirma') == 'STAGING' and meta.get('firmaProductivaAcreditada') is False
+            and confirmation.get('ambiente') == 'STAGING' and confirmation.get('pdfSha256') == proof['pdfSha256']
+            and _fecha_contractual(proof['verificadoEn']) <= _fecha_contractual(confirmation['confirmadaEn']) < end
+            and timezone.now() >= end+timedelta(seconds=60))
     recovered_expiry = record['estado'] == 'OTP_EXPIRADA' and bool(record.get('recuperacionEnvio'))
     if recovered_expiry:
         challenge = _challenge_contractual(case, alias, record)

@@ -720,13 +720,20 @@ def recuperar_formato(solicitud_id, *, actor, operacion_id,titular=None,proposit
     case,alias,_=_contexto_formato(solicitud_id,actor,titular,'view_versiondocumental')
     key=str(UUID(str(operacion_id)))
     from apps.utils.models import AuditLog
-    trial=AuditLog.objects.using(alias).filter(solicitud=case,
-        event='CREDIHOY_PDF_ENSAYO_SIMULACION_CUSTODIADO',request_id=key)
-    if trial.count()>1:raise ValueError('CUSTODIA_DOCUMENTAL_DUPLICADA')
-    if trial.exists():
+    from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import CONTRACTUAL_SCOPE,_auditorias_contractuales,_documento_contractual
+    contractual=titular is not None and titular.get('_scopeContractual')==CONTRACTUAL_SCOPE
+    if contractual:
+        trials=_auditorias_contractuales(case,alias,'CREDIHOY_PDF_ENSAYO_SIMULACION_CUSTODIADO',key)
+    else:
+        trial=AuditLog.objects.using(alias).filter(solicitud=case,
+            event='CREDIHOY_PDF_ENSAYO_SIMULACION_CUSTODIADO',request_id=key)
+        if trial.count()>1:raise ValueError('CUSTODIA_DOCUMENTAL_DUPLICADA')
+        trials=[trial.get().payload] if trial.exists() else []
+    if len(trials)>1:raise ValueError('CUSTODIA_DOCUMENTAL_DUPLICADA')
+    if trials:
         if titular is not None and proposito!='SIMULACION_NO_CONTRACTUAL':
             raise ValueError('PDF_SIMULACION_REQUIERE_PROPOSITO_EXPLICITO')
-        stored=trial.get().payload
+        stored=trials[0]
         envelope=json.loads(decrypt_text(stored['contenidoCifrado']))
         pdf=base64.b64decode(envelope['pdfBase64'],validate=True)
         if (envelope['solicitudId']!=str(case.pk) or envelope['operacionId']!=key
@@ -749,6 +756,8 @@ def recuperar_formato(solicitud_id, *, actor, operacion_id,titular=None,proposit
                 raise ValueError('PDF_SIMULACION_DE_OTRO_TITULAR_O_PROPOSITO')
         return pdf,dict(stored['metadata'])
     if proposito is not None:raise ValueError('PDF_SIMULACION_EXISTENTE_NO_ENCONTRADO')
+    if contractual:
+        return _documento_contractual(case,key)
     detail=SolicitudConsumo.objects.using(alias).get(solicitud=case)
     stored=detail.orchestration_data['credihoy_pdf_oficiales_v1'][key]
     if titular is not None:

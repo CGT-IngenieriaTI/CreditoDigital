@@ -109,6 +109,12 @@ def _diligenciar(codigo, campos, *, seleccion_comunicaciones=None, perfil=None):
     reader=PdfReader(BytesIO(data));writer=PdfWriter();writer.clone_document_from_reader(reader)
     if len(writer.pages)!=spec['paginas']:raise ValueError('PAGINAS_OFICIALES_NO_COINCIDEN')
     for page in writer.pages:
+        if codigo=='COLO-FO.001':
+            from pypdf.generic import NameObject,TextStringObject
+            for reference in page.get('/Annots',[]):
+                widget=reference.get_object()
+                if widget.get('/FT')=='/Tx' and widget.get('/T') in values:
+                    widget[NameObject('/DA')]=TextStringObject('/Helv 10 Tf 0 g')
         writer.update_page_form_field_values(page,values,auto_regenerate=False)
     output=BytesIO();writer.write(output); rendered=output.getvalue()
     return rendered,{'versionContrato':'credihoy-pdf-oficial-diligenciado-v1','codigo':codigo,
@@ -933,7 +939,7 @@ def _validar_condiciones_staging(case, fuente, *, alias):
         raise ValueError('CONDICIONES_DOCUMENTALES_STAGING_NO_CONCORDANTES') from None
 
 
-def custodiar_colo001_staging(solicitud_id, *, actor, fuente, clave_idempotencia):
+def custodiar_colo001_staging(solicitud_id, *, actor, fuente, clave_idempotencia, preparacion_anterior=None):
     """Prepare the official three pages in native encrypted custody; no personal act or send."""
     from datetime import datetime
     from uuid import UUID
@@ -965,6 +971,7 @@ def custodiar_colo001_staging(solicitud_id, *, actor, fuente, clave_idempotencia
     if len(PdfReader(BytesIO(pdf)).pages) != 3:
         raise ValueError('COLO001_STAGING_REQUIERE_TRES_PAGINAS')
     meta.update(solicitudId=str(case.pk), ambienteFirma='STAGING', firmaProductivaAcreditada=False,
+        versionDiligenciamiento='CREDIHOY_COLO001_APARIENCIAS_V2',
         fuenteDocumentalSha256=conditions['fuenteSha256'], simulacionSha256=conditions['simulacion']['sha256'],
         aceptacionSimulacionSha256=conditions['aceptacion']['sha256'],
         cuotaAceptada=conditions['simulacion']['cuota'], tasaNominalNamv=conditions['simulacion']['tasaNominalNamv'],
@@ -976,5 +983,16 @@ def custodiar_colo001_staging(solicitud_id, *, actor, fuente, clave_idempotencia
         repeated = _validar_condiciones_staging(case, fuente, alias=alias)
         if repeated != conditions:
             raise ValueError('CONDICIONES_DOCUMENTALES_CAMBIARON')
+        if preparacion_anterior is not None:
+            from apps.xcore_consumo.models import SolicitudConsumo
+            detail=SolicitudConsumo.objects.using(alias).get(solicitud=case)
+            previous=detail.orchestration_data.get('credihoy_pdf_oficiales_v1',{}).get(str(UUID(str(preparacion_anterior))))
+            if (previous is None or previous['metadata'].get('ambienteFirma')!='STAGING'
+                    or previous['metadata'].get('codigo')!='COLO-FO.001'
+                    or previous['metadata'].get('fuenteDocumentalSha256')!=conditions['fuenteSha256']
+                    or detail.orchestration_data.get('credihoy_otp_contractual_v1')
+                    or detail.orchestration_data.get('credihoy_autentic_envios_v1')):
+                raise ValueError('DOCUMENTO_CON_ACTO_PERSONAL_NO_RECTIFICAR')
+            meta['rectificacionDe']=str(preparacion_anterior)
         return _custodiar_pdf(case, actor=actor, titular=None, alias=alias, actor_ref=actor_ref,
             key=key, pdf=pdf, meta=meta, event='CREDIHOY_PDF_OFICIAL_CUSTODIADO')

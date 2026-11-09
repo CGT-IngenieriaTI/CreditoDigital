@@ -95,6 +95,11 @@ class ContractualStagingDocumentTests(TransactionTestCase):
         self.assertEqual(fields[MAPA['COLO-FO.001']['tasaEA']]['/V'],'18.01')
         self.assertEqual(fields[MAPA['COLO-FO.001']['monto']]['/V'],'400000.00')
         self.assertEqual(fields['Check Box4']['/V'],'/S\u00ed')
+        for page in reader.pages:
+            for reference in page.get('/Annots',[]):
+                widget=reference.get_object()
+                if widget.get('/FT')=='/Tx' and widget.get('/T') in meta['camposDiligenciados']:
+                    self.assertEqual(widget.get('/DA'),'/Helv 10 Tf 0 g')
         self.assertEqual(meta['ambienteFirma'],'STAGING');self.assertFalse(meta['firmaProductivaAcreditada'])
         self.assertEqual(meta['cuotaAceptada'],'204448');self.assertFalse(meta['autorizaDesembolso'])
         self.detail.refresh_from_db()
@@ -110,6 +115,23 @@ class ContractualStagingDocumentTests(TransactionTestCase):
             with override_settings(CREDIHOY_AUTENTIC_STAGING_DOCUMENTAL=scope):
                 with self.assertRaisesRegex(ValueError,'FUENTE_DOCUMENTAL_STAGING_NO_ACREDITADA'):
                     forms.custodiar_colo001_staging(self.case.pk,actor=self.actor,fuente=self.source,clave_idempotencia=str(uuid4()))
+
+    def test_rectification_keeps_previous_bytes_and_blocks_after_a_personal_act(self):
+        from apps.documentos import formularios_credihoy as forms
+        original_key,corrected_key=map(str,(uuid4(),uuid4()))
+        with override_settings(CREDIHOY_AUTENTIC_STAGING_DOCUMENTAL=self.scope):
+            forms.custodiar_colo001_staging(self.case.pk,actor=self.actor,fuente=self.source,clave_idempotencia=original_key)
+            previous=forms.recuperar_formato(self.case.pk,actor=self.actor,operacion_id=original_key)
+            corrected=forms.custodiar_colo001_staging(self.case.pk,actor=self.actor,fuente=self.source,
+                clave_idempotencia=corrected_key,preparacion_anterior=original_key)
+            self.assertEqual(corrected['rectificacionDe'],original_key)
+            self.assertEqual(previous,forms.recuperar_formato(self.case.pk,actor=self.actor,operacion_id=original_key))
+            self.detail.refresh_from_db()
+            self.detail.orchestration_data['credihoy_otp_contractual_v1']={'synthetic-personal-act':{}}
+            self.detail.save(update_fields=['orchestration_data'])
+            with self.assertRaisesRegex(ValueError,'DOCUMENTO_CON_ACTO_PERSONAL_NO_RECTIFICAR'):
+                forms.custodiar_colo001_staging(self.case.pk,actor=self.actor,fuente=self.source,
+                    clave_idempotencia=str(uuid4()),preparacion_anterior=corrected_key)
 
     def test_changed_financial_source_cannot_override_accepted_conditions(self):
         from apps.documentos import formularios_credihoy as forms

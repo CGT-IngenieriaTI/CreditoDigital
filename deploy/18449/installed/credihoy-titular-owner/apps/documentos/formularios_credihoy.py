@@ -1,4 +1,6 @@
 """Official AcroForms, not reconstructed documents or electronic signatures."""
+
+from contextvars import ContextVar
 from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
@@ -62,7 +64,7 @@ def _diligenciar(codigo, campos, *, seleccion_comunicaciones=None, perfil=None):
     is guessed. Rendering is deliberately separate from acceptance and sending.
     """
     data,spec=original(codigo); mapping=MAPA[codigo]; values={}; evidence={}
-    extra={'medioPago'} if codigo=='COLO-FO.001' else set()
+    extra={'medioPago','tipoIdentificacion'} if codigo=='COLO-FO.001' else set()
     if type(campos) is not dict or set(campos)-set(mapping)-extra:raise ValueError('CAMPO_NO_MAPEADO_NO_AUTOCOMPLETAR')
     for key,item in campos.items():
         if (type(item) is not dict or set(item)!={'valor','referencia','verificado'} or item['verificado'] is not True
@@ -72,6 +74,9 @@ def _diligenciar(codigo, campos, *, seleccion_comunicaciones=None, perfil=None):
             if item['valor'] not in MEDIOS_PAGO:raise ValueError('MEDIO_PAGO_NO_ACREDITADO')
             for option,field in MEDIOS_PAGO.items():
                 values[field]='/S\u00ed' if option==item['valor'] else '/Off'
+        elif key=='tipoIdentificacion':
+            if item['valor']!='CC':raise ValueError('TIPO_IDENTIFICACION_DOCUMENTAL_NO_ACREDITADO')
+            values.update({'Check Box'+str(number):'/S\u00ed' if number==4 else '/Off' for number in range(4,9)})
         else:values[mapping[key]]=item['valor']
         evidence[key]=item['referencia']
     classification=None
@@ -91,6 +96,12 @@ def _diligenciar(codigo, campos, *, seleccion_comunicaciones=None, perfil=None):
     reader=PdfReader(BytesIO(data));writer=PdfWriter();writer.clone_document_from_reader(reader)
     if len(writer.pages)!=spec['paginas']:raise ValueError('PAGINAS_OFICIALES_NO_COINCIDEN')
     for page in writer.pages:
+        if codigo=='COLO-FO.001':
+            from pypdf.generic import NameObject,TextStringObject
+            for reference in page.get('/Annots',[]):
+                widget=reference.get_object()
+                if widget.get('/FT')=='/Tx' and widget.get('/T') in values:
+                    widget[NameObject('/DA')]=TextStringObject('/Helv 10 Tf 0 g')
         writer.update_page_form_field_values(page,values,auto_regenerate=False)
     output=BytesIO();writer.write(output); rendered=output.getvalue()
     return rendered,{'versionContrato':'credihoy-pdf-oficial-diligenciado-v1','codigo':codigo,
@@ -109,24 +120,41 @@ def _contexto_formato(solicitud_id,actor,titular,permiso,*,bloquear=False):
     if titular is None:
         from .services import _permiso_documental,_expediente_documental
         _permiso_documental(actor,permiso)
+        if _RECUPERACION_TECNICA.get()==(str(solicitud_id),str(actor.pk)):
+            from apps.solicitudes.models import Solicitud
+            query=Solicitud.objects.select_related('solicitante')
+            if bloquear:query=query.select_for_update(of=('self',))
+            case=query.get(pk=solicitud_id,producto='CREDIHOY UNICO (NUEVO)',asesor__isnull=True,
+                metadatos__modo='AUTOGESTION_ENVIADA')
+            return case,'default',str(actor.pk)
         return _expediente_documental(solicitud_id,actor,bloquear=bloquear),'default',str(actor.pk)
     if actor is not None:raise ValueError('NO_MEZCLAR_ACTOR_Y_TITULAR')
-    from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import obtener_autogestion
-    case,alias=obtener_autogestion(solicitud_id,titular,lock=bloquear)
+    from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import obtener_autogestion,_contexto_contractual,CONTRACTUAL_SCOPE
+    if titular.get('_scopeContractual')==CONTRACTUAL_SCOPE:
+        case,alias=_contexto_contractual(solicitud_id,titular,lock=bloquear)
+    else:
+        case,alias=obtener_autogestion(solicitud_id,titular,lock=bloquear)
     return case,alias,'titular:'+titular['_sesionReferencia']
 
 
-def diligenciar_para_expediente(solicitud_id, *, actor, codigo, campos, seleccion_comunicaciones=None,titular=None):
-    case,_,_=_contexto_formato(solicitud_id,actor,titular,'view_versiondocumental')
-    if titular is not None and codigo!='COLO-FO.023':raise ValueError('CANAL_TITULAR_SOLO_COLO023')
-    if case.producto!='CREDIHOY UNICO (NUEVO)':raise ValueError('FORMATO_DE_OTRO_PRODUCTO')
-    pdf,evidence=_diligenciar(codigo,campos,seleccion_comunicaciones=seleccion_comunicaciones,
-        perfil=('390','111','CFA'))
-    if evidence['identidadDocumentalReferencia'] not in (None,sha256(case.solicitante.numero_identificacion.encode()).hexdigest()):
+def diligenciar_para_expediente(solicitud_id, *, actor, codigo, campos, seleccion_comunicaciones=None, titular=None):
+    (case, _, _) = _contexto_formato(solicitud_id, actor, titular, 'view_versiondocumental')
+    if titular is not None and codigo != 'COLO-FO.023':
+        raise ValueError('CANAL_TITULAR_SOLO_COLO023')
+    if case.producto != 'CREDIHOY UNICO (NUEVO)':
+        raise ValueError('FORMATO_DE_OTRO_PRODUCTO')
+    quote = _validar_condiciones_en_campos(case, campos) if codigo == 'COLO-FO.001' else None
+    (pdf, evidence) = _diligenciar(codigo, campos, seleccion_comunicaciones=seleccion_comunicaciones, perfil=('390', '111', 'CFA'))
+    if evidence['identidadDocumentalReferencia'] not in (None, sha256(case.solicitante.numero_identificacion.encode()).hexdigest()):
         raise ValueError('IDENTIFICACION_DOCUMENTAL_DE_OTRO_EXPEDIENTE')
-    evidence['solicitudId']=str(case.pk)
-    # Bytes go to existing private documentary custody, never a public asset/log.
-    return pdf,evidence
+    evidence['solicitudId'] = str(case.pk)
+    if quote is not None:
+        evidence['composicionSha256'] = quote['composicionSha256']
+        offer = quote.get('ofertaVersionada')
+        if offer is not None:
+            (pdf, link) = _anexar_oferta_versionada(case, pdf, quote, campos)
+            evidence.update(link, pdfSha256=sha256(pdf).hexdigest())
+    return (pdf, evidence)
 
 
 def preparar_autentic_para_expediente(solicitud_id, *, actor, codigo, campos, metadata,
@@ -234,7 +262,7 @@ def enviar_formato_custodiado(solicitud_id, *, actor, operacion_id, metadata,
     from apps.integraciones.autentic.contratos import AutenticError,preparar_firma
     from apps.integraciones.autentic.operaciones import RegistroFirmas,RegistroFirmasExpediente
     if titular is not None:
-        if getattr(settings,'CREDIHOY_AUTENTIC_TITULAR_ENVIO_ENABLED',False) is not True:
+        if not _envio_personal_habilitado(solicitud_id,titular):
             raise ValueError('ENVIO_PERSONAL_AUTENTIC_CERRADO')
         if actor is not None or metadata is not None:raise ValueError('FIRMANTE_NO_ADMITE_CAMPOS_LIBRES')
     case,alias,actor_ref=_contexto_formato(solicitud_id,actor,titular,'add_eventodocumental')
@@ -244,45 +272,102 @@ def enviar_formato_custodiado(solicitud_id, *, actor, operacion_id, metadata,
     cliente._documentos_autorizados(referencia_autorizacion)
     key=str(UUID(str(clave_idempotencia)))
     pdf,document=recuperar_formato(solicitud_id,actor=actor,titular=titular,operacion_id=operacion_id)
+    if document.get('codigo')==PDF_ENSAYO:raise ValueError('PDF_SIMULACION_NO_ADMITE_FIRMA')
+    if document.get('anexoOferta',{}).get('homologacionAcreditada') is False:
+        raise ValueError('ANEXO_OFERTA_PENDIENTE_HOMOLOGACION')
+    formalization=None
     proof=None
     if titular is not None:
-        from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import preparar_envio_autogestion
+        from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import preparar_envio_autogestion,preparar_envio_contractual,CONTRACTUAL_SCOPE
+        contractual=titular.get('_scopeContractual')==CONTRACTUAL_SCOPE
+        independent=document['codigo']=='PRUEBA-FIRMA-STAGING'
+        if independent:
+            from apps.xcore_consumo.services.credihoy_v2.unico.publico_institucional import alcance_contractual
+            scope=alcance_contractual(case.pk,titular)
+            if (not contractual or scope.get('documentoPrueba',{}).get('codigo')!=document['codigo']
+                    or scope['documentoOperacionId']!=str(operacion_id) or scope['pdfSha256']!=document['pdfSha256']
+                    or document.get('ambienteFirma')!='STAGING' or document.get('proposito')!='PRUEBA_INTEGRACION_AUTENTIC'
+                    or document.get('firmaProductivaAcreditada') is not False or document.get('autorizaDesembolso') is not False):
+                raise ValueError('PRUEBA_FIRMA_INDEPENDIENTE_NO_VINCULADA')
         if (not isinstance(registro,RegistroFirmasExpediente) or registro.alias!=alias
                 or str(registro.solicitud_id)!=str(case.pk) or registro.envio_id!=key
-                or registro.seccion!='journalFirma' or document['codigo']!='COLO-FO.023'):
+                or registro.seccion!='journalFirma' or document['codigo']!=('PRUEBA-FIRMA-STAGING' if independent else 'COLO-FO.001' if contractual else 'COLO-FO.023')):
             raise ValueError('JOURNAL_PERSONAL_NO_VINCULADO')
-        request,proof=preparar_envio_autogestion(case.pk,titular,identidad_firmante=identidad_firmante,
-            clave=key,autoriza_firma=autoriza_firma)
+        if contractual:
+            if autoriza_firma is not True:raise ValueError('ACTO_PERSONAL_DE_FIRMA_REQUERIDO')
+            request,proof=preparar_envio_contractual(case.pk,titular,key)
+        else:
+            request,proof=preparar_envio_autogestion(case.pk,titular,identidad_firmante=identidad_firmante,
+                clave=key,autoriza_firma=autoriza_firma)
         if proof['documentoOperacionId']!=str(operacion_id):raise ValueError('PDF_DE_OTRA_ACEPTACION')
         metadata=request.payload['metadata']
     else:request=preparar_firma(metadata,{document['codigo']+'.pdf':pdf})
+    accepted=None
+    if titular is not None and document['codigo']=='COLO-FO.001' and document.get('ambienteFirma')=='STAGING':
+        from apps.xcore_consumo.services.credihoy_v2.unico.cotizacion import comprobante_simulacion_aceptada
+        from apps.xcore_consumo.services.credihoy_v2.unico.publico_restringido import fuente_cotizacion
+        with fuente_cotizacion():
+            accepted=comprobante_simulacion_aceptada(case,titular)
     history_key='credihoy_autentic_envios_v1'
     with transaction.atomic(using=alias):
         case,_,_=_contexto_formato(solicitud_id,actor,titular,'add_eventodocumental',bloquear=True)
         if metadata.get('docId')!=case.solicitante.numero_identificacion:raise ValueError('FIRMANTE_DE_OTRO_EXPEDIENTE')
         if document.get('identidadDocumentalReferencia')!=sha256(metadata['docId'].encode()).hexdigest():
             raise ValueError('IDENTIDAD_EN_PDF_NO_ACREDITADA')
-        if document['codigo']=='COLO-FO.001':
-            quote=_exigir_condiciones_definitivas(case)
-            if not document.get('composicionSha256') or document['composicionSha256']!=quote.get('composicionSha256'):
-                raise ValueError('COLO001_COMPOSICION_CAMBIO')
         detail=SolicitudConsumo.objects.using(alias).select_for_update().get(solicitud=case)
         data=detail.orchestration_data;history=dict(data.get(history_key,{}))
         binding={'solicitudId':str(case.pk),'documentoOperacionId':str(operacion_id),
             'codigo':document['codigo'],'pdfSha256':document['pdfSha256'],
             'firmanteReferencia':sha256(metadata['docId'].encode()).hexdigest(),
             'fingerprint':request.fingerprint,'referenciaAutorizacion':referencia_autorizacion}
+        if proof is not None and document['codigo'] in {'COLO-FO.001','PRUEBA-FIRMA-STAGING'}:
+            binding.update(aceptacionContractualReferencia=proof['referencia'],
+                secureKeySha256=sha256(metadata['secureKey'].encode()).hexdigest())
+        if document.get('ambienteFirma')=='STAGING':
+            if getattr(cliente.config,'perfil',None)!='STAGING' or cliente.config.ambiente!='DEV':
+                raise ValueError('COLO001_STAGING_NO_VINCULADO')
+            binding.update(ambienteFirma='STAGING',ambienteProveedor='DEV',firmaProductivaAcreditada=False)
         if key in history:
             if history[key]['vinculo']!=binding:raise ValueError('IDEMPOTENCIA_DOCUMENTO_CONFLICTO')
             return {'operacionId':key,'estado':history[key]['estado'],'firmaAcreditada':False,
                 'reenvioPermitido':False}
         if any(v['vinculo']['pdfSha256']==document['pdfSha256'] for v in history.values()):
             raise ValueError('DOCUMENTO_YA_RECLAMADO_CONCILIAR')
+        if document['codigo']=='COLO-FO.001':
+            if titular is None or not contractual or proof is None:
+                raise ValueError('FIRMA_CONTRACTUAL_REQUIERE_ACTO_PERSONAL_Y_OTP')
+            if document.get('ambienteFirma')=='STAGING':
+                from apps.xcore_consumo.services.credihoy_v2.unico.publico_institucional import alcance_contractual
+                from apps.xcore_consumo.services.credihoy_v2.unico.cotizacion import KEY,_simulacion_persistida_para_continuidad
+                scope=alcance_contractual(case.pk,titular)
+                simulation,current_acceptance=_simulacion_persistida_para_continuidad(data.get(KEY,{}),str(case.pk),
+                    sha256(case.solicitante.numero_identificacion.encode()).hexdigest())
+                if (accepted is None or current_acceptance is None
+                        or simulation['sha256']!=accepted['simulacionSha256']
+                        or current_acceptance['sha256']!=accepted['aceptacionSha256']
+                        or simulation['versionCondiciones']!=accepted['versionCondiciones']
+                        or simulation['revisionReferencia']!=accepted['revisionReferencia']):
+                    raise ValueError('SIMULACION_ACEPTADA_CAMBIO_DURANTE_FIRMA')
+                if (getattr(cliente.config,'perfil',None)!='STAGING' or cliente.config.ambiente!='DEV'
+                        or str(operacion_id)!=scope['documentoOperacionId'] or document['pdfSha256']!=scope['pdfSha256']
+                        or document.get('firmaProductivaAcreditada') is not False
+                        or document.get('simulacionSha256')!=accepted['simulacionSha256']
+                        or document.get('aceptacionSimulacionSha256')!=accepted['aceptacionSha256']
+                        or str(document.get('cuotaAceptada'))!=str(accepted['cuota'])
+                        or document.get('autorizaDesembolso') is not False):
+                    raise ValueError('COLO001_STAGING_NO_VINCULADO')
+            else:
+                quote=_exigir_condiciones_definitivas(case)
+                if not document.get('composicionSha256') or document['composicionSha256']!=quote.get('composicionSha256'):
+                    raise ValueError('COLO001_COMPOSICION_CAMBIO')
+                formalization=_vinculo_formalizacion(case,document)
         if titular is not None:
-            repeated,reproof=preparar_envio_autogestion(case.pk,titular,identidad_firmante=identidad_firmante,
+            if contractual:repeated,reproof=preparar_envio_contractual(case.pk,titular,key)
+            else:repeated,reproof=preparar_envio_autogestion(case.pk,titular,identidad_firmante=identidad_firmante,
                 clave=key,autoriza_firma=autoriza_firma)
             if repeated.fingerprint!=request.fingerprint or reproof!=proof:raise ValueError('IDENTIDAD_FIRMA_CAMBIO')
         history[key]={'vinculo':binding,'estado':'ENVIANDO','actorId':actor_ref,
+            **({'formalizacion':formalization} if formalization is not None else {}),
             **({'pruebaIdentidadFirma':proof} if proof is not None else {}),
             'preparadoEn':timezone.now().isoformat()}
         detail.orchestration_data={**data,history_key:history}
@@ -295,6 +380,8 @@ def enviar_formato_custodiado(solicitud_id, *, actor, operacion_id, metadata,
         if not isinstance(receipt,ReciboFirma):raise AutenticError('RECIBO_AUTENTIC_NO_RECUPERADO')
         encrypted=encrypt_text(json.dumps(asdict(receipt),sort_keys=True))
         state='FIRMA_REPORTADA_NO_VERIFICADA'
+    except AutenticError as error:
+        if error.codigo=='FIRMA_RECHAZADA_DOCUMENTADA':state='FALLO_DEFINITIVO_DOCUMENTADO'
     except Exception:
         pass
     try:
@@ -313,7 +400,6 @@ def enviar_formato_custodiado(solicitud_id, *, actor, operacion_id, metadata,
         detail.save(using=alias,update_fields=['orchestration_data','updated_at'])
     return {'operacionId':key,'estado':state,'firmaAcreditada':False,'reenvioPermitido':False}
 
-
 def recuperar_documento_autentic(solicitud_id, *, actor, envio_id, cliente, referencia_autorizacion,titular=None):
     """Download through the documented receipt URL; bytes/hash are not proof of signing."""
     import base64
@@ -324,7 +410,7 @@ def recuperar_documento_autentic(solicitud_id, *, actor, envio_id, cliente, refe
     from apps.xcore_consumo.models import SolicitudConsumo
     from apps.xcore_consumo.services.otp_crypto import encrypt_text,decrypt_text
     from apps.integraciones.autentic.cliente import AutenticDEVClient,ReciboFirma
-    if titular is not None and getattr(settings,'CREDIHOY_AUTENTIC_TITULAR_ENVIO_ENABLED',False) is not True:
+    if titular is not None and not _envio_personal_habilitado(solicitud_id,titular):
         raise ValueError('DESCARGA_PERSONAL_AUTENTIC_CERRADA')
     case,alias,_=_contexto_formato(solicitud_id,actor,titular,'add_eventodocumental')
     if connections[alias].in_atomic_block:raise ValueError('DESCARGA_REQUIERE_TRANSACCION_INDEPENDIENTE')
@@ -339,7 +425,7 @@ def recuperar_documento_autentic(solicitud_id, *, actor, envio_id, cliente, refe
     if entry.get('descargaCifrada'):
         envelope=json.loads(decrypt_text(entry['descargaCifrada']))
     else:
-        if entry['estado']!='FIRMA_REPORTADA_NO_VERIFICADA' or not entry.get('reciboCifrado'):
+        if entry['estado'] not in {'FIRMA_REPORTADA_NO_VERIFICADA','CONCILIADA_PROCESADA'} or not entry.get('reciboCifrado'):
             raise ValueError('ENVIO_INDETERMINADO_CONCILIAR')
         receipt=ReciboFirma(**json.loads(decrypt_text(entry['reciboCifrado'])))
         name=binding['codigo']+'.pdf'
@@ -408,12 +494,26 @@ def inspeccionar_evidencia_custodiada(solicitud_id,*,actor,envio_id,titular=None
                     raw=Path(item['ruta']).read_bytes()
                     if sha256(raw).hexdigest()!=item['sha256']:raise ValueError('CONFIANZA_DOCUMENTAL_CAMBIO')
                     trust[purpose].append(raw)
-            result=analizar_firma_documental(original=original,firmado=signed,
-                transaccion=receipt['transaccion'],document_number=entry.get('documentNumber'),
-                documento_identidad=case.solicitante.numero_identificacion,**trust,
-                contexto={'solicitudId':str(case.pk),'envioId':key,
-                    'documentoOperacionId':binding['documentoOperacionId'],'vinculo':binding,
-                    'recibo':receipt,'descarga':download,'estado':entry['estado'],'preparadoEn':entry['preparadoEn']})
+            context={'solicitudId':str(case.pk),'envioId':key,
+                'documentoOperacionId':binding['documentoOperacionId'],'vinculo':binding,
+                'recibo':receipt,'descarga':download,'estado':entry['estado'],'preparadoEn':entry['preparadoEn']}
+            if 'aceptacionContractualReferencia' in binding:
+                from apps.integraciones.autentic.evidencia import analizar_firma_electronica_contractual
+                from apps.integraciones.autentic.pdf_criptografia import cargar_registro_sello
+                from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import validar_aceptacion_contractual
+                acceptance=validar_aceptacion_contractual(case,key,meta['pdfSha256'])
+                registry=getattr(settings,'CREDIHOY_AUTENTIC_SELLO_REGISTRO_FILE','')
+                authority=getattr(settings,'CREDIHOY_AUTENTIC_SELLO_AUTORIDAD_FILE','')
+                if registry or authority:
+                    envelope,public_key=cargar_registro_sello(registry,authority)
+                    trust.update(registro_sello=envelope,autoridad_sello=public_key)
+                result=analizar_firma_electronica_contractual(original=original,firmado=signed,
+                    contexto=context,aceptacion=acceptance,**trust)
+            else:
+                result=analizar_firma_documental(original=original,firmado=signed,
+                    transaccion=receipt['transaccion'],document_number=entry.get('documentNumber'),
+                    documento_identidad=case.solicitante.numero_identificacion,**trust,
+                    politicas_titular=getattr(settings,'CREDIHOY_AUTENTIC_PDF_POLITICAS_TITULAR',()),contexto=context)
         stable={k:v for k,v in result.items() if k not in {'verificadoEn','sha256'}}
         digest=sha256(json.dumps(stable,sort_keys=True,separators=(',',':')).encode()).hexdigest()
         if entry.get('verificacionSha256')!=digest:
@@ -422,7 +522,8 @@ def inspeccionar_evidencia_custodiada(solicitud_id,*,actor,envio_id,titular=None
             detail.orchestration_data={**detail.orchestration_data,'credihoy_autentic_envios_v1':history}
             detail.save(using=alias,update_fields=['orchestration_data','updated_at'])
             AuditLog.objects.using(alias).create(solicitud=case,event='CREDIHOY_AUTENTIC_EVIDENCIA_INSPECCIONADA',
-                actor=actor_ref,request_id=key,payload={'sha256':digest,'estado':result['estado'],'firmaAcreditada':False})
+                actor=actor_ref,request_id=key,payload={'sha256':digest,'estado':result['estado'],
+                    'firmaAcreditada':result.get('firmaAcreditada') is True})
         return result
 
 
@@ -452,16 +553,60 @@ def custodiar_formato(solicitud_id, *, actor, codigo, campos, clave_idempotencia
             key=key,pdf=pdf,meta=meta,event='CREDIHOY_PDF_OFICIAL_CUSTODIADO')
 
 
-def recuperar_formato(solicitud_id, *, actor, operacion_id,titular=None):
+def recuperar_formato(solicitud_id, *, actor, operacion_id,titular=None,proposito=None):
     import base64
     from uuid import UUID
     from apps.xcore_consumo.models import SolicitudConsumo
     from apps.xcore_consumo.services.otp_crypto import decrypt_text
+    if proposito is not None and (titular is None or proposito!='SIMULACION_NO_CONTRACTUAL'):
+        raise ValueError('PROPOSITO_RECUPERACION_NO_ADMITIDO')
     case,alias,_=_contexto_formato(solicitud_id,actor,titular,'view_versiondocumental')
     key=str(UUID(str(operacion_id)))
+    from apps.utils.models import AuditLog
+    from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import CONTRACTUAL_SCOPE,_auditorias_contractuales,_documento_contractual
+    contractual=titular is not None and titular.get('_scopeContractual')==CONTRACTUAL_SCOPE
+    if contractual:
+        trials=_auditorias_contractuales(case,alias,'CREDIHOY_PDF_ENSAYO_SIMULACION_CUSTODIADO',key)
+    else:
+        trial=AuditLog.objects.using(alias).filter(solicitud=case,
+            event='CREDIHOY_PDF_ENSAYO_SIMULACION_CUSTODIADO',request_id=key)
+        if trial.count()>1:raise ValueError('CUSTODIA_DOCUMENTAL_DUPLICADA')
+        trials=[trial.get().payload] if trial.exists() else []
+    if len(trials)>1:raise ValueError('CUSTODIA_DOCUMENTAL_DUPLICADA')
+    if trials:
+        if titular is not None and proposito!='SIMULACION_NO_CONTRACTUAL':
+            raise ValueError('PDF_SIMULACION_REQUIERE_PROPOSITO_EXPLICITO')
+        stored=trials[0]
+        envelope=json.loads(decrypt_text(stored['contenidoCifrado']))
+        pdf=base64.b64decode(envelope['pdfBase64'],validate=True)
+        if (envelope['solicitudId']!=str(case.pk) or envelope['operacionId']!=key
+                or envelope['metadata']!=stored['metadata'] or stored['codigo']!=PDF_ENSAYO
+                or stored['metadata']['codigo']!=PDF_ENSAYO
+                or sha256(pdf).hexdigest()!=stored['metadata']['pdfSha256']
+                or stored['sha256']!=stored['metadata']['pdfSha256']):
+            raise ValueError('CUSTODIA_DOCUMENTAL_NO_INTEGRA')
+        if titular is not None:
+            meta=stored['metadata'];packet=meta.get('simulacion',{})
+            if (actor is not None or type(titular.get('numeroDocumento')) is not str
+                    or sha256(titular['numeroDocumento'].encode()).hexdigest()!=sha256(case.solicitante.numero_identificacion.encode()).hexdigest()
+                    or meta.get('solicitudId')!=str(case.pk) or meta.get('estado')!='SIMULACION_NO_CONTRACTUAL'
+                    or meta.get('versionContrato')!='credihoy-pdf-simulacion-ensayo-v1'
+                    or packet.get('solicitudId')!=str(case.pk) or packet.get('requestId')!=key
+                    or meta.get('simulacionSha256')!=sha256(json.dumps(packet,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+                    or any(meta.get(k) is not False for k in ('firmaAcreditada','envioHabilitado','ofertable',
+                        'aceptacionAcreditada','autorizaStart','autorizaDesembolso'))
+                    or any(packet.get(k) is not False for k in ('ofertable','autorizaDecision','autorizaStart','autorizaDesembolso'))):
+                raise ValueError('PDF_SIMULACION_DE_OTRO_TITULAR_O_PROPOSITO')
+        return pdf,dict(stored['metadata'])
+    if proposito is not None:raise ValueError('PDF_SIMULACION_EXISTENTE_NO_ENCONTRADO')
+    if contractual:
+        return _documento_contractual(case,key)
     detail=SolicitudConsumo.objects.using(alias).get(solicitud=case)
     stored=detail.orchestration_data['credihoy_pdf_oficiales_v1'][key]
-    if titular is not None and stored['metadata']['codigo']!='COLO-FO.023':raise ValueError('CANAL_TITULAR_SOLO_COLO023')
+    if titular is not None:
+        from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import CONTRACTUAL_SCOPE
+        expected='COLO-FO.001' if titular.get('_scopeContractual')==CONTRACTUAL_SCOPE else 'COLO-FO.023'
+        if stored['metadata']['codigo']!=expected:raise ValueError('CANAL_TITULAR_DOCUMENTO_DE_OTRO_PROPOSITO')
     envelope=json.loads(decrypt_text(stored['contenidoCifrado']))
     pdf=base64.b64decode(envelope['pdfBase64'],validate=True)
     if (envelope['solicitudId']!=str(case.pk) or envelope['operacionId']!=key
@@ -480,19 +625,22 @@ def _custodiar_pdf(case,*,actor,titular,alias,actor_ref,key,pdf,meta,event):
     from apps.utils.models import AuditLog
     trial_code='CREDIHOY-SIMULACION-ENSAYO'
     if not connections[alias].in_atomic_block:raise ValueError('CUSTODIA_REQUIERE_TRANSACCION')
-    if meta['codigo']==trial_code:
+    if meta['codigo'] in {trial_code,'PRUEBA-FIRMA-STAGING'}:
         history=AuditLog.objects.using(alias).filter(solicitud=case,event=event,request_id=key)
         if history.count()>1:raise ValueError('CUSTODIA_DOCUMENTAL_DUPLICADA')
         if history.exists():
             entry=history.get()
             if entry.payload['metadata']!=meta or entry.actor!=actor_ref:
                 raise ValueError('IDEMPOTENCIA_DOCUMENTO_CONFLICTO')
-            recuperar_formato(case.pk,actor=actor,operacion_id=key)
+            if meta['codigo']==trial_code:recuperar_formato(case.pk,actor=actor,operacion_id=key)
+            else:
+                from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import _documento_contractual
+                _documento_contractual(case,key,historico=True)
             return {**meta,'operacionId':key}
         envelope={'solicitudId':str(case.pk),'operacionId':key,'metadata':meta,
             'pdfBase64':base64.b64encode(pdf).decode('ascii')}
         AuditLog.objects.using(alias).create(solicitud=case,event=event,request_id=key,actor=actor_ref,
-            payload={'codigo':trial_code,'version':meta['version'],'sha256':meta['pdfSha256'],
+            payload={'codigo':meta['codigo'],'version':meta['version'],'sha256':meta['pdfSha256'],
                 'metadata':meta,'contenidoCifrado':encrypt_text(json.dumps(envelope,sort_keys=True))})
         return {**meta,'operacionId':key}
     detail=SolicitudConsumo.objects.using(alias).select_for_update().get(solicitud=case)
@@ -512,3 +660,145 @@ def _custodiar_pdf(case,*,actor,titular,alias,actor_ref,key,pdf,meta,event):
     AuditLog.objects.using(alias).create(solicitud=case,event=event,actor=actor_ref,
         request_id=key,payload={'codigo':meta['codigo'],'version':meta['version'],'sha256':meta['pdfSha256']})
     return {**meta,'operacionId':key}
+
+
+def _anexar_oferta_versionada(case, pdf, quote, campos):
+    """Retain the existing binding hook without appending to the official form."""
+    offer = quote['ofertaVersionada']
+    if offer['solicitudId'] != str(case.pk) or offer['sha256'] != quote['composicionSha256'] or offer['titularReferencia'] != sha256(case.solicitante.numero_identificacion.encode()).hexdigest() or (offer['versionCondiciones'] != quote['versionCondiciones']):
+        raise ValueError('OFERTA_DOCUMENTAL_DE_OTRO_CONTEXTO')
+    if len(PdfReader(BytesIO(pdf)).pages) != FORMATOS['COLO-FO.001']['paginas']:
+        raise ValueError('COLO001_REQUIERE_TRES_PAGINAS_OFICIALES')
+    return (pdf, {'ofertaSha256': offer['sha256'], 'versionCondiciones': offer['versionCondiciones'], 'calculoRequestId': offer['calculoRequestId'], 'evaluacionSha256': offer['evaluacionSha256'], 'paginasInstitucionales': FORMATOS['COLO-FO.001']['paginas'], 'condicionesOferta': {'cuotaContractual': offer['cuotaContractual'], 'versionCondiciones': offer['versionCondiciones'], 'ofertaSha256': offer['sha256'], 'primerVencimiento': quote['primeraFechaPago']}, 'anexoIncorporado': False, 'envioHabilitado': False})
+
+_RECUPERACION_TECNICA = ContextVar('credihoy_recuperacion_documental', default=None)
+
+
+def _envio_personal_habilitado(solicitud_id,titular):
+    from django.conf import settings
+    if getattr(settings,'CREDIHOY_AUTENTIC_TITULAR_ENVIO_ENABLED',False) is True:return True
+    from apps.xcore_consumo.services.credihoy_v2.unico.publico_institucional import alcance_contractual
+    if (titular.get('_scopeContractual')!='solicitudes:firmarContrato'
+            or getattr(settings,'CREDIHOY_AUTENTIC_CONTRACTUAL_STAGING_ENVIO_ENABLED',False) is not True):return False
+    alcance_contractual(solicitud_id,titular)
+    return True
+
+
+
+def _validar_formato_titular(codigo,titular):
+    if titular is None:return
+    from apps.xcore_consumo.services.credihoy_v2.unico.consentimiento_real import CONTRACTUAL_SCOPE
+    expected='COLO-FO.001' if titular.get('_scopeContractual')==CONTRACTUAL_SCOPE else 'COLO-FO.023'
+    if codigo!=expected:raise ValueError('FORMATO_NO_CORRESPONDE_AL_PROPOSITO_PERSONAL')
+
+
+
+def continuar_formalizacion_autentic(solicitud_id,*,actor,envio_id,cliente,referencia_autorizacion):
+    """Resume one existing contract delivery; never sends a signature or advances LINIX."""
+    from uuid import UUID
+    from django.db import transaction,connections
+    from django.utils import timezone
+    from apps.utils.models import AuditLog
+    from apps.xcore_consumo.models import SolicitudConsumo
+    case,alias,actor_ref=_contexto_formato(solicitud_id,actor,None,'add_eventodocumental')
+    if connections[alias].in_atomic_block:raise ValueError('RECUPERACION_REQUIERE_COMMIT_DURABLE')
+    key=str(UUID(str(envio_id)))
+    entry=SolicitudConsumo.objects.using(alias).get(solicitud=case).orchestration_data['credihoy_autentic_envios_v1'][key]
+    native=entry.get('formalizacion')
+    if entry.get('vinculo',{}).get('ambienteFirma')=='STAGING':
+        raise ValueError('FIRMA_STAGING_NO_ES_FORMALIZACION_PRODUCTIVA')
+    if (not native or native['solicitudId']!=str(case.pk) or entry['vinculo'].get('codigo')!='COLO-FO.001'
+            or native['sha256']!=sha256(json.dumps({k:v for k,v in native.items() if k!='sha256'},
+                sort_keys=True,separators=(',',':')).encode()).hexdigest()):
+        raise ValueError('VINCULO_CONTRACTUAL_HISTORICO_REQUERIDO')
+    pending=entry['estado'] in {'ENVIANDO','INDETERMINADA'} or not entry.get('reciboCifrado')
+    if pending:
+        result={'estado':'PENDIENTE_CONCILIACION_PROVEEDOR','firmaAcreditada':False,
+            'pendientes':['RECIBO_PROVEEDOR_NO_RECUPERADO_NO_REENVIAR']}
+    else:
+        try:
+            recuperar_documento_autentic(case.pk,actor=actor,envio_id=key,cliente=cliente,
+                referencia_autorizacion=referencia_autorizacion)
+        except Exception as error:
+            import re
+            code=getattr(error,'codigo','RECUPERACION_DOCUMENTAL_PENDIENTE')
+            if type(code) is not str or not re.fullmatch('[A-Z0-9_]{1,100}',code):
+                code='RECUPERACION_DOCUMENTAL_PENDIENTE'
+            result={'estado':'PENDIENTE_RECUPERACION_DOCUMENTAL','firmaAcreditada':False,'pendientes':[code]}
+        else:result=inspeccionar_evidencia_custodiada(case.pk,actor=actor,envio_id=key)
+    projection={'versionContrato':'credihoy-formalizacion-autentic-v1','solicitudId':str(case.pk),
+        'envioId':key,'estado':result['estado'],'firmaAcreditada':result.get('firmaAcreditada') is True,
+        'pendientes':result.get('pendientes',[]),'vinculo':native,
+        'verificacionSha256':result.get('sha256'),'pdfSha256':result.get('firmadoSha256'),
+        'autorizaContinuacionFinanciera':False,'START':0,'SC':0}
+    digest=sha256(json.dumps(projection,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    with transaction.atomic(using=alias):
+        detail=SolicitudConsumo.objects.using(alias).select_for_update().get(solicitud=case)
+        current=detail.orchestration_data['credihoy_autentic_envios_v1'][key]
+        if current['vinculo']!=entry['vinculo'] or current.get('formalizacion')!=native:
+            raise ValueError('VINCULO_CONTRACTUAL_CAMBIO')
+        name='credihoy_formalizacion_autentic_v1';history=dict(detail.orchestration_data.get(name,{}))
+        previous=history.get(key)
+        if previous and previous['sha256']==digest:return previous
+        if previous and previous['firmaAcreditada'] and not projection['firmaAcreditada']:
+            raise ValueError('FIRMA_ACREDITADA_NO_REEMPLAZABLE_POR_PENDIENTE')
+        projection.update(sha256=digest,registradoEn=timezone.now().isoformat())
+        history[key]=projection
+        detail.orchestration_data={**detail.orchestration_data,name:history}
+        detail.save(using=alias,update_fields=['orchestration_data','updated_at'])
+        AuditLog.objects.using(alias).create(solicitud=case,
+            event='CREDIHOY_FORMALIZACION_FIRMA_VERIFICADA' if projection['firmaAcreditada'] else
+                'CREDIHOY_FORMALIZACION_PENDIENTE',actor=actor_ref,request_id=key,
+            payload={'sha256':digest,'verificacionSha256':projection['verificacionSha256'],
+                'firmaAcreditada':projection['firmaAcreditada'],'START':0,'SC':0})
+    return projection
+
+
+
+def presentar_formalizacion_autentic(case,*,alias='default'):
+    from datetime import datetime
+    from django.utils import timezone
+    from apps.xcore_consumo.models import SolicitudConsumo
+    from apps.xcore_consumo.services.otp_crypto import decrypt_text
+    data=SolicitudConsumo.objects.using(alias).get(solicitud=case).orchestration_data
+    history=data.get('credihoy_formalizacion_autentic_v1',{})
+    if not history:return None
+    rows=[]
+    for key,value in history.items():
+        entry=data['credihoy_autentic_envios_v1'][key]
+        if entry.get('vinculo',{}).get('ambienteFirma')=='STAGING':
+            raise ValueError('FIRMA_STAGING_NO_ES_FORMALIZACION_PRODUCTIVA')
+        digest=sha256(json.dumps({k:v for k,v in value.items() if k not in {'sha256','registradoEn'}},
+            sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        when=datetime.fromisoformat(value['registradoEn'])
+        if (value['solicitudId']!=str(case.pk) or value['envioId']!=key or value['sha256']!=digest
+                or value['vinculo']!=entry['formalizacion'] or entry['vinculo']['codigo']!='COLO-FO.001'
+                or entry['vinculo']['firmanteReferencia']!=sha256(case.solicitante.numero_identificacion.encode()).hexdigest()
+                or when.utcoffset() is None or when>timezone.now()):
+            raise ValueError('PROYECCION_CONTRACTUAL_NO_INTEGRA')
+        if value['firmaAcreditada']:
+            verified=json.loads(decrypt_text(entry['verificacionCifrada']))
+            if (verified.get('firmaAcreditada') is not True or verified['sha256']!=value['verificacionSha256']
+                    or entry['verificacionSha256']!=value['verificacionSha256']
+                    or verified['firmadoSha256']!=value['pdfSha256']):
+                raise ValueError('FIRMA_CONTRACTUAL_NO_VERIFICABLE')
+        rows.append(value)
+    latest=max(rows,key=lambda v:v['registradoEn'])
+    return {'versionContrato':'credihoy-formalizacion-publica-v1','documento':'COLO-FO.001',
+        'estado':'DOCUMENTO_VERIFICADO' if latest['firmaAcreditada'] else 'VALIDACION_PENDIENTE',
+        'firmaAcreditada':latest['firmaAcreditada'],'actualizadoAt':latest['registradoEn'],
+        'continuacionInstitucionalPendiente':True}
+
+PDF_ENSAYO = 'CREDIHOY-SIMULACION-ENSAYO'
+
+def _vinculo_formalizacion(case, document):
+    from apps.xcore_consumo.services.credihoy_v2.unico import cotizacion, linix_estado
+    offer = cotizacion.leer_oferta_linix(case)
+    accepted = cotizacion.leer_aceptacion_oferta(case)
+    cotizacion.exigir_calendario_formalizacion(case, offer)
+    native = linix_estado.presentar(case, tecnico=True)
+    if not accepted or not native or native.get('versionContrato') != 'credihoy-linix-estado-v2' or (accepted['ofertaSha256'] != offer['sha256']) or (document.get('composicionSha256') != offer['sha256']):
+        raise ValueError('FORMALIZACION_OFERTA_SC_Y_ACEPTACION_REQUERIDAS')
+    result = {'solicitudId': str(case.pk), 'ofertaSha256': offer['sha256'], 'aceptacionSha256': accepted['sha256'], 'SC': native['numeroSc'], 'K_FLUJO': native['kFlujo'], 'intencionId': native['intencionId'], 'calendarioSha256': sha256(json.dumps(offer['calendarioPago'], sort_keys=True).encode()).hexdigest()}
+    result['sha256'] = sha256(json.dumps(result, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return result

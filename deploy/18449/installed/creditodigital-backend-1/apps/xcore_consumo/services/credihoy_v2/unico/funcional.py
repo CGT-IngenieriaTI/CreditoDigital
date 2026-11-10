@@ -1,5 +1,17 @@
 """Resultado funcional persistente UNICO; sin consultas ni decisiones financieras."""
 
+
+
+
+
+
+
+
+
+
+
+
+
 from decimal import Decimal
 from dataclasses import replace
 import hashlib
@@ -34,19 +46,36 @@ class ConflictoFuncional(ValueError):
     pass
 
 
-def obtener_para_evaluacion(solicitud_id, operador, *, autogestion=False, lock=False):
-    if not autogestion:return obtener(solicitud_id,operador,lock=lock)
+def obtener_para_evaluacion(solicitud_id, operador, *, autogestion=False, lock=False, revision_conservada=False):
+    if revision_conservada and (not autogestion):
+        raise ConflictoFuncional('REVISION_CONSERVADA_REQUIERE_AUTOGESTION')
+    if not autogestion:
+        return obtener(solicitud_id, operador, lock=lock)
     from django.conf import settings
     from apps.solicitudes.models import Solicitud
     from .autoservicio import validar_vinculo_consumo
-    if (getattr(settings,'CREDIHOY_EVALUACION_AUTOGESTION_ENABLED',False) is not True
-            or not operador.is_authenticated or not operador.is_active or not operador.is_staff
-            or not operador.has_perm('xcore_consumo.add_evaluacionconsumo')):
+    if not operador.is_authenticated or not operador.is_active or (not operador.is_staff) or (not operador.has_perm('xcore_consumo.add_evaluacionconsumo')):
         raise ConflictoFuncional('EVALUACION_AUTOGESTION_NO_HABILITADA')
-    query=Solicitud.objects.select_related('solicitante')
-    if lock:query=query.select_for_update(of=('self',))
-    return validar_vinculo_consumo(query.get(pk=solicitud_id,asesor__isnull=True,
-        metadatos__modo='AUTOGESTION_ENVIADA'))
+    if not revision_conservada and getattr(settings, 'CREDIHOY_EVALUACION_AUTOGESTION_ENABLED', False) is not True:
+        raise ConflictoFuncional('EVALUACION_AUTOGESTION_NO_HABILITADA')
+    query = Solicitud.objects.select_related('solicitante')
+    if lock:
+        query = query.select_for_update(of=('self',))
+    case = validar_vinculo_consumo(query.get(pk=solicitud_id, asesor__isnull=True, metadatos__modo='AUTOGESTION_ENVIADA'))
+    if revision_conservada:
+        from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
+        evaluation = EvaluacionConsumo.objects.get(solicitud=case)
+        if evaluation.input_snapshot.get('revisionHdcActiva'):
+            raise ConflictoFuncional('REVISION_HISTORICA_NO_MODIFICABLE_POR_CONTINUIDAD')
+        intent = AuditLog.objects.get(solicitud=case, event='credihoy_continuacion_solicitada_v1')
+        AuditLog.objects.get(solicitud=case, event='credihoy_continuacion_evento_completado_v1', request_id=intent.request_id)
+        if not AuditLog.objects.filter(solicitud=case, event='credihoy_cupo_hdc_reservado_v1').exists():
+            raise ConflictoFuncional('REVISION_SIN_ALCANCE_INSTITUCIONAL')
+        operation = OperacionGateway.objects.filter(pk=evaluation.input_snapshot[KEY_HDC]['operacionId'], solicitud=case, consentimiento=_firma(case), proveedor='HDC', estado='COMPLETADA').first()
+        if operation is None:
+            raise ConflictoFuncional('REVISION_SIN_HDC_CONSERVADA')
+        _exigir_recibo_hdc(operation)
+    return case
 
 
 def _exigir_recibo_hdc(op):
@@ -296,98 +325,63 @@ def leer_estado_funcional(s):
         result = nuevo
     elif detail.orchestration_data.get(KEY_CONDICIONES):
         raise ConflictoFuncional('REVISION_CONDICIONES_SIN_EVALUACION_VIGENTE')
-    return {"versionContrato": VERSION, "solicitudId": str(s.pk), "idempotencyKey": clave_funcional(s),
+    state={"versionContrato": VERSION, "solicitudId": str(s.pk), "idempotencyKey": clave_funcional(s),
         "solicitud": {"monto": str(s.monto_solicitado), "plazoMeses": s.plazo_solicitado,
             "periodicidadPago": detail.form_data.get("periodicidadPago"),
             "recogerCredihoy": detail.form_data.get("recogerCredihoy")},
         "datosGuardados": detail.orchestration_data.get(KEY, {}).get("datosGuardados") is True,
-        "consentimiento": {"estado": "CONSENTIMIENTO_FIRMADO", "version": c.version,
-            "fechaFirma": c.fecha_aceptacion.isoformat()},
+        "consentimiento": {"estado": "CONSENTIMIENTO_FIRMADO" if c.firmado else "AUTORIZACION_CENTRALES_CONFIRMADA",
+            "version": c.version,"fechaFirma": c.fecha_aceptacion.isoformat() if c.firmado else None},
         "estadoObtencionDatos": result["estadoObtencionDatos"] if result else _datos_obtencion(), "resultado": result,
         "estadoTramite": "PENDIENTE_REVISION" if result else "DATOS_PENDIENTES",
         "decisionCrediticia": "NO_AUTORIZADA", "autorizadoDecisionCrediticia": False,
         "radicacionLinix": "NO_EJECUTADA"}
+    return aplicar_revision_estudio_registrada(s,evaluation,state)
 
 
-def registrar_resultado_consulta_hdc(solicitud_id, operador, *, operacion,
-                                   ingresos, hechos_reglas, cuotas_aplicables_explicitas=None,
-                                   revision_evidencia=None, autogestion=False):
+def registrar_resultado_consulta_hdc(solicitud_id, operador, *, operacion, ingresos, hechos_reglas, cuotas_aplicables_explicitas=None, revision_evidencia=None, autogestion=False, descuentos_nomina=None, informe_xml=None, cuota_estimada=None, titularidad_recogida=None):
     """Anexa la evaluacion real; no sustituye el resultado anterior ni decide credito."""
     from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
     from .evaluacion_controlada import evaluar_respuestas_controladas
     from uuid import UUID
-    if revision_evidencia is not None and (
-            type(revision_evidencia) is not str or str(UUID(revision_evidencia)) != revision_evidencia):
-        raise ValueError("REVISION_EVIDENCIA_INVALIDA")
+    if revision_evidencia is not None and (type(revision_evidencia) is not str or str(UUID(revision_evidencia)) != revision_evidencia):
+        raise ValueError('REVISION_EVIDENCIA_INVALIDA')
     key = KEY_HDC if revision_evidencia is None else KEY_HDC_REVISION
     with transaction.atomic():
-        s=obtener_para_evaluacion(solicitud_id,operador,autogestion=autogestion,lock=True)
+        s = obtener_para_evaluacion(solicitud_id, operador, autogestion=autogestion, lock=True)
         c = _firma(s)
-        op = OperacionGateway.objects.select_for_update().get(pk=operacion.operacion_id, solicitud=s, proveedor="HDC")
-        if (op.estado != operacion.estado or op.request_id != operacion.request_id
-                or op.consulta_id != operacion.consulta_id or op.consentimiento_id != c.pk
-                or op.version_contrato != operacion.version_contrato or operacion.proveedor != 'HDC'):
-            raise ConflictoFuncional("OPERACION_HDC_NO_CORRESPONDE_AL_EXPEDIENTE")
+        op = OperacionGateway.objects.select_for_update().get(pk=operacion.operacion_id, solicitud=s, proveedor='HDC')
+        if op.estado != operacion.estado or op.request_id != operacion.request_id or op.consulta_id != operacion.consulta_id or (op.consentimiento_id != c.pk) or (op.version_contrato != operacion.version_contrato) or (operacion.proveedor != 'HDC'):
+            raise ConflictoFuncional('OPERACION_HDC_NO_CORRESPONDE_AL_EXPEDIENTE')
         _exigir_recibo_hdc(op)
         detail = SolicitudConsumo.objects.select_for_update().get(solicitud=s)
         form = _formulario_persistido(s, detail.form_data)
         evaluation = EvaluacionConsumo.objects.select_for_update().filter(solicitud=s).first()
-        if evaluation is None and not autogestion:raise EvaluacionConsumo.DoesNotExist
-        if (evaluation is not None and revision_evidencia is not None and KEY_HDC_REVISION in evaluation.resultados
-                and evaluation.input_snapshot[KEY_HDC_REVISION].get("revisionEvidencia") != revision_evidencia):
-            key = KEY_HDC_REVISION + ":" + revision_evidencia
-        # Comprueba tambien el resultado previo y el formulario antes de anexar.
+        if evaluation is None and (not autogestion):
+            raise EvaluacionConsumo.DoesNotExist
+        if evaluation is not None and revision_evidencia is not None and (KEY_HDC_REVISION in evaluation.resultados) and (evaluation.input_snapshot[KEY_HDC_REVISION].get('revisionEvidencia') != revision_evidencia):
+            key = KEY_HDC_REVISION + ':' + revision_evidencia
         leer_estado_funcional(s)
         if evaluation is not None and key in evaluation.resultados:
-            if (evaluation.input_snapshot[key]["operacionId"] != str(op.pk)
-                    or evaluation.input_snapshot[key].get("revisionEvidencia") != revision_evidencia):
-                raise ConflictoFuncional("OTRA_EVALUACION_HDC_EXISTENTE")
+            if evaluation.input_snapshot[key]['operacionId'] != str(op.pk) or evaluation.input_snapshot[key].get('revisionEvidencia') != revision_evidencia:
+                raise ConflictoFuncional('OTRA_EVALUACION_HDC_EXISTENTE')
             return leer_estado_funcional(s)
         if revision_evidencia is not None and (evaluation is None or KEY_HDC not in evaluation.resultados):
-            raise ConflictoFuncional("REVISION_REQUIERE_EVALUACION_HDC_ORIGINAL")
-        entrada = EntradaCredihoyUnicoV2(monto_solicitado=Decimal(form["monto"]),
-            plazo_meses=form["plazoMeses"], periodicidad_pago=form["periodicidadPago"],
-            modalidad_codigo="111", recogida=RecogidaCredihoyUnicoV2(aplica=form["recogerCredihoy"]))
-        result = evaluar_respuestas_controladas(entrada, hdc=operacion,
-            operaciones_esperadas={op.pk: ("HDC", op.request_id)}, ingresos=ingresos,
-            hechos_reglas=hechos_reglas, fecha=timezone.now(), request_id=str(op.request_id),
-            cuotas_aplicables_explicitas=cuotas_aplicables_explicitas)
-        result.update(versionFuncional=VERSION, solicitudId=str(s.pk),
-            fuenteHechos="EXPEDIENTE_OPERATIVO_SIN_DECISION",
-            resultadoCapacidad={"estado": "NO_EVALUABLE", "motivos":
-                list(result["informacionInsuficiente"]) or
-                ["CONDICION_CAPACIDAD_Y_EFECTOS_NO_AUTORIZADOS"], "referenciaPolitica": None},
-            estadoObtencionDatos=[
-                {"fuente": "HDC", "estado": "DISPONIBLE_EN_CONTEXTO_NO_APROBACION",
-                 "detalle": "Consulta real asociada al expediente; aplicabilidad financiera separada."},
-                {"fuente": "LINIX", "estado": "DISPONIBLE_EN_CONTEXTO_NO_APROBACION" if ingresos.disponible else "INGRESO_COMPUTABLE_Y_HECHOS_GLOBALES_PENDIENTES",
-                 "detalle": ingresos.observacion or "Hecho suministrado sin nueva consulta LINIX."},
-                {"fuente": "POLITICA", "estado": "CONDICION_Y_EFECTOS_CAPACIDAD_PENDIENTES",
-                 "detalle": "Sin aprobacion ni rechazo productivo."}],
-            preparacionRadicacion=preparar_expediente_unico(),
-            secuencia=[{"paso": paso, "estado": estado} for paso, estado in (
-                ("SOLICITUD", "RECIBIDA"), ("DATOS", "HDC_REAL_" + op.estado),
-                ("CAPACIDAD", result["capacidadMatematica"]["estado"]), ("REGLAS", "EJECUTADAS"),
-                ("RESULTADO", "NO_AUTORIZADA"), ("ESTADO", "PENDIENTE_REVISION"))])
-        # No row exists until a bound, typed and completed HDC response has
-        # passed the genuine signature gate and the real sixteen-rule engine.
-        if evaluation is None:evaluation=EvaluacionConsumo(solicitud=s)
+            raise ConflictoFuncional('REVISION_REQUIERE_EVALUACION_HDC_ORIGINAL')
+        entrada = EntradaCredihoyUnicoV2(monto_solicitado=Decimal(form['monto']), plazo_meses=form['plazoMeses'], periodicidad_pago=form['periodicidadPago'], modalidad_codigo='111', recogida=RecogidaCredihoyUnicoV2(aplica=form['recogerCredihoy']))
+        result = evaluar_respuestas_controladas(entrada, hdc=operacion, operaciones_esperadas={op.pk: ('HDC', op.request_id)}, ingresos=ingresos, hechos_reglas=hechos_reglas, fecha=timezone.now(), request_id=str(op.request_id), cuotas_aplicables_explicitas=cuotas_aplicables_explicitas, descuentos_nomina=descuentos_nomina, informe_xml=informe_xml, cuota_estimada=cuota_estimada, titularidad_recogida=titularidad_recogida, fecha_consulta_hdc=op.fin_at)
+        result.update(versionFuncional=VERSION, solicitudId=str(s.pk), fuenteHechos='EXPEDIENTE_OPERATIVO_SIN_DECISION', resultadoCapacidad={'estado': 'NO_EVALUABLE', 'motivos': list(result['informacionInsuficiente']) or ['CONDICION_CAPACIDAD_Y_EFECTOS_NO_AUTORIZADOS'], 'referenciaPolitica': None}, estadoObtencionDatos=[{'fuente': 'HDC', 'estado': 'DISPONIBLE_EN_CONTEXTO_NO_APROBACION', 'detalle': 'Consulta real asociada al expediente; aplicabilidad financiera separada.'}, {'fuente': 'LINIX', 'estado': 'DISPONIBLE_EN_CONTEXTO_NO_APROBACION' if ingresos.disponible else 'INGRESO_COMPUTABLE_Y_HECHOS_GLOBALES_PENDIENTES', 'detalle': ingresos.observacion or 'Hecho suministrado sin nueva consulta LINIX.'}, {'fuente': 'POLITICA', 'estado': 'CONDICION_Y_EFECTOS_CAPACIDAD_PENDIENTES', 'detalle': 'Sin aprobacion ni rechazo productivo.'}], preparacionRadicacion=preparar_expediente_unico(), secuencia=[{'paso': paso, 'estado': estado} for paso, estado in (('SOLICITUD', 'RECIBIDA'), ('DATOS', 'HDC_REAL_' + op.estado), ('CAPACIDAD', result['capacidadMatematica']['estado']), ('REGLAS', 'EJECUTADAS'), ('RESULTADO', 'NO_AUTORIZADA'), ('ESTADO', 'PENDIENTE_REVISION'))])
+        if evaluation is None:
+            evaluation = EvaluacionConsumo(solicitud=s)
         evaluation.resultados = {**evaluation.resultados, key: result}
-        evaluation.input_snapshot = {**evaluation.input_snapshot, key: {
-            "operacionId": str(op.pk), "consultaId": str(op.consulta_id), "firma": c.text_hash,
-            "revisionEvidencia": revision_evidencia,
-            "resultadoSha256": _digest(result),
-            **({'revisionCondiciones': detail.orchestration_data[KEY_CONDICIONES][-1]['id'],
-                'huellaCondiciones': _digest(form)} if detail.orchestration_data.get(KEY_CONDICIONES) else {})}}
-        if key.startswith(KEY_HDC_REVISION + ":"):
-            evaluation.input_snapshot["revisionHdcActiva"] = key
-        if evaluation.pk:evaluation.save(update_fields=["resultados", "input_snapshot", "updated_at"])
-        else:evaluation.save(force_insert=True)
-        AuditLog.objects.create(solicitud=s, event="CREDIHOY_RESULTADO_HDC_REAL_REGISTRADO",
-            actor=f"user:{operador.pk}", request_id=str(op.request_id), payload={
-                "operacionId": str(op.pk), "consultaId": str(op.consulta_id),
-                "revisionEvidencia": revision_evidencia,
-                "estadoTramite": "PENDIENTE_REVISION", "autorizadoDecisionCrediticia": False})
+        evaluation.input_snapshot = {**evaluation.input_snapshot, key: {'operacionId': str(op.pk), 'consultaId': str(op.consulta_id), 'firma': c.text_hash, 'revisionEvidencia': revision_evidencia, 'resultadoSha256': _digest(result), **({'revisionCondiciones': detail.orchestration_data[KEY_CONDICIONES][-1]['id'], 'huellaCondiciones': _digest(form)} if detail.orchestration_data.get(KEY_CONDICIONES) else {})}}
+        if key.startswith(KEY_HDC_REVISION + ':'):
+            evaluation.input_snapshot['revisionHdcActiva'] = key
+        if evaluation.pk:
+            evaluation.save(update_fields=['resultados', 'input_snapshot', 'updated_at'])
+        else:
+            evaluation.save(force_insert=True)
+        AuditLog.objects.create(solicitud=s, event='CREDIHOY_RESULTADO_HDC_REAL_REGISTRADO', actor=f'user:{operador.pk}', request_id=str(op.request_id), payload={'operacionId': str(op.pk), 'consultaId': str(op.consulta_id), 'revisionEvidencia': revision_evidencia, 'estadoTramite': 'PENDIENTE_REVISION', 'autorizadoDecisionCrediticia': False})
     return leer_estado_funcional(s) if autogestion else estado_funcional(solicitud_id, operador)
 
 
@@ -554,3 +548,257 @@ def procesar_funcional(solicitud_id, operador, *, accion, payload, clave, reques
         else:
             raise ValueError("ACCION_FUNCIONAL_INVALIDA")
     return estado_funcional(solicitud_id, operador)
+
+
+def aplicar_revision_estudio_registrada(s, evaluation, state):
+    """Read the latest immutable revision and its already verified signed summary."""
+    import base64
+    from uuid import UUID
+    from cryptography.exceptions import InvalidSignature
+    from apps.xcore_consumo.services.otp_crypto import decrypt_text
+    from apps.xcore_consumo.models import ConsentimientoConsumo
+    from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
+    from . import centrales_personal as central
+    if evaluation is None:
+        return state
+    entries = list(AuditLog.objects.filter(solicitud=s, event='CREDIHOY_ESTUDIO_VERSION_REGISTRADA').order_by('created_at', 'pk')[:101])
+    if not entries:
+        return state
+    if len(entries) > 100:
+        raise ConflictoFuncional('VERSIONES_ESTUDIO_REQUIEREN_CONCILIACION')
+
+    def canonical(value):
+        return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, default=str).encode()
+
+    def digest(value):
+        return hashlib.sha256(canonical(value)).hexdigest()
+    try:
+        selected = {}
+        base_hash = hashlib.sha256(json.dumps({'input': evaluation.input_snapshot, 'resultados': evaluation.resultados}, sort_keys=True, default=str).encode()).hexdigest()
+        titular = hashlib.sha256(s.solicitante.numero_identificacion.encode()).hexdigest()
+        for entry in entries:
+            raw = decrypt_text(entry.payload['resultadoCifrado'])
+            if hashlib.sha256(raw.encode()).hexdigest() != entry.payload['resultadoSha256']:
+                raise ValueError()
+            version = json.loads(raw)
+            reference = str(UUID(version['versionReferencia']))
+            request = version['fuentes']['huellaSolicitud']
+            if str(entry.request_id) != reference or reference != version['versionReferencia'] or version['solicitudId'] != str(s.pk) or (version['evaluacionBaseId'] != evaluation.pk) or (type(version['version']) is not int) or (version['version'] < 2) or (request['documentoSha256'] != titular) or (request['evaluacionSha256'] != base_hash) or (version['resultado']['requestId'] != reference):
+                raise ValueError()
+            if version['version'] in selected:
+                raise ValueError()
+            selected[version['version']] = (entry, version)
+        entry, version = selected[max(selected)]
+        reference = version['versionReferencia']
+        op = OperacionGateway.objects.get(pk=entry.payload['recibo']['operacionHdc'], solicitud=s, proveedor='HDC', estado__in=['COMPLETADA', 'SIN_INFORMACION'])
+        _exigir_recibo_hdc(op)
+        key = str(uuid5(NAMESPACE_URL, 'credihoy-estudio-publico:' + str(s.pk) + ':' + reference))
+        summary = AuditLog.objects.get(solicitud=s, event='CREDIHOY_ESTUDIO_PUBLICO_VERIFICADO', request_id=key)
+        envelope = summary.payload
+        body = envelope['payload']
+        study = body['estudio']
+        if envelope['algoritmo'] != 'Ed25519':
+            raise ValueError()
+        central._clave_publica().verify(base64.b64decode(envelope['firmaBase64'], validate=True), b'credihoy-estudio-publico-tecnico-v1\x00' + canonical(body))
+        consent = ConsentimientoConsumo.objects.values().get(solicitud=s)
+        detail = SolicitudConsumo.objects.values().get(solicitud=s)
+        current = EvaluacionConsumo.objects.values().get(pk=evaluation.pk, solicitud=s)
+        if body['version'] not in {'credihoy-estudio-tecnico-firmado-v1', 'credihoy-estudio-tecnico-firmado-v2'} or body['proposito'] != 'LECTURA_ESTUDIO_NO_DECISION' or body['solicitudId'] != str(s.pk) or (body['titularSha256'] != titular) or (body['evaluacionBaseSha256'] != digest(current)) or (body['consentimientoSha256'] != digest(consent)) or (body['consumoSha256'] != huella_consumo_estudio(detail, body['version'])) or (study['version'] != version['version']) or (study['versionContrato'] != 'credihoy-estudio-publico-v1') or (study['referenciaVersion'] != reference) or (study['evaluacionBaseId'] != evaluation.pk) or (study['solicitudId'] != str(s.pk)) or (study['autorizadoDecisionCrediticia'] is not False):
+            raise ValueError()
+        rules = version['resultado']['reglas']
+        if len(rules) != 16 or len({r['codigo'] for r in rules}) != 16:
+            raise ValueError()
+        projected = [{k: r[k] for k in ('codigo', 'nombre', 'resultado', 'estadoEvaluacion', 'motivos', 'datosFaltantes')} for r in rules]
+        if study['reglas'] != projected:
+            raise ValueError()
+        return {**state, 'resultado': version['resultado'], 'revisionEstudio': {'version': version['version'], 'versionReferencia': reference, 'versionSha256': entry.payload['resultadoSha256'], 'resultadoSha256': _digest(version['resultado']), 'estudioSha256': digest(study), 'evaluacionBaseId': evaluation.pk, 'operacionHdc': str(op.pk), 'revisionHdcActiva': evaluation.input_snapshot.get('revisionHdcActiva'), 'condicionesYConsentimientoVerificados': True, 'firmaResumenVerificada': True}}
+    except (KeyError, TypeError, ValueError, AttributeError, InvalidSignature, AuditLog.DoesNotExist, AuditLog.MultipleObjectsReturned, OperacionGateway.DoesNotExist):
+        raise ConflictoFuncional('REVISION_ESTUDIO_VIGENTE_NO_VERIFICABLE') from None
+
+
+def recuperar_respuesta_hdc_custodiada(solicitud_id):
+    """Recover a bound normalized report from custody, never from a new query."""
+    import base64
+    from apps.integraciones.risk_gateway.clientes import HDCGatewayClient
+    from apps.integraciones.risk_gateway.contratos import HDCNormalizado
+    from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
+    from apps.integraciones.risk_gateway.operaciones.servicio import ResultadoOperacion
+    from apps.xcore_consumo.services.otp_crypto import encrypt_text, decrypt_text
+    from .embargos import informe_hdc_concordante
+    if transaction.get_connection().in_atomic_block:
+        raise ValueError('CUSTODIA_REQUIERE_AUTOCOMMIT')
+    op = OperacionGateway.objects.select_related('solicitud__solicitante').get(solicitud_id=solicitud_id, proveedor='HDC', estado='COMPLETADA')
+    _exigir_recibo_hdc(op)
+    query = AuditLog.objects.filter(solicitud_id=solicitud_id, event='CREDIHOY_HDC_RESPUESTA_RECUPERADA', request_id=str(op.request_id))
+    saved = query.first()
+    if saved is not None:
+        raw = decrypt_text(saved.payload['contenidoCifrado'])
+        if hashlib.sha256(raw.encode()).hexdigest() != saved.payload['sha256']:
+            raise ValueError('CUSTODIA_HDC_NO_INTEGRA')
+        packet = json.loads(raw)
+        normalized = HDCNormalizado.desde_payload(packet['normalizado'])
+        xml = base64.b64decode(packet['xmlBase64'], validate=True)
+        if hashlib.sha256(xml).hexdigest() != packet['xmlSha256']:
+            raise ValueError('CUSTODIA_XML_NO_INTEGRA')
+    else:
+        normalized, xml = HDCGatewayClient().recuperar_respuesta_custodiada(str(op.consulta_id), request_id=str(op.request_id), titular_sha256=hashlib.sha256(op.solicitud.solicitante.numero_identificacion.encode()).hexdigest())
+    if normalized['requestId'] != str(op.request_id) or normalized['resultado']['consulta_id'] != str(op.consulta_id) or normalized['versionContrato'] != op.version_contrato:
+        raise ValueError('CUSTODIA_HDC_DE_OTRA_OPERACION')
+    informe_hdc_concordante(xml, normalized)
+    if saved is None:
+        packet = {'normalizado': normalized.a_dict(), 'xmlBase64': base64.b64encode(xml).decode(), 'xmlSha256': hashlib.sha256(xml).hexdigest(), 'normalizadoReconstruidoDesdeXML': True, 'consultaNueva': False}
+        raw = json.dumps(packet, sort_keys=True, default=str)
+        with transaction.atomic(durable=True):
+            locked = OperacionGateway.objects.select_for_update().get(pk=op.pk)
+            _exigir_recibo_hdc(locked)
+            if locked.estado != 'COMPLETADA' or locked.consulta_id != op.consulta_id:
+                raise ValueError('CUSTODIA_HDC_OPERACION_CAMBIO')
+            previous = query.first()
+            if previous is not None and previous.payload['sha256'] != hashlib.sha256(raw.encode()).hexdigest():
+                raise ValueError('CUSTODIA_HDC_CONFLICTIVA')
+            if previous is None:
+                AuditLog.objects.create(solicitud_id=solicitud_id, event='CREDIHOY_HDC_RESPUESTA_RECUPERADA', request_id=str(op.request_id), actor='servicio:continuacion', payload={'sha256': hashlib.sha256(raw.encode()).hexdigest(), 'contenidoCifrado': encrypt_text(raw), 'consultaNueva': False, 'operacionId': str(op.pk)})
+    result = ResultadoOperacion(op.pk, 'HDC', op.estado, op.request_id, op.consulta_id, op.version_contrato, '', True, normalized)
+    proof = hashlib.sha256(json.dumps(normalized.a_dict(), sort_keys=True, default=str).encode()).hexdigest()
+    return (result, xml, proof, op.fin_at)
+
+
+def preparar_revision_estudio(solicitud_id, operador):
+    """Append an immutable draft from fresh facts; never update the base study."""
+    from dataclasses import asdict
+    from uuid import uuid4
+    from apps.xcore_consumo.services.otp_crypto import encrypt_text, decrypt_text
+    from .hechos_continuacion import obtener as obtener_hechos
+    from .evaluacion_controlada import evaluar_respuestas_controladas
+    if transaction.get_connection().in_atomic_block:
+        raise ValueError('REVISION_REQUIERE_AUTOCOMMIT')
+    if not operador.is_authenticated or not operador.is_active or (not operador.is_staff) or (not operador.has_perm('xcore_consumo.add_evaluacionconsumo')):
+        raise ValueError('REVISION_OPERADOR_NO_AUTORIZADO')
+    case = obtener_para_evaluacion(solicitud_id, operador, autogestion=True, revision_conservada=True)
+    consent = _firma(case)
+    evaluation = EvaluacionConsumo.objects.get(solicitud=case)
+    leer_estado_funcional(case)
+    if evaluation.input_snapshot.get('revisionHdcActiva'):
+        raise ValueError('REVISION_HISTORICA_NO_MODIFICABLE_POR_CONTINUIDAD')
+    base_hash = hashlib.sha256(json.dumps({'input': evaluation.input_snapshot, 'resultados': evaluation.resultados}, sort_keys=True, default=str).encode()).hexdigest()
+    detail = SolicitudConsumo.objects.get(solicitud=case)
+    case.consumo_detail = detail
+    form = _formulario_persistido(case, detail.form_data)
+    form_hash = _digest(form)
+    consent_hash = consent.text_hash
+    context = obtener_hechos(case, str(uuid4()), con_contexto=True)
+    from .normativa import incorporar_smmlv
+    context = replace(context, reglas=incorporar_smmlv(context.reglas, fecha=context.fecha_evaluacion or timezone.now(), modalidad='111'))
+    operation, xml, proof, queried = recuperar_respuesta_hdc_custodiada(case.pk)
+
+    def semantic(fact):
+        return {k: v for k, v in fact.a_dict().items() if k in {'valor', 'disponible', 'fuente', 'ruta_origen', 'estado_certificacion'}}
+    from .evaluacion_controlada import VERSION_CAPACIDAD_DECISORIA
+    sources = {'versionCadena': 'credihoy-cadena-20261105-v1', 'versionCapacidadDecisoria': VERSION_CAPACIDAD_DECISORIA, 'formularioSha256': form_hash, 'reglas': {name: semantic(getattr(context.reglas, name)) for name in asdict(context.reglas)}, 'ingresos': semantic(context.ingresos), 'nomina': semantic(context.descuentos_nomina), 'cuota': {**semantic(context.cuota_estimada), 'condicion': context.cuota_estimada.observacion}, 'respuestaHdcSha256': proof, 'xmlSha256': hashlib.sha256(xml).hexdigest()}
+    drafts = AuditLog.objects.filter(solicitud=case, event='CREDIHOY_ESTUDIO_REVISION_PREPARADA')
+    fingerprint = _digest(sources)
+    reference = str(uuid5(NAMESPACE_URL, 'credihoy-revision-estudio:' + str(case.pk) + ':' + fingerprint))
+    existing = drafts.filter(request_id=reference).first()
+    legacy_existing = None
+    if existing is not None:
+        raw = decrypt_text(existing.payload['resultadoCifrado'])
+        if hashlib.sha256(raw.encode()).hexdigest() != existing.payload['resultadoSha256']:
+            raise ValueError('REVISION_CONSERVADA_NO_INTEGRA')
+        if 'decisionDigital' not in json.loads(raw)['resultado']:
+            legacy_existing = existing
+    from .elegibilidad import contexto_desde_estudio, evaluar_decision_digital
+    from .condiciones_producto import politica_digital
+    decision_time = timezone.now()
+    observed = contexto_desde_estudio(case, evaluation.resultados[KEY_HDC], ahora=decision_time)
+    from .normativa import actualizacion_al_corte
+    from .estamentos import BLOQUEADO, actualizar_estamentos
+    updated = actualizacion_al_corte(context.reglas.fecha_actualizacion_datos, context.fecha_evaluacion or timezone.now())
+    if updated and updated['cumple'] and (observed.clasificacion_estamentos['estado'] == BLOQUEADO):
+        try:
+            actualizar_estamentos(case.pk, actor=operador, autogestion=True, revision_conservada=True)
+        except ValueError:
+            pass
+        decision_time = timezone.now()
+        observed = contexto_desde_estudio(case, evaluation.resultados[KEY_HDC], ahora=decision_time)
+    if legacy_existing is not None and observed.clasificacion_estamentos['estado'] == BLOQUEADO:
+        return legacy_existing.pk
+    sources['decisionFuentes'] = {'clasificacionEstamentos': {k: v for k, v in observed.clasificacion_estamentos.items() if k not in ('consultaReferencia', 'fechaConsulta')}, 'politicaSha256': _digest(politica_digital())}
+    fingerprint = _digest(sources)
+    reference = str(uuid5(NAMESPACE_URL, 'credihoy-revision-estudio:' + str(case.pk) + ':' + fingerprint))
+    existing = drafts.filter(request_id=reference).first()
+    if existing is not None:
+        return existing.pk
+    entry = EntradaCredihoyUnicoV2(monto_solicitado=Decimal(form['monto']), plazo_meses=form['plazoMeses'], periodicidad_pago=form['periodicidadPago'], modalidad_codigo='111', recogida=RecogidaCredihoyUnicoV2(aplica=form['recogerCredihoy']))
+    evaluated = evaluar_respuestas_controladas(entry, hdc=operation, operaciones_esperadas={operation.operacion_id: ('HDC', operation.request_id)}, ingresos=context.ingresos, hechos_reglas=context.reglas, fecha=context.fecha_evaluacion or timezone.now(), request_id=reference, descuentos_nomina=context.descuentos_nomina, cuota_estimada=context.cuota_estimada if context.cuota_estimada.disponible else None, informe_xml=xml, fecha_consulta_hdc=queried, custodia_respuesta_sha256=proof)
+    evaluated.update(solicitudId=str(case.pk), estadoTramite='SUBSANACION_REQUERIDA' if any((r['codigo'] == 'UNICO_FILA_9' and r['estadoEvaluacion'] == 'NO_CUMPLE' for r in evaluated['reglas'])) else 'EN_REVISION', HDCNuevas=0)
+    decision_context = contexto_desde_estudio(case, evaluated, ahora=decision_time)
+    evaluated['decisionDigital'] = evaluar_decision_digital(decision_context, ahora=decision_time)
+    with transaction.atomic(durable=True):
+        locked = obtener_para_evaluacion(case.pk, operador, autogestion=True, lock=True, revision_conservada=True)
+        current = EvaluacionConsumo.objects.get(pk=evaluation.pk, solicitud=locked)
+        current_hash = hashlib.sha256(json.dumps({'input': current.input_snapshot, 'resultados': current.resultados}, sort_keys=True, default=str).encode()).hexdigest()
+        current_detail = SolicitudConsumo.objects.get(solicitud=locked)
+        if current_hash != base_hash or _firma(locked).text_hash != consent_hash or _digest(_formulario_persistido(locked, current_detail.form_data)) != form_hash:
+            raise ValueError('BASE_ESTUDIO_CAMBIO_DURANTE_REVISION')
+        existing = drafts.filter(request_id=reference).first()
+        if existing is not None:
+            return existing.pk
+        previous = list(drafts.values_list('payload', flat=True)[:101])
+        if len(previous) > 100:
+            raise ValueError('REVISIONES_REQUIEREN_CONCILIACION')
+        number = max([v['version'] for v in previous] + [1]) + 1
+        version = {'solicitudId': str(case.pk), 'evaluacionBaseId': evaluation.pk, 'version': number, 'versionReferencia': reference, 'resultado': evaluated, 'fuentes': {'huellaSolicitud': {'documentoSha256': hashlib.sha256(case.solicitante.numero_identificacion.encode()).hexdigest(), 'evaluacionSha256': base_hash}, 'semantica': sources}}
+        raw = json.dumps(version, sort_keys=True, default=str)
+        record = AuditLog.objects.create(solicitud=locked, event='CREDIHOY_ESTUDIO_REVISION_PREPARADA', request_id=reference, actor='user:' + str(operador.pk), payload={'version': number, 'resultadoCifrado': encrypt_text(raw), 'resultadoSha256': hashlib.sha256(raw.encode()).hexdigest(), 'recibo': {'operacionHdc': str(operation.operacion_id)}, 'HDCNuevas': 0})
+        return record.pk
+
+
+def recuperar_xml_hdc(solicitud_id, *, operacion):
+    """Read and encrypt owned evidence outside any financial DB transaction."""
+    import base64
+    from apps.integraciones.risk_gateway.clientes import HDCGatewayClient
+    from apps.integraciones.risk_gateway.operaciones.models import OperacionGateway
+    from apps.xcore_consumo.services.otp_crypto import encrypt_text, decrypt_text
+    from .embargos import informe_hdc_concordante
+    if transaction.get_connection().in_atomic_block:
+        raise ValueError('XML_HDC_REQUIERE_AUTOCOMMIT')
+    op = OperacionGateway.objects.select_related('solicitud__solicitante').get(pk=operacion.operacion_id, solicitud_id=solicitud_id, proveedor='HDC', estado='COMPLETADA')
+    if op.request_id != operacion.request_id or op.consulta_id != operacion.consulta_id:
+        raise ValueError('XML_HDC_OPERACION_INCOMPATIBLE')
+    _exigir_recibo_hdc(op)
+    source = AuditLog.objects.filter(solicitud_id=solicitud_id, event='CREDIHOY_HDC_XML_CUSTODIADO', request_id=str(op.request_id))
+
+    def read(entry):
+        raw = base64.b64decode(decrypt_text(entry.payload['xmlCifrado']), validate=True)
+        if entry.payload['operacionId'] != str(op.pk) or hashlib.sha256(raw).hexdigest() != entry.payload['sha256']:
+            raise ValueError('XML_HDC_CUSTODIA_INVALIDA')
+        informe_hdc_concordante(raw, operacion.respuesta)
+        return raw
+    existing = source.first()
+    if existing is not None:
+        return read(existing)
+    raw = HDCGatewayClient().obtener_xml(str(op.consulta_id), request_id=str(op.request_id), titular_sha256=hashlib.sha256(op.solicitud.solicitante.numero_identificacion.encode()).hexdigest())
+    informe_hdc_concordante(raw, operacion.respuesta)
+    with transaction.atomic(durable=True):
+        locked = OperacionGateway.objects.select_for_update().get(pk=op.pk)
+        if locked.estado != 'COMPLETADA' or locked.request_id != op.request_id:
+            raise ValueError('XML_HDC_OPERACION_CAMBIO')
+        existing = source.first()
+        if existing is not None:
+            return read(existing)
+        AuditLog.objects.create(solicitud_id=solicitud_id, event='CREDIHOY_HDC_XML_CUSTODIADO', request_id=str(op.request_id), actor='servicio:continuacion', payload={'operacionId': str(op.pk), 'consultaId': str(op.consulta_id), 'sha256': hashlib.sha256(raw).hexdigest(), 'xmlCifrado': encrypt_text(base64.b64encode(raw).decode()), 'consultaNueva': False})
+    return raw
+
+
+def huella_consumo_estudio(detail, version='credihoy-estudio-tecnico-firmado-v1'):
+    """Separate immutable study inputs from append-only downstream operations."""
+    from copy import deepcopy
+    if version == 'credihoy-estudio-tecnico-firmado-v1':
+        value = detail
+    elif version == 'credihoy-estudio-tecnico-firmado-v2':
+        value = {k: deepcopy(detail[k]) for k in ('id', 'solicitud_id', 'created_at', 'form_data', 'core_data', 'selected_hc2_keys')}
+        downstream = {'credihoy_cotizacion_institucional', 'credihoy_cotizacion_institucional_escenarios_v1', 'credihoy_calendario_pago_v1', 'credihoy_calendario_pago_v1_revalidacion', 'credihoy_calendario_pago_v1_revalidacion_historial', 'credihoy_composiciones_contractuales_v1', 'credihoy_ofertas_linix_v1', 'credihoy_oferta_linix_actual', 'credihoy_aceptaciones_oferta_v1', 'credihoy_autentic_envios_v1', 'credihoy_autentic_identidad_v1'}
+        value['orchestration_data'] = {k: deepcopy(v) for k, v in detail['orchestration_data'].items() if k not in downstream}
+    else:
+        raise ValueError('HUELLA_ESTUDIO_VERSION_NO_ADMITIDA')
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, default=str).encode()).hexdigest()

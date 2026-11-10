@@ -1,4 +1,14 @@
 """Private HTTP transport, never a staff token or a browser credential."""
+
+
+
+
+
+
+
+
+
+
 import hashlib
 import hmac
 import json
@@ -22,6 +32,47 @@ class NoDisponible(Exception):
 
 class NoEncontrado(NoDisponible):
     pass
+
+
+RECHAZOS = {
+    'AUTHORIZATION_WINDOW_EXPIRED': (403, 'El periodo de prueba finalizo. Solicita una nueva habilitacion.', 'CONTACTAR_ENTIDAD'),
+    'DOCUMENT_PRESENTATION_EXPIRED': (410, 'La revision del documento vencio. Actualiza la autorizacion y revisala de nuevo.', 'ACTUALIZAR_AUTORIZACION'),
+    'AUTHORIZATION_CONFLICT': (409, 'La autorizacion tiene un estado diferente. Consulta su estado antes de continuar.', 'CONSULTAR_ESTADO'),
+    'AUTHORIZATION_SECURITY_REJECTED': (403, 'No pudimos validar esta autorizacion. Ingresa nuevamente de forma personal.', 'INICIAR_SESION'),
+    'AUTHORIZATION_UNAVAILABLE': (503, 'No pudimos confirmar la operacion. Consulta su estado antes de continuar.', 'CONSULTAR_ESTADO'),
+}
+
+
+class RechazoOperacion(Exception):
+    def __init__(self, codigo):
+        if codigo not in RECHAZOS:raise ValueError('CODIGO_RECHAZO_NO_PERMITIDO')
+        self.codigo=codigo
+        self.status_code,self.mensaje,self.accion=RECHAZOS[codigo]
+        super().__init__(codigo)
+
+
+def clasificar_rechazo(error):
+    from django.core.signing import SignatureExpired, BadSignature
+    from django.db import DatabaseError
+    if isinstance(error,RechazoOperacion):return error
+    if isinstance(error,SignatureExpired):return RechazoOperacion('DOCUMENT_PRESENTATION_EXPIRED')
+    if isinstance(error,BadSignature):return RechazoOperacion('AUTHORIZATION_SECURITY_REJECTED')
+    if isinstance(error,DatabaseError):
+        cause=error.__cause__ or error
+        state=getattr(cause,'sqlstate',None) or getattr(cause,'pgcode',None)
+        if state=='P0001':
+            if 'AUTHORIZATION_WINDOW_EXPIRED' in str(cause):return RechazoOperacion('AUTHORIZATION_WINDOW_EXPIRED')
+            return RechazoOperacion('AUTHORIZATION_SECURITY_REJECTED')
+        if state=='23505':return RechazoOperacion('AUTHORIZATION_CONFLICT')
+        return RechazoOperacion('AUTHORIZATION_UNAVAILABLE')
+    if isinstance(error,ValueError) and str(error) in {'AUTORIZACION_EXISTENTE_NO_SOBRESCRIBIR','ETAPA_AUTORIZACION_NO_DISPONIBLE'}:
+        return RechazoOperacion('AUTHORIZATION_CONFLICT')
+    return None
+
+
+def respuesta_rechazo(error, rid=None):
+    return {'versionContrato':VERSION,'requestId':rid,'codigo':error.codigo,
+        'mensaje':error.mensaje,'accion':error.accion}
 
 
 def secret():
@@ -70,26 +121,37 @@ def call(action, payload, rid):
     return request_packet(origin,path,body,rid,headers(path,body,rid))
 
 
-def request_packet(origin, path, body, rid, request_headers):
+def request_packet(origin, path, body, rid, request_headers, *, diagnostico=None):
     """Common verified HTTPS transport; never retry a provider-bearing request."""
+    if diagnostico is not None and type(diagnostico) is not dict:raise NoDisponible
+    def diagnostic(code):
+        if diagnostico is not None:diagnostico['codigo']=code
     u = urlsplit(origin)
     if (u.scheme != 'https' or not u.hostname or u.username or u.password
             or u.query or u.fragment or u.path not in ('', '/')):
-        raise NoDisponible
+        diagnostic('URL_INVALIDA');raise NoDisponible
     try:
         with requests.post(origin.rstrip('/') + path, data=body, headers=request_headers,
                 timeout=(5, 20), allow_redirects=False, verify=True) as response:
+            diagnostic('HTTP_'+str(response.status_code))
             if response.status_code == 404:
                 raise NoEncontrado
-            if (response.status_code != 200 or response.headers.get('X-Request-ID') != rid
-                    or 'application/json' not in response.headers.get('Content-Type', '')):
-                raise NoDisponible
+            if response.status_code != 200:raise NoDisponible
+            if response.headers.get('X-Request-ID') != rid:
+                diagnostic('CORRELACION_INVALIDA');raise NoDisponible
+            if 'application/json' not in response.headers.get('Content-Type', ''):
+                diagnostic('CONTENIDO_NO_JSON');raise NoDisponible
             packet = response.json()
-    except (requests.RequestException, ValueError):
+    except requests.RequestException as error:
+        diagnostic('TLS_ERROR' if isinstance(error,requests.exceptions.SSLError) else
+            'TIMEOUT' if isinstance(error,requests.Timeout) else 'CONEXION_ERROR')
+        raise NoDisponible from None
+    except ValueError:
+        diagnostic('RESPUESTA_JSON_INVALIDA')
         raise NoDisponible from None
     if (type(packet) is not dict or packet.get('versionContrato') != VERSION
             or packet.get('requestId') != rid):
-        raise NoDisponible
+        diagnostic('CONTRATO_RESPUESTA_INVALIDO');raise NoDisponible
     return packet
 
 
@@ -110,7 +172,7 @@ def comprobar(acceso_id, numero_intento, codigo, contacto, canal, verification_s
                            channel='sms' if canal == 'SMS' else 'email')
 
 
-def seguimiento(grant, solicitud_id=None, *, borrador=None,autorizacion=None):
+def seguimiento(grant, solicitud_id=None, *, borrador=None,autorizacion=None,radicacion=None):
     payload = {'accesoId': str(grant.pk), 'navegador': grant.navegador_hmac}
     if solicitud_id is not None:
         payload['solicitudId'] = str(solicitud_id)
@@ -120,8 +182,14 @@ def seguimiento(grant, solicitud_id=None, *, borrador=None,autorizacion=None):
     if autorizacion is not None:
         if solicitud_id is not None or borrador is not None:raise ValueError
         payload['autorizacion']=autorizacion
+    if radicacion is not None:
+        if solicitud_id is not None or borrador is not None or autorizacion is not None:raise ValueError
+        payload['radicacion']=radicacion
     from uuid import uuid4
     p = call('seguimiento', payload, str(uuid4()))
+    if radicacion is not None:
+        if p.get('sesionReferencia')!=str(grant.pk):raise NoDisponible
+        return {'sesionReferencia':str(grant.pk),'radicacion':project_radication(p['radicacion'])}
     if autorizacion is not None:
         if p.get('sesionReferencia')!=str(grant.pk):raise NoDisponible
         return {'sesionReferencia':str(grant.pk),'autorizacion':project_authorization(p['autorizacion'])}
@@ -141,6 +209,8 @@ def seguimiento(grant, solicitud_id=None, *, borrador=None,autorizacion=None):
 
 
 def project_authorization(row):
+    if type(row) is dict and row.get('versionContrato')=='credihoy-contractual-staging-v1':
+        return project_contractual(row)
     fields={'versionContrato','solicitudId','estado','documento','firmado','consultasHabilitadas','evaluacionHabilitada'}
     if (type(row) is not dict or set(row) not in (fields,fields|{'firma'},fields|{'complemento'},fields|{'centrales'}) or row['versionContrato']!='credihoy-autorizacion-titular-v1'
             or any(row[k] is not False for k in ('firmado','consultasHabilitadas','evaluacionHabilitada'))
@@ -221,55 +291,61 @@ def project_progress_notice(row):
 
 def project_quote(row):
     """Explicit allowlist: never expose holder hashes, XML, actors or core IDs."""
-    from datetime import date,datetime,timezone
+    if type(row) is dict and row.get('estado') == 'SIMULACION_PROPIA':
+        return project_simulacion_aceptable(row)
+    from datetime import date, datetime, timezone
     from decimal import Decimal
     try:
-        fields={'versionContrato','solicitudId','estado','cuota','oferta','aceptacion','autorizaStart','autorizaDesembolso'}
-        if (type(row) is not dict or set(row)!=fields or row['versionContrato']!='credihoy-cotizacion-titular-v1'
-                or str(UUID(row['solicitudId']))!=row['solicitudId'] or row['autorizaStart'] is not False
-                or row['autorizaDesembolso'] is not False or row['estado'] not in {
-                    'DISPONIBLE_PARCIAL','SIN_COTIZACION','NO_HABILITADA','REQUIERE_CONCILIACION',
-                    'DESACTUALIZADA','PARAMETROS_EXPEDIENTE_INCOMPLETOS','PARAMETROS_FALTANTES','NO_DISPONIBLE','ERROR_TEMPORAL'}):raise ValueError()
-        offer=row['oferta'];accept=row['aceptacion']
-        if set(accept)!={'aceptada','fecha'} or type(accept['aceptada']) is not bool:raise ValueError()
+        fields = {'versionContrato', 'solicitudId', 'estado', 'cuota', 'oferta', 'aceptacion', 'autorizaStart', 'autorizaDesembolso'}
+        if type(row) is not dict or set(row) != fields or row['versionContrato'] != 'credihoy-cotizacion-titular-v1' or (str(UUID(row['solicitudId'])) != row['solicitudId']) or (row['autorizaStart'] is not False) or (row['autorizaDesembolso'] is not False) or (row['estado'] not in {'DISPONIBLE_PARCIAL', 'SIN_COTIZACION', 'NO_HABILITADA', 'REQUIERE_CONCILIACION', 'DESACTUALIZADA', 'PARAMETROS_EXPEDIENTE_INCOMPLETOS', 'PARAMETROS_FALTANTES', 'NO_DISPONIBLE', 'ERROR_TEMPORAL'}):
+            raise ValueError()
+        offer = row['oferta']
+        accept = row['aceptacion']
+        if set(accept) != {'aceptada', 'fecha'} or type(accept['aceptada']) is not bool:
+            raise ValueError()
         if offer is None:
-            if row['cuota'] is not None or accept!={'aceptada':False,'fecha':None}:raise ValueError()
+            if row['cuota'] is not None or accept != {'aceptada': False, 'fecha': None}:
+                raise ValueError()
         else:
-            expected={'sha256','monto','plazoMeses','periodicidad','tasaNominalNamv','tasaEA',
-                    'primerVencimiento','vigenteHasta','condicionesCompletas','seguroIncluidoPorMotor'}
-            if 'calendarioPago' in offer:expected.add('calendarioPago')
-            if (set(offer)!=expected
-                    or not re.fullmatch('[a-f0-9]{64}',offer['sha256']) or offer['periodicidad']!='MENSUAL'
-                    or type(offer['plazoMeses']) is not int or not 1<=offer['plazoMeses']<=48
-                    or type(offer['condicionesCompletas']) is not bool or offer['seguroIncluidoPorMotor'] is not True):raise ValueError()
-            for number in (row['cuota'],offer['monto'],offer['tasaNominalNamv'],offer['tasaEA']):
-                if number is not None and (type(number) is not str or not re.fullmatch(r'[0-9]{1,12}(\.[0-9]{1,8})?',number)
-                        or Decimal(number)<=0):raise ValueError()
-            if row['cuota'] is None or offer['monto'] is None or offer['tasaNominalNamv'] is None:raise ValueError()
-            end=datetime.fromisoformat(offer['vigenteHasta'])
-            if end.utcoffset() is None or end<=datetime.now(timezone.utc):raise ValueError()
+            expected = {'sha256', 'monto', 'plazoMeses', 'periodicidad', 'tasaNominalNamv', 'tasaEA', 'primerVencimiento', 'vigenteHasta', 'condicionesCompletas', 'seguroIncluidoPorMotor'}
+            if 'calendarioPago' in offer:
+                expected.add('calendarioPago')
+            if set(offer) != expected or not re.fullmatch('[a-f0-9]{64}', offer['sha256']) or offer['periodicidad'] != 'MENSUAL' or (type(offer['plazoMeses']) is not int) or (not 1 <= offer['plazoMeses'] <= 48) or (type(offer['condicionesCompletas']) is not bool) or (offer['seguroIncluidoPorMotor'] is not True):
+                raise ValueError()
+            for number in (row['cuota'], offer['monto'], offer['tasaNominalNamv'], offer['tasaEA']):
+                if number is not None and (type(number) is not str or not re.fullmatch('[0-9]{1,12}(\\.[0-9]{1,8})?', number) or Decimal(number) <= 0):
+                    raise ValueError()
+            if row['cuota'] is None or offer['monto'] is None or offer['tasaNominalNamv'] is None:
+                raise ValueError()
+            end = datetime.fromisoformat(offer['vigenteHasta'])
+            if end.utcoffset() is None or end <= datetime.now(timezone.utc):
+                raise ValueError()
             if offer['primerVencimiento'] is not None:
                 from datetime import date
-                if date.fromisoformat(offer['primerVencimiento']).isoformat()!=offer['primerVencimiento']:raise ValueError()
-            complete=offer['primerVencimiento'] is not None and offer['tasaEA'] is not None
+                if date.fromisoformat(offer['primerVencimiento']).isoformat() != offer['primerVencimiento']:
+                    raise ValueError()
+            complete = offer['primerVencimiento'] is not None and offer['tasaEA'] is not None
             if 'calendarioPago' in offer:
-                c=offer['calendarioPago'];complete=complete and c is not None
+                c = offer['calendarioPago']
+                complete = complete and c is not None
                 if c is not None:
-                    from .condiciones_producto import preparar_calendario,CALENDARIO_VERSION
-                    if set(c)!={'versionRegla','diaPago','fechaBaseDesembolso','tipoBase','primerVencimiento','interesesAnticipados'}:
+                    from .condiciones_producto import preparar_calendario, CALENDARIO_VERSION
+                    if set(c) != {'versionRegla', 'diaPago', 'fechaBaseDesembolso', 'tipoBase', 'primerVencimiento', 'interesesAnticipados'}:
                         raise ValueError()
-                    computed=preparar_calendario(date.fromisoformat(c['fechaBaseDesembolso']),c['diaPago'],
-                        medio_pago='VENTANILLA',tipo_base=c['tipoBase'])
-                    if (c['versionRegla']!=CALENDARIO_VERSION or c['primerVencimiento']!=offer['primerVencimiento']
-                            or c['primerVencimiento']!=computed['primerVencimientoProyectado']
-                            or c['interesesAnticipados']!={k:computed['interesesAnticipados'][k] for k in ('desde','hasta','importe')}):raise ValueError()
-            if offer['condicionesCompletas']!=complete:raise ValueError()
+                    computed = preparar_calendario(date.fromisoformat(c['fechaBaseDesembolso']), c['diaPago'], medio_pago='VENTANILLA', tipo_base=c['tipoBase'])
+                    if c['versionRegla'] != CALENDARIO_VERSION or c['primerVencimiento'] != offer['primerVencimiento'] or c['primerVencimiento'] != computed['primerVencimientoProyectado'] or (c['interesesAnticipados'] != {k: computed['interesesAnticipados'][k] for k in ('desde', 'hasta', 'importe')}):
+                        raise ValueError()
+            if offer['condicionesCompletas'] != complete:
+                raise ValueError()
             if accept['aceptada']:
-                when=datetime.fromisoformat(accept['fecha'])
-                if when.utcoffset() is None or when>datetime.now(timezone.utc) or not offer['condicionesCompletas']:raise ValueError()
-            elif accept['fecha'] is not None:raise ValueError()
+                when = datetime.fromisoformat(accept['fecha'])
+                if when.utcoffset() is None or when > datetime.now(timezone.utc) or (not offer['condicionesCompletas']):
+                    raise ValueError()
+            elif accept['fecha'] is not None:
+                raise ValueError()
         return json.loads(json.dumps(row))
-    except (KeyError,TypeError,ValueError,AttributeError,ArithmeticError):raise NoDisponible from None
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        raise NoDisponible from None
 
 
 def project_draft(row):
@@ -381,10 +457,31 @@ def project_row(row):
                         (clean['institucional'] is not None or clean['simulacion'] is not None
                          or clean['requisitosCumplidos'] is not None))):raise ValueError
             clean['procedencia']=dict(provenance)
+        if row.get('seguimientoRadicacion') is not None:
+            if row.get('procedencia',{}).get('origen')!='FUENTE_OPERATIVA':raise ValueError
+            clean['seguimientoRadicacion']=project_intake_tracking(row['seguimientoRadicacion'])
         if row.get('estudio') is not None:
             if row.get('procedencia',{}).get('origen')!='FUENTE_OPERATIVA':raise ValueError
             clean['estudio']=project_study(row['estudio'],row['referencia'])
             if clean['requisitosCumplidos']!=sum(r['resultado']=='CUMPLE' for r in clean['estudio']['reglas']):raise ValueError
+        if row.get('formalizacionDocumental') is not None:
+            p=row['formalizacionDocumental']
+            if (type(p) is not dict or set(p)!={'versionContrato','documento','estado','firmaAcreditada',
+                    'actualizadoAt','continuacionInstitucionalPendiente'}
+                    or p['versionContrato']!='credihoy-formalizacion-publica-v1' or p['documento']!='COLO-FO.001'
+                    or type(p['firmaAcreditada']) is not bool or p['continuacionInstitucionalPendiente'] is not True
+                    or p['estado']!=('DOCUMENTO_VERIFICADO' if p['firmaAcreditada'] else 'VALIDACION_PENDIENTE')
+                    or datetime.fromisoformat(p['actualizadoAt']).utcoffset() is None):raise ValueError
+            clean['formalizacionDocumental']=dict(p)
+        if row.get('formalizacionStaging') is not None:
+            p=row['formalizacionStaging']
+            if (type(p) is not dict or set(p)!={'ambiente','documento','version','paginas','disponibleHasta','firmaProductivaAcreditada'}
+                    or p['ambiente']!='STAGING'
+                    or not ((p['documento']=='COLO-FO.001' and p['version']=='13' and p['paginas']==3)
+                        or (p['documento']=='PRUEBA-FIRMA-STAGING' and p['version']=='1' and type(p['paginas']) is int and 1<=p['paginas']<=10))
+                    or p['firmaProductivaAcreditada'] is not False
+                    or datetime.fromisoformat(p['disponibleHasta']).utcoffset() is None):raise ValueError
+            clean['formalizacionStaging']=dict(p)
         if row.get('envio') is not None:
             from datetime import timezone
             from decimal import Decimal
@@ -406,6 +503,7 @@ def project_row(row):
                     or Decimal(estimate['resultado']['monto'])!=Decimal(row['monto'])
                     or estimate['resultado']['plazoMeses']!=row['plazoMeses']):raise ValueError
             clean['simulacionLocal']=estimate
+        clean['historial']=project_digital_history(clean)
         return clean
     except (TypeError,KeyError,ValueError,AttributeError):
         raise NoDisponible from None
@@ -413,40 +511,79 @@ def project_row(row):
 def project_study(value, solicitud_id):
     from datetime import datetime, timezone
     try:
-        fields={'versionContrato','solicitudId','evaluacionBaseId','version','referenciaVersion',
-            'fechaEvaluacion','reglas','capacidad','decision','autorizadoDecisionCrediticia'}
-        if (type(value) is not dict or set(value)!=fields or value['versionContrato']!='credihoy-estudio-publico-v1'
-                or value['solicitudId']!=str(solicitud_id) or str(UUID(value['solicitudId']))!=value['solicitudId']
-                or type(value['evaluacionBaseId']) is not int or value['evaluacionBaseId']<1
-                or type(value['version']) is not int or value['version']<1
-                or str(UUID(value['referenciaVersion']))!=value['referenciaVersion']
-                or value['autorizadoDecisionCrediticia'] is not False
-                or value['decision'] not in {'PENDIENTE_REVISION','REQUIERE_SUBSANACION'}):raise ValueError
-        observed=datetime.fromisoformat(value['fechaEvaluacion'])
-        if observed.utcoffset() is None or observed>datetime.now(timezone.utc):raise ValueError
-        codes={f'UNICO_FILA_{n}' for n in (2,4,6,9,10,12,14,17,21,23,24,27,28,30,31,32)}
-        rows=value['reglas']
-        if type(rows) is not list or len(rows)!=16 or {r.get('codigo') for r in rows}!=codes:raise ValueError
+        fields = {'versionContrato', 'solicitudId', 'evaluacionBaseId', 'version', 'referenciaVersion', 'fechaEvaluacion', 'reglas', 'capacidad', 'decision', 'autorizadoDecisionCrediticia'}
+        if type(value) is dict and 'decisionPolitica' in value:
+            fields.add('decisionPolitica')
+            decision = value['decisionPolitica']
+            decision_fields = {'version', 'versionPolitica', 'estado', 'motivos', 'decisionLinixRegistrada', 'autorizaDesembolso'}
+            if 'continuidad' in decision:
+                decision_fields.add('continuidad')
+                c = decision['continuidad']
+                if type(c) is not dict or set(c) != {'version', 'estudioFavorable', 'estadoRadicacion', 'decisionInstitucional', 'firmaContractual', 'radicacionHabilitada', 'firmaHabilitada'} or c['version'] != 'credihoy-continuidad-publica-v1' or (type(c['estudioFavorable']) is not bool) or (c['estadoRadicacion'] != 'PREPARACION_PENDIENTE') or (c['decisionInstitucional'] != 'PENDIENTE') or (c['firmaContractual'] != 'PENDIENTE') or (c['radicacionHabilitada'] is not False) or (c['firmaHabilitada'] is not False) or (c['estudioFavorable'] and (decision['estado'] == 'RECHAZADO' or any((r['codigo'] != 'REVISION_ESTAMENTO_INSTITUCIONAL' for r in decision['motivos'])))):
+                    raise ValueError
+            if type(decision) is not dict or set(decision) != decision_fields or decision['version'] != 'credihoy-decision-publica-v1' or (type(decision['versionPolitica']) is not str) or (not 1 <= len(decision['versionPolitica']) <= 120) or (decision['estado'] not in {'APROBADO', 'RECHAZADO', 'EN_REVISION'}) or (decision['decisionLinixRegistrada'] is not False) or (decision['autorizaDesembolso'] is not False) or (type(decision['motivos']) is not list) or (len(decision['motivos']) > 40):
+                raise ValueError
+            for reason in decision['motivos']:
+                if type(reason) is not dict or set(reason) != {'codigo', 'regla'} or type(reason['codigo']) is not str or (not re.fullmatch('[A-Z][A-Z0-9_]{1,120}', reason['codigo'])) or (reason['regla'] is not None and (not re.fullmatch('UNICO_FILA_[0-9]{1,2}', str(reason['regla'])))):
+                    raise ValueError
+        if type(value) is not dict or set(value) != fields or value['versionContrato'] != 'credihoy-estudio-publico-v1' or (value['solicitudId'] != str(solicitud_id)) or (str(UUID(value['solicitudId'])) != value['solicitudId']) or (type(value['evaluacionBaseId']) is not int) or (value['evaluacionBaseId'] < 1) or (type(value['version']) is not int) or (value['version'] < 1) or (str(UUID(value['referenciaVersion'])) != value['referenciaVersion']) or (value['autorizadoDecisionCrediticia'] is not False) or (value['decision'] not in {'PENDIENTE_REVISION', 'REQUIERE_SUBSANACION'}):
+            raise ValueError
+        observed = datetime.fromisoformat(value['fechaEvaluacion'])
+        if observed.utcoffset() is None or observed > datetime.now(timezone.utc):
+            raise ValueError
+        codes = {f'UNICO_FILA_{n}' for n in (2, 4, 6, 9, 10, 12, 14, 17, 21, 23, 24, 27, 28, 30, 31, 32)}
+        rows = value['reglas']
+        if type(rows) is not list or len(rows) != 16 or {r.get('codigo') for r in rows} != codes:
+            raise ValueError
         for row in rows:
-            if (type(row) is not dict or set(row)!={'codigo','nombre','resultado','estadoEvaluacion','motivos','datosFaltantes'}
-                    or row['resultado'] not in {'CUMPLE','NO_CUMPLE','NO_EVALUABLE'}
-                    or row['estadoEvaluacion'] not in {'CUMPLE','NO_CUMPLE','NO_EVALUABLE','NO_APLICA','PENDIENTE_POLITICA'}
-                    or type(row['nombre']) is not str or not 1<=len(row['nombre'])<=120):raise ValueError
-            for key in ('motivos','datosFaltantes'):
-                if type(row[key]) is not list or len(row[key])>20 or any(type(v) is not str or not 1<=len(v)<=240 for v in row[key]):raise ValueError
-        cap=value['capacidad']
-        capacity_fields={'estado','valor','preliminarNoDecisoria','cuotaContractualDisponible'}
-        separated=('capacidadDisponible','capacidadResidualPostCuota') if value['version']>=8 else ()
-        if (type(cap) is not dict or set(cap)!=capacity_fields|set(separated)
-                or cap['estado'] not in {'EVALUABLE','NO_EVALUABLE','INFORMACION_INCONSISTENTE'}
-                or cap['cuotaContractualDisponible'] is not False):raise ValueError
-        for key in ('valor','preliminarNoDecisoria')+separated:
-            if cap[key] is not None and (type(cap[key]) is not str or not re.fullmatch(r'-?[0-9]{1,15}(?:\.[0-9]{1,8})?',cap[key])):raise ValueError
-        if any(cap[key] is None for key in separated):raise ValueError
-        if (cap['estado']=='EVALUABLE')!=(cap['valor'] is not None):raise ValueError
+            if type(row) is not dict or set(row) != {'codigo', 'nombre', 'resultado', 'estadoEvaluacion', 'motivos', 'datosFaltantes'} or row['resultado'] not in {'CUMPLE', 'NO_CUMPLE', 'NO_EVALUABLE'} or (row['estadoEvaluacion'] not in {'CUMPLE', 'NO_CUMPLE', 'NO_EVALUABLE', 'NO_APLICA', 'PENDIENTE_POLITICA'}) or (type(row['nombre']) is not str) or (not 1 <= len(row['nombre']) <= 120):
+                raise ValueError
+            for key in ('motivos', 'datosFaltantes'):
+                if type(row[key]) is not list or len(row[key]) > 20 or any((type(v) is not str or not 1 <= len(v) <= 240 for v in row[key])):
+                    raise ValueError
+        if value.get('decisionPolitica', {}).get('continuidad', {}).get('estudioFavorable') is True:
+            if any((r['estadoEvaluacion'] not in {'CUMPLE', 'NO_APLICA'} and (not (r['codigo'] == 'UNICO_FILA_6' and r['estadoEvaluacion'] == 'NO_CUMPLE')) for r in rows)):
+                raise ValueError
+        cap = value['capacidad']
+        capacity_fields = {'estado', 'valor', 'preliminarNoDecisoria', 'cuotaContractualDisponible'}
+        if 'metodologia' in cap:
+            if value['version'] < 2:
+                raise ValueError
+            capacity_fields.add('metodologia')
+            method = cap['metodologia']
+            amounts = ('disponibleAntesGastosFamiliares', 'gastosFamiliaresAplicados', 'capacidadDisponible', 'cuotaNuevaEstimada', 'residualPosteriorEstimado')
+            if type(method) is not dict or set(method) != {'version', 'deudaConciliada', *amounts} or method['version'] != 'credihoy-capacidad-publica-v1' or (type(method['deudaConciliada']) is not bool):
+                raise ValueError
+            for key in amounts:
+                if method[key] is not None and (type(method[key]) is not str or not re.fullmatch('-?[0-9]{1,15}(?:\\.[0-9]{1,8})?', method[key])):
+                    raise ValueError
+            from decimal import Decimal, localcontext
+            with localcontext() as context:
+                context.prec = 60
+                if method['gastosFamiliaresAplicados'] is not None and Decimal(method['gastosFamiliaresAplicados']) < 0:
+                    raise ValueError
+                if method['cuotaNuevaEstimada'] is not None and Decimal(method['cuotaNuevaEstimada']) <= 0:
+                    raise ValueError
+                if all((method[k] is not None for k in amounts[:3])):
+                    if Decimal(method[amounts[0]]) - Decimal(method[amounts[1]]) != Decimal(method[amounts[2]]):
+                        raise ValueError
+                if all((method[k] is not None for k in amounts[2:])):
+                    if Decimal(method[amounts[2]]) - Decimal(method[amounts[3]]) != Decimal(method[amounts[4]]):
+                        raise ValueError
+        separated = ('capacidadDisponible', 'capacidadResidualPostCuota') if value['version'] >= 8 else ()
+        if type(cap) is not dict or set(cap) != capacity_fields | set(separated) or cap['estado'] not in {'EVALUABLE', 'NO_EVALUABLE', 'INFORMACION_INCONSISTENTE'} or (cap['cuotaContractualDisponible'] is not False):
+            raise ValueError
+        for key in ('valor', 'preliminarNoDecisoria') + separated:
+            if cap[key] is not None and (type(cap[key]) is not str or not re.fullmatch('-?[0-9]{1,15}(?:\\.[0-9]{1,8})?', cap[key])):
+                raise ValueError
+        if any((cap[key] is None for key in separated)):
+            raise ValueError
+        if (cap['estado'] == 'EVALUABLE') != (cap['valor'] is not None):
+            raise ValueError
         import copy
         return copy.deepcopy(value)
-    except (KeyError,ValueError,TypeError,AttributeError):raise NoDisponible from None
+    except (KeyError, ValueError, TypeError, AttributeError):
+        raise NoDisponible from None
 
 
 def project_simulation(row):
@@ -517,4 +654,300 @@ def project_simulation(row):
                     or total != money(r['totalEstimado'])):raise ValueError
         return json.loads(json.dumps(row))
     except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):raise NoDisponible from None
+
+
+
+def project_study_decision(result):
+    state = result['estado']
+    public_state = state if state in {'APROBADO', 'RECHAZADO'} else 'EN_REVISION'
+    reasons = [{'codigo': v['codigo'], 'regla': v.get('regla')} for v in result.get('causalElegibilidad', [])]
+    if state == 'BLOQUEO_ESTAMENTOS_SIN_EVIDENCIA':
+        reasons.append({'codigo': 'CLASIFICACION_INSTITUCIONAL_PENDIENTE', 'regla': None})
+    elif state.startswith('REQUIERE_'):
+        reasons.append({'codigo': 'REVISION_ESTAMENTO_INSTITUCIONAL', 'regla': None})
+    elif state == 'POLITICA_NO_APLICABLE':
+        reasons.append({'codigo': 'POLITICA_PRODUCTO_NO_APLICABLE', 'regla': None})
+    projection = {'version': 'credihoy-decision-publica-v1', 'versionPolitica': result['versionPolitica'], 'estado': public_state, 'motivos': reasons, 'decisionLinixRegistrada': False, 'autorizaDesembolso': False}
+    if 'preparacion' in result:
+        from .elegibilidad import continuidad_desde_decision
+        continuity = continuidad_desde_decision(result)
+        projection['continuidad'] = {'version': 'credihoy-continuidad-publica-v1', 'estudioFavorable': continuity['estudioFavorable'], 'estadoRadicacion': 'PREPARACION_PENDIENTE', 'decisionInstitucional': 'PENDIENTE', 'firmaContractual': 'PENDIENTE', 'radicacionHabilitada': False, 'firmaHabilitada': False}
+    return projection
+
+
+def validar_simulacion_propia(value, sid, *, ahora=None):
+    """Validate the persisted approximate plan without treating it as a signed offer."""
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    import hashlib
+    try:
+        fields = {'version', 'solicitudId', 'revisionReferencia', 'versionCondiciones', 'calculadoEn', 'vigenteHasta', 'fuente', 'monto', 'plazoMeses', 'tasaNominalNamv', 'periodicidad', 'cuota', 'seguroMensualPorcentaje', 'baseSeguro', 'unidadRedondeo', 'versionMotor', 'versionParametros', 'planAproximado', 'amortizacion', 'totales', 'autorizaStart', 'firmaContractual', 'aprobacionInstitucional', 'sha256'}
+        if type(value) is not dict or set(value) != fields or value['solicitudId'] != str(UUID(sid)) or (value['version'] != 'credihoy-simulacion-aceptable-v1') or (value['fuente'] != 'CREDIHOY_CALCULO_PROPIO') or (str(UUID(value['revisionReferencia'])) != value['revisionReferencia']) or (value['planAproximado'] is not True) or (value['autorizaStart'] is not False) or (value['firmaContractual'] is not False) or (value['aprobacionInstitucional'] is not False) or (value['periodicidad'] != 'MENSUAL') or (type(value['plazoMeses']) is not int) or (not 1 <= value['plazoMeses'] <= 48) or (value['baseSeguro'] != 'SALDO_INICIAL_PERIODO') or (value['unidadRedondeo'] != '1') or (value['versionMotor'] != 'credihoy-plan-decimal-v1') or (type(value['versionParametros']) is not str) or (not value['versionParametros']):
+            raise ValueError()
+        for k in ('sha256', 'versionCondiciones'):
+            if type(value[k]) is not str or not re.fullmatch('[a-f0-9]{64}', value[k]):
+                raise ValueError()
+        body = {k: v for (k, v) in value.items() if k != 'sha256'}
+        if hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest() != value['sha256']:
+            raise ValueError()
+        now = ahora or datetime.now(timezone.utc)
+        (start, end) = (datetime.fromisoformat(value[k]) for k in ('calculadoEn', 'vigenteHasta'))
+        if start.utcoffset() is None or end.utcoffset() is None or (not start <= now < end) or (not 60 <= (end - start).total_seconds() <= 86400):
+            raise ValueError()
+
+        def money(v):
+            if type(v) is not str or not re.fullmatch('[0-9]{1,15}(\\.[0-9]{1,8})?', v):
+                raise ValueError()
+            return Decimal(v)
+        amount = money(value['monto'])
+        quota = money(value['cuota'])
+        if amount <= 0 or quota <= 0 or (not 0 <= money(value['tasaNominalNamv']) <= 100) or (not 0 <= money(value['seguroMensualPorcentaje']) <= 100):
+            raise ValueError()
+        rows = value['amortizacion']
+        totals = {k: Decimal(0) for k in ('capital', 'intereses', 'seguro', 'cuotas')}
+        if type(rows) is not list or len(rows) != value['plazoMeses']:
+            raise ValueError()
+        balance = amount
+        for (n, row) in enumerate(rows, 1):
+            if type(row) is not dict or set(row) != {'periodo', 'saldoInicial', 'capital', 'intereses', 'seguro', 'otros', 'cuota', 'saldoFinal'}:
+                raise ValueError()
+            v = {k: money(row[k]) for k in row if k != 'periodo'}
+            if type(row['periodo']) is not int or row['periodo'] != n or v['saldoInicial'] != balance or (v['capital'] <= 0) or (v['otros'] != 0) or (v['saldoFinal'] != balance - v['capital']) or (v['cuota'] != v['capital'] + v['intereses'] + v['seguro']) or (n < len(rows) and v['cuota'] != quota):
+                raise ValueError()
+            for k in totals:
+                totals[k] += v['cuota' if k == 'cuotas' else k]
+            balance = v['saldoFinal']
+        if balance != 0 or totals['capital'] != amount or type(value['totales']) is not dict or (set(value['totales']) != set(totals)) or any((money(value['totales'][k]) != v for (k, v) in totals.items())):
+            raise ValueError()
+        return json.loads(json.dumps(value))
+    except (KeyError, TypeError, ValueError, AttributeError, ArithmeticError):
+        raise ValueError('SIMULACION_PROPIA_NO_VIGENTE_O_INVALIDA') from None
+
+
+def project_simulacion_aceptable(row):
+    from datetime import datetime,timezone
+    try:
+        if (type(row) is not dict or set(row)!={'versionContrato','solicitudId','estado','cuota','oferta',
+                'aceptacion','simulacion','aceptacionSimulacion','autorizaStart','autorizaDesembolso'}
+                or row['versionContrato']!='credihoy-cotizacion-titular-v1' or row['estado']!='SIMULACION_PROPIA'
+                or row['cuota'] is not None or row['oferta'] is not None
+                or row['aceptacion']!={'aceptada':False,'fecha':None}
+                or row['autorizaStart'] is not False or row['autorizaDesembolso'] is not False):raise ValueError()
+        a=row['aceptacionSimulacion']
+        if type(a) is not dict or set(a)!={'aceptada','fecha'} or type(a['aceptada']) is not bool:raise ValueError()
+        if a['aceptada']:
+            t=datetime.fromisoformat(a['fecha'])
+            if t.utcoffset() is None or not datetime.fromisoformat(row['simulacion']['calculadoEn'])<=t<=datetime.now(timezone.utc):raise ValueError()
+        elif a['fecha'] is not None:raise ValueError()
+        validar_simulacion_propia(row['simulacion'],row['solicitudId'],
+            ahora=t if a['aceptada'] else None)
+        return json.loads(json.dumps(row))
+    except (KeyError,TypeError,ValueError,AttributeError,ArithmeticError):raise NoDisponible from None
+
+
+def project_radication(row):
+    fields={'versionContrato','solicitudId','intencionId','estado','codigo','puedeConfirmar','presentacion',
+        'K_FLUJO','SC','actividadesActivas','decisionInstitucional','firmaContractual','autorizaFirma','autorizaDesembolso'}
+    if (type(row) is not dict or set(row) not in (fields,fields|{'calendarioPropuesto'}) or row['versionContrato']!='credihoy-radicacion-personal-v1'
+            or any(str(UUID(row[k]))!=row[k] for k in ('solicitudId','intencionId'))
+            or row['estado'] not in {'SIN_INTENCION','PREPARADA','EXECUTING','INCIERTA','RADICADA','BLOQUEADA'}
+            or row['decisionInstitucional']!='PENDIENTE' or row['firmaContractual']!='PENDIENTE'
+            or row['autorizaFirma'] is not False or row['autorizaDesembolso'] is not False
+            or type(row['puedeConfirmar']) is not bool
+            or row['codigo'] is not None and (type(row['codigo']) is not str or not re.fullmatch('[A-Z][A-Z0-9_]{1,120}',row['codigo']))
+            or any(row[k] is not None and (type(row[k]) is not str or not re.fullmatch('[1-9][0-9]{0,19}',row[k])) for k in ('K_FLUJO','SC'))
+            or type(row['actividadesActivas']) is not list or len(row['actividadesActivas'])>20):raise NoDisponible
+    if row['puedeConfirmar']:
+        if row['estado']!='PREPARADA' or type(row['presentacion']) is not str or not 1<=len(row['presentacion'])<=8192 or 'calendarioPropuesto' not in row:raise NoDisponible
+    elif row['presentacion'] is not None:raise NoDisponible
+    if 'calendarioPropuesto' in row:
+        from datetime import date
+        p=row['calendarioPropuesto']
+        try:
+            if (type(p) is not dict or set(p)!={'diaPago','primerVencimiento','versionRegla','tipoBase','definitivo'}
+                    or type(p['diaPago']) is not int or not 1<=p['diaPago']<=20
+                    or p['versionRegla']!='CREDIHOY_DIA_PAGO_30_CALENDARIO_20261028_V2'
+                    or p['tipoBase']!='PROYECTADO' or p['definitivo'] is not False
+                    or date.fromisoformat(p['primerVencimiento']).day!=p['diaPago']):raise ValueError()
+        except (KeyError,TypeError,ValueError):raise NoDisponible from None
+    active=[]
+    for task in row['actividadesActivas']:
+        if type(task) is not dict or type(task.get('actividad')) is not int or task['actividad']<=0:raise NoDisponible
+        active.append({'actividad':task['actividad']})
+    # LINIX identifiers and technical errors belong to operational custody only.
+    return {**row,'K_FLUJO':None,'SC':None,'actividadesActivas':[],
+        'codigo':'RADICACION_POR_VERIFICAR' if row['codigo'] else None}
+
+
+def project_intake_tracking(value):
+    from decimal import Decimal
+    from datetime import datetime,timezone
+    fields={'versionContrato','estado','confirmada','consultadoEn','cuotaAceptada','aceptadaEn',
+        'decisionInstitucional','firmaContractual'}
+    try:
+        if (type(value) is not dict or set(value) not in (fields,fields|{'radicadaEn'})
+                or value['versionContrato']!='credihoy-seguimiento-radicacion-v1'
+                or value['estado'] not in {'SIN_INTENCION','PREPARADA','EN_PROCESO','RADICADA','POR_CONFIRMAR','NO_DISPONIBLE'}
+                or type(value['confirmada']) is not bool or value['confirmada']!=(value['estado']=='RADICADA')
+                or value['decisionInstitucional']!='PENDIENTE' or value['firmaContractual']!='PENDIENTE'):
+            raise ValueError()
+        observed=datetime.fromisoformat(value['consultadoEn'])
+        if observed.utcoffset() is None or observed>datetime.now(timezone.utc):raise ValueError()
+        if value['cuotaAceptada'] is None:
+            if value['aceptadaEn'] is not None or value['estado']!='NO_DISPONIBLE':raise ValueError()
+        else:
+            if (type(value['cuotaAceptada']) is not str or not re.fullmatch(r'[0-9]{1,12}(\.[0-9]{1,2})?',value['cuotaAceptada'])
+                    or Decimal(value['cuotaAceptada'])<=0):raise ValueError()
+            accepted=datetime.fromisoformat(value['aceptadaEn'])
+            if accepted.utcoffset() is None or accepted>observed:raise ValueError()
+        if 'radicadaEn' in value:
+            registered=datetime.fromisoformat(value['radicadaEn'])
+            if (not value['confirmada'] or registered.utcoffset() is None
+                    or not accepted<=registered<=observed):raise ValueError()
+    except (ValueError,TypeError,KeyError):raise NoDisponible from None
+    return dict(value)
+
+
+def project_digital_history(row):
+    """One chronology from already validated owner facts; no new business events."""
+    tracking=row.get('seguimientoRadicacion') or {};study=row.get('estudio') or {}
+    document=row.get('formalizacionDocumental') or {};institution=row.get('institucional') or {}
+    def event(code,title,when,description,confirmed=False):
+        return {'codigo':code,'titulo':title,'fecha':when,'estado':'CONFIRMADO' if confirmed else 'PENDIENTE',
+            'descripcion':description}
+    rows=[event('SOLICITUD','Solicitud registrada',row['fechaCreacion'],'Tu solicitud fue registrada.',True),
+        event('ESTUDIO','Estudio digital',study.get('fechaEvaluacion'),
+            'Estudio digital aprobado; no equivale a la decision institucional.' if study.get('decisionPolitica',{}).get('continuidad',{}).get('estudioFavorable') else 'Consulta las validaciones acreditadas de tu estudio.',bool(study)),
+        event('CUOTA','Cuota y condiciones aceptadas',tracking.get('aceptadaEn'),
+            'Tu aceptacion personal de la simulacion se conserva.' if tracking.get('aceptadaEn') else 'Aceptacion de condiciones pendiente.',bool(tracking.get('aceptadaEn'))),
+        event('RADICACION','Radicacion confirmada',tracking.get('radicadaEn'),
+            'Confirmaste personalmente la radicacion. La solicitud esta registrada y en revision institucional.' if tracking.get('confirmada') else 'No hay una radicacion confirmada.',tracking.get('confirmada') is True),
+        event('FORMALIZACION','Formalizacion contractual AutenTIC',document.get('actualizadoAt') if document.get('firmaAcreditada') else None,
+            'Documento contractual firmado y verificado.' if document.get('firmaAcreditada') else 'La firma de COLO-FO.001 sigue pendiente. No es el pagare LINPAG.',document.get('firmaAcreditada') is True),
+        event('DECISION','Decision institucional',institution.get('fechaDecision'),
+            'Aprobacion institucional registrada; no acredita firma ni desembolso.' if institution else 'Tu solicitud se encuentra en revision institucional.' if tracking.get('confirmada') else 'Decision institucional pendiente.',bool(institution)),
+        event('DESEMBOLSO','Desembolso',None,'Sin confirmacion institucional de desembolso.')]
+    if institution:rows.append(event('PAGARE','Pagare LINPAG',None,'LINIX gestiona el pagare en su oportunidad; no se firma desde este portal.'))
+    return sorted(rows,key=lambda item:(item['fecha'] is None,item['fecha'] or '',item['codigo']))
+
+
+def alcance_contractual(solicitud_id,identity=None):
+    from datetime import datetime,timezone
+    scope=getattr(settings,'CREDIHOY_CONTRACTUAL_STAGING_ALCANCE',None)
+    fields={'version','ambiente','solicitudId','titularReferencia','documentoOperacionId','pdfSha256','venceEn'}
+    if (type(scope) is not dict or set(scope) not in (fields,fields|{'documentoPrueba'}) or scope['version']!='CREDIHOY_CONTRACTUAL_STAGING_V1'
+            or scope['ambiente']!='STAGING' or scope['solicitudId']!=str(solicitud_id)
+            or any(type(scope[k]) is not str or not re.fullmatch('[a-f0-9]{64}',scope[k]) for k in ('titularReferencia','pdfSha256'))
+            or any(str(UUID(scope[k]))!=scope[k] for k in ('solicitudId','documentoOperacionId'))):
+        raise NoDisponible
+    if 'documentoPrueba' in scope:
+        trial=scope['documentoPrueba']
+        if (type(trial) is not dict or set(trial)!={'codigo','version','paginas'}
+                or trial['codigo']!='PRUEBA-FIRMA-STAGING' or trial['version']!='1'
+                or type(trial['paginas']) is not int or not 1<=trial['paginas']<=10):raise NoDisponible
+    end=datetime.fromisoformat(scope['venceEn'])
+    if end.utcoffset() is None or datetime.now(timezone.utc)>=end:raise NoDisponible
+    if identity is not None:
+        if hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()!=scope['titularReferencia']:
+            raise NoDisponible
+        if datetime.fromisoformat(identity['_sesionExpiraAt'])<=datetime.now(timezone.utc):raise NoDisponible
+    return scope
+
+
+
+def cliente_verify_contractual(service,identity,record,*,comprobacion_id=None):
+    """Purpose adapter over the existing relay; provider credentials stay there."""
+    from django.core import signing
+    from .publico_seguimiento import key
+    scope=alcance_contractual(record['vinculo']['solicitudId'],identity)
+    if (record['vinculo']['pdfSha256']!=scope['pdfSha256']
+            or record['vinculo']['documentoOperacionId']!=scope['documentoOperacionId']):raise NoDisponible
+    path=BASE+'seguimiento/'
+    def call_contract(action,destination,code=None,verification_sid=None):
+        label='CONTRACTUAL:ENVIAR' if action=='enviar' else 'CONTRACTUAL:COMPROBAR:'+str(UUID(comprobacion_id))
+        if not re.fullmatch('[1-9][0-9]{0,18}',str(record['otpId'])):raise NoDisponible
+        rid=str(uuid5(UUID(record['vinculo']['operacionFirmaId']),label+':'+str(record['otpId'])))
+        body={'operacion':'verify_contractual','accion':action,'solicitudId':scope['solicitudId'],
+            'sesionReferencia':identity['_sesionReferencia'],'operacionFirmaId':record['vinculo']['operacionFirmaId'],
+            'otpId':record['otpId'],'pdfSha256':scope['pdfSha256'],'aceptacionSha256':record['aceptacionSha256'],
+            'serviceSha256':hashlib.sha256(service.encode()).hexdigest(),
+            'contactoSha256':hashlib.sha256(destination.encode()).hexdigest(),'aceptadoEn':record['aceptadoEn']}
+        if action=='comprobar':body.update(codigo=code,verificationSid=verification_sid)
+        raw=encode(body)
+        proof=signing.dumps({'version':'CREDIHOY_VERIFY_CONTRACTUAL_RELE_V1','aud':path,'requestId':rid,
+            'bodySha256':hashlib.sha256(raw).hexdigest()},key=key(),salt='credihoy-verify-contractual-rele-v1')
+        result=request_packet(getattr(settings,'CREDIHOY_CONTRACTUAL_RELE_URL',''),path,raw,rid,
+            {'Content-Type':'application/json','Accept':'application/json','X-Request-ID':rid,
+             'X-Credihoy-Delegacion-Contractual':'chcontractual.'+proof})['verifyContractual']
+        if (set(result)!={'verificationSid','estadoProveedor'} or not re.fullmatch('VE[a-fA-F0-9]{32}',result['verificationSid'])
+                or result['estadoProveedor'] not in {'pending','approved'}
+                or verification_sid is not None and result['verificationSid']!=verification_sid):raise NoDisponible
+        return SimpleNamespace(sid=result['verificationSid'],status=result['estadoProveedor'],to=destination,channel='sms')
+    def start(destination,channel='sms'):
+        if channel!='sms':raise NoDisponible
+        return call_contract('enviar',destination)
+    def check(destination,code,*,verification_sid):
+        return call_contract('comprobar',destination,code,verification_sid)
+    return SimpleNamespace(start_verification=start,check_verification=check)
+
+
+
+def comprobar_rele_contractual():
+    from django.core import signing
+    from uuid import uuid4
+    from .publico_seguimiento import key
+    scope=getattr(settings,'CREDIHOY_CONTRACTUAL_STAGING_ALCANCE',{})
+    alcance_contractual(scope.get('solicitudId'))
+    rid=str(uuid4());path=BASE+'seguimiento/'
+    body=encode({'operacion':'verify_contractual_preflight','solicitudId':scope['solicitudId'],'pdfSha256':scope['pdfSha256']})
+    proof=signing.dumps({'version':'CREDIHOY_VERIFY_CONTRACTUAL_RELE_V1','aud':path,'requestId':rid,
+        'bodySha256':hashlib.sha256(body).hexdigest()},key=key(),salt='credihoy-verify-contractual-rele-v1')
+    diagnostic={}
+    try:
+        response=request_packet(getattr(settings,'CREDIHOY_CONTRACTUAL_RELE_URL',''),path,body,rid,
+            {'Content-Type':'application/json','Accept':'application/json','X-Request-ID':rid,
+             'X-Credihoy-Delegacion-Contractual':'chcontractual.'+proof},diagnostico=diagnostic)
+    except NoDisponible:
+        raise ValueError('CONTRACTUAL_RELE_'+diagnostic.get('codigo','RESPUESTA_NO_ACREDITADA')) from None
+    result=response['configuracionContractual']
+    sid=getattr(settings,'CREDIHOY_OTP_CONTRACTUAL_VERIFY_SID','')
+    if (type(result) is not dict or set(result)!={'ambiente','serviceSha256','SIDIndependiente','SMS','firma'}
+            or result!={'ambiente':'STAGING','serviceSha256':hashlib.sha256(sid.encode()).hexdigest(),
+                'SIDIndependiente':True,'SMS':0,'firma':0}):raise NoDisponible
+    return result
+
+
+
+def project_contractual(row):
+    import base64
+    required={'versionContrato','solicitudId','operacionFirmaId','ambiente','estado','pdfSha256','documento',
+        'firmado','pendientes','otpProveedor','otpVerificado','firmaProductivaAcreditada','autorizaDesembolso'}
+    allowed={'PRESENTADA','ACEPTADA_PENDIENTE_OTP','OTP_ENVIO_RESERVADO','OTP_ENVIADA','OTP_ENVIO_INDETERMINADO',
+        'OTP_COMPROBACION_RESERVADA','OTP_VALIDADA','OTP_BLOQUEADA','OTP_EXPIRADA','OTP_COMPROBACION_INDETERMINADA',
+        'ENVIANDO','INDETERMINADA','FIRMA_REPORTADA_NO_VERIFICADA','FALLO_DEFINITIVO_DOCUMENTADO',
+        'CONCILIADA_PROCESADA','CONCILIADA_NO_PROCESADA','PRUEBA_FIRMA_VERIFICADA'}
+    if (type(row) is not dict or set(row)!=required or row['ambiente']!='STAGING'
+            or row['versionContrato']!='credihoy-contractual-staging-v1' or row['estado'] not in allowed
+            or row['otpProveedor']!='TWILIO_VERIFY' or type(row['otpVerificado']) is not bool
+            or row['firmaProductivaAcreditada'] is not False or row['autorizaDesembolso'] is not False
+            or any(str(UUID(row[k]))!=row[k] for k in ('solicitudId','operacionFirmaId'))
+            or not re.fullmatch('[a-f0-9]{64}',row['pdfSha256'])
+            or type(row['pendientes']) is not list or len(row['pendientes'])>30
+            or any(type(k) is not str or not re.fullmatch('[A-Z0-9_]{1,120}',k) for k in row['pendientes'])):raise NoDisponible
+    document=row['documento']
+    if document is not None:
+        keys={'solicitudId','operacionFirmaId','documentoOperacionId','codigo','pdfSha256','pdfBase64','presentacion','proposito','ttl'}
+        if (type(document) is not dict or set(document)!=keys or document['solicitudId']!=row['solicitudId']
+                or document['operacionFirmaId']!=row['operacionFirmaId'] or document['pdfSha256']!=row['pdfSha256']
+                or str(UUID(document['documentoOperacionId']))!=document['documentoOperacionId']
+                or document['codigo'] not in {'COLO-FO.001','PRUEBA-FIRMA-STAGING'} or document['proposito']!='FIRMA_DOCUMENTO_CONTRACTUAL'
+                or document['ttl']!=600 or type(document['presentacion']) is not str
+                or not 1<=len(document['presentacion'])<=4096):raise NoDisponible
+    for pdf in (document,row['firmado']):
+        if pdf is None:continue
+        if (type(pdf) is not dict or type(pdf.get('pdfBase64')) is not str or len(pdf['pdfBase64'])>4000000
+                or not re.fullmatch('[a-f0-9]{64}',pdf.get('pdfSha256',''))
+                or hashlib.sha256(base64.b64decode(pdf['pdfBase64'],validate=True)).hexdigest()!=pdf['pdfSha256']):raise NoDisponible
+    if row['firmado'] is not None and set(row['firmado'])!={'pdfBase64','pdfSha256'}:raise NoDisponible
+    return dict(row)
 

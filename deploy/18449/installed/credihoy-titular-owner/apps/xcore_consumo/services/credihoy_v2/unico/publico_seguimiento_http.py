@@ -19,9 +19,15 @@ class SolicitudesTitularView(InstitucionalView):
         started=time.monotonic()
         try:
             if not owner.claim_delegation(self.rid):raise ValueError('DELEGACION_YA_UTILIZADA')
+            if 'radicacion' in request.data:
+                from .cotizacion import operacion_radicacion_titular
+                result=operacion_radicacion_titular(self.identity,request.data['radicacion'],self.rid)
+                return self.packet(sesionReferencia=request.data['accesoId'],radicacion=wire.project_radication(result))
             if 'autorizacion' in request.data:
-                from .consentimiento_real import operar_autogestion
-                result=operar_autogestion(self.identity,request.data['autorizacion'])
+                from .consentimiento_real import operar_autogestion,operar_contractual
+                action=request.data['autorizacion']
+                operation=operar_contractual if type(action) is dict and str(action.get('accion','')).startswith('contractual_') else operar_autogestion
+                result=operation(self.identity,action)
                 return self.packet(sesionReferencia=request.data['accesoId'],autorizacion=wire.project_authorization(result))
             if 'cotizacion' in request.data:
                 from .simulacion_lectura import es_simulacion, operar_simulacion
@@ -38,6 +44,14 @@ class SolicitudesTitularView(InstitucionalView):
                 return self.packet(sesionReferencia=request.data['accesoId'],borrador=result,
                     avisoTemporal=presentar(self.identity))
             rows=owner.read_owned(self.identity,request.data)
+            for row in rows:
+                try:scope=wire.alcance_contractual(row['referencia'],self.identity)
+                except wire.NoDisponible:continue
+                row['formalizacionStaging']={'ambiente':'STAGING','documento':'COLO-FO.001','version':'13',
+                    'paginas':3,'disponibleHasta':scope['venceEn'],'firmaProductivaAcreditada':False}
+                if 'documentoPrueba' in scope:
+                    row['formalizacionStaging'].update(documento=scope['documentoPrueba']['codigo'],
+                        version=scope['documentoPrueba']['version'],paginas=scope['documentoPrueba']['paginas'])
         except Exception as error:
             registrar_rechazo_saneado(request,error,self.rid,started,'operacion')
             if isinstance(error,DatabaseError):raise wire.NoDisponible from None

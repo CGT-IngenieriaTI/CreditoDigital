@@ -1,5 +1,7 @@
 """Intent-specific central-bureau authorization; never a PDF signature or sender."""
 
+
+
 import base64
 from copy import deepcopy
 from dataclasses import dataclass
@@ -561,22 +563,19 @@ def consultar(sid, identity):
     return {'centrales': dto}
 
 
-def verificar_autorizacion_centrales_personal(case, consent):
+def verificar_autorizacion_centrales_personal(case, consent, *, owner=False):
     """Read-only HDC integration contract; this function does not open its gate."""
+    from django.conf import settings
+    if type(owner) is not bool or ((owner or False) and getattr(settings, 'CREDIHOY_TITULAR_ENABLED', False) is not True):
+        raise OperacionError('CENTRALES_VERIFICADOR_OWNER_NO_HABILITADO')
     try:
         journal = case.consumo_detail.orchestration_data.get(KEY)
         if type(journal) is dict and journal.get('estado') == 'OTP_CONFIRMADA':
-            verified=_verificar_comprobante(case, consent, journal,vigente=False)
-            until=_vigencia_consentimiento_documental(case,consent)
-            return AutorizacionCentralesVerificada(metodo=verified.metodo,
-                referencia_verificacion=verified.referencia_verificacion,texto_sha256=verified.texto_sha256,
-                pdf_sha256=verified.pdf_sha256,confirmado_en=verified.confirmado_en,vigente_hasta=until)
+            verified = _verificar_comprobante(case, consent, journal, vigente=False, owner=owner)
+            until = _vigencia_consentimiento_documental(case, consent)
+            return AutorizacionCentralesVerificada(metodo=verified.metodo, referencia_verificacion=verified.referencia_verificacion, texto_sha256=verified.texto_sha256, pdf_sha256=verified.pdf_sha256, confirmado_en=verified.confirmado_en, vigente_hasta=until)
         verified = verificar_autorizacion_crediticia_personal(case, consent)
-        return AutorizacionCentralesVerificada(
-            metodo='AUTENTIC', referencia_verificacion=verified.referencia_verificacion,
-            texto_sha256=_sha(consent.text_snapshot.encode('utf-8')),
-            pdf_sha256=verified.original_sha256, confirmado_en=verified.firmado_en,
-            vigente_hasta=verified.vigente_hasta)
+        return AutorizacionCentralesVerificada(metodo='AUTENTIC', referencia_verificacion=verified.referencia_verificacion, texto_sha256=_sha(consent.text_snapshot.encode('utf-8')), pdf_sha256=verified.original_sha256, confirmado_en=verified.firmado_en, vigente_hasta=verified.vigente_hasta)
     except (KeyError, TypeError, ValueError, AttributeError, InvalidSignature):
         raise OperacionError('AUTORIZACION_CENTRALES_PERSONAL_VERIFICABLE_REQUERIDA') from None
 

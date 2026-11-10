@@ -1,5 +1,9 @@
 """Capacidad shadow UNICO. No suma cuotas LINIX ni consulta/correlaciona HDC."""
 
+
+
+
+
 from dataclasses import fields, replace
 from decimal import Decimal, InvalidOperation, localcontext
 
@@ -293,73 +297,82 @@ def normalizar_capacidad_disponible(preliminar, *, cuota_estimada=None):
     """Add exact available/residual semantics without rewriting historical TRUNC."""
     from copy import deepcopy
     from .dto import EscenarioCapacidadDisponibleV2
-    if (preliminar.get('estado')!='PRELIMINAR_NO_DECISORIA'
-            or preliminar.get('autorizadoDecisionCrediticia') is not False
-            or preliminar.get('aprobacionRiesgosEndeudamiento') is not False
-            or preliminar.get('tratamientoCuotasLinix',{}).get('criterio')!='HDC_EXCLUSIVO_SIN_SEGUNDA_SUMA_LINIX'
-            or preliminar.get('tratamientoCuotasLinix',{}).get('importeAdicionalAplicado')!='0'):
+    if preliminar.get('estado') != 'PRELIMINAR_NO_DECISORIA' or preliminar.get('autorizadoDecisionCrediticia') is not False or preliminar.get('aprobacionRiesgosEndeudamiento') is not False or (preliminar.get('tratamientoCuotasLinix', {}).get('criterio') != 'HDC_EXCLUSIVO_SIN_SEGUNDA_SUMA_LINIX') or (preliminar.get('tratamientoCuotasLinix', {}).get('importeAdicionalAplicado') != '0'):
         raise ValueError('METODOLOGIA_CAPACIDAD_NO_COMPATIBLE')
+
     def value(name):
-        fact=preliminar.get(name,{})
+        fact = preliminar.get(name, {})
         try:
-            if fact.get('disponible') is not True or type(fact.get('valor')) is not str:raise ValueError()
-            amount=Decimal(fact['valor'])
-            if not amount.is_finite() or (name!='capacidad' and amount<0):raise ValueError()
+            if fact.get('disponible') is not True or type(fact.get('valor')) is not str:
+                raise ValueError()
+            amount = Decimal(fact['valor'])
+            if not amount.is_finite() or (name != 'capacidad' and amount < 0):
+                raise ValueError()
             return amount
-        except (InvalidOperation,ValueError):
-            raise ValueError('OPERANDO_CAPACIDAD_DISPONIBLE_INVALIDO:'+name) from None
-    income,debt,expense,old_quota,old_residual=(value(n) for n in
-        ('ingresoComputable','subtotalMensualHdcReconocido','gastosFamiliares','cuotaParaCapacidad','capacidad'))
-    payroll=value('deduccionesNomina')
-    payroll_packet=preliminar['deduccionesNomina']
-    source=payroll_packet.get('procedencia',{})
-    origin=preliminar.get('procedencia',{}).get('ingreso',{})
-    if (payroll_packet.get('agregadoAplicadoUnaVez') is not True
-            or payroll_packet.get('componentesAplicadosAdicionalmente') is not False
-            or source.get('fuente')!='AP014MCLIENTE.V_DTONOM'
-            or source.get('disponible') is not True or source.get('valor')!=str(payroll)
-            or source.get('estado_certificacion') not in {EC.OBSERVADO.value,EC.CERTIFICADO.value}
-            or not source.get('referencia_evidencia') or not source.get('ruta_origen')
-            or not source.get('fecha_corte') or not source.get('fecha_consulta')
-            or source['fecha_corte']!=origin.get('fecha_corte')
-            or source['fecha_consulta']!=origin.get('fecha_consulta')):
+        except (InvalidOperation, ValueError):
+            raise ValueError('OPERANDO_CAPACIDAD_DISPONIBLE_INVALIDO:' + name) from None
+    income, debt, expense, old_quota, old_residual = (value(n) for n in ('ingresoComputable', 'subtotalMensualHdcReconocido', 'gastosFamiliares', 'cuotaParaCapacidad', 'capacidad'))
+    payroll = value('deduccionesNomina')
+    payroll_packet = preliminar['deduccionesNomina']
+    source = payroll_packet.get('procedencia', {})
+    origin = preliminar.get('procedencia', {}).get('ingreso', {})
+    if payroll_packet.get('agregadoAplicadoUnaVez') is not True or payroll_packet.get('componentesAplicadosAdicionalmente') is not False or source.get('fuente') != 'AP014MCLIENTE.V_DTONOM' or (source.get('disponible') is not True) or (source.get('valor') != str(payroll)) or (source.get('estado_certificacion') not in {EC.OBSERVADO.value, EC.CERTIFICADO.value}) or (not source.get('referencia_evidencia')) or (not source.get('ruta_origen')) or (not source.get('fecha_corte')) or (not source.get('fecha_consulta')) or (source['fecha_corte'] != origin.get('fecha_corte')) or (source['fecha_consulta'] != origin.get('fecha_consulta')):
         raise ValueError('NOMINA_REGISTRADA_NO_ACREDITADA')
-    estimate=None
+    estimate = None
     if cuota_estimada is not None:
-        if (not isinstance(cuota_estimada,Hecho) or not cuota_estimada.disponible
-                or cuota_estimada.estado_certificacion not in {EC.OBSERVADO,EC.CERTIFICADO}
-                or type(cuota_estimada.valor) is not Decimal or not cuota_estimada.valor.is_finite()
-                or cuota_estimada.valor<=0 or not cuota_estimada.fuente
-                or not cuota_estimada.referencia_evidencia or not cuota_estimada.ruta_origen):
+        if not isinstance(cuota_estimada, Hecho) or not cuota_estimada.disponible or cuota_estimada.estado_certificacion not in {EC.OBSERVADO, EC.CERTIFICADO} or (type(cuota_estimada.valor) is not Decimal) or (not cuota_estimada.valor.is_finite()) or (cuota_estimada.valor <= 0) or (not cuota_estimada.fuente) or (not cuota_estimada.referencia_evidencia) or (not cuota_estimada.ruta_origen):
             raise ValueError('CUOTA_ESTIMADA_NO_ACREDITADA')
-        estimate=cuota_estimada.valor
+        estimate = cuota_estimada.valor
     with localcontext() as ctx:
-        ctx.prec=precision_exacta(income,debt,expense,old_quota,old_residual,payroll,
-            estimate if estimate is not None else Decimal(0),Decimal('0.25'))
-        if expense!=trunc_producto(income,Decimal('0.25')) or income-debt-payroll-expense-old_quota!=old_residual:
+        ctx.prec = precision_exacta(income, debt, expense, old_quota, old_residual, payroll, estimate if estimate is not None else Decimal(0), Decimal('0.25'))
+        if expense != trunc_producto(income, Decimal('0.25')) or income - debt - payroll - expense - old_quota != old_residual:
             raise ValueError('ANTECEDENTE_TRUNC_NO_CONCILIA')
-        exact_expense=income*Decimal('0.25')
-        available=income-debt-payroll-exact_expense
-        scenario=EscenarioCapacidadDisponibleV2(ingresos=income,cuotas_hdc=debt,
-            deducciones_nomina=payroll,gastos_familiares_exactos=exact_expense,
-            capacidad_disponible=available,cuota_nueva_estimada=estimate,
-            residual_posterior_estimado=available-estimate if estimate is not None else None)
-    def money(amount):return {'disponible':amount is not None,'valor':str(amount) if amount is not None else None}
-    result=deepcopy(preliminar)
-    result.update(versionSemanticaCapacidad=scenario.version,
-        capacidadDisponible=money(scenario.capacidad_disponible),
-        gastosFamiliaresExactos=money(scenario.gastos_familiares_exactos),
-        residualPosteriorEstimado=money(scenario.residual_posterior_estimado),
-        cuotaNuevaEstimada=money(scenario.cuota_nueva_estimada),
-        semanticaCapacidadHistorica='RESIDUAL_TRUNC_POSTERIOR_CUOTA_REFERENCIA_NO_DISPONIBLE',
-        antecedenteTrunc={name:deepcopy(preliminar[name]) for name in
-            ('gastosFamiliares','cuotaParaCapacidad','capacidad')},
-        formulasCapacidad={'capacidadDisponible':'ingresoComputable - subtotalMensualHdcReconocido - deduccionesNomina - gastosFamiliaresExactos',
-            'gastosFamiliaresExactos':'ingresoComputable * 0.25; sin TRUNC',
-            'residualPosteriorEstimado':'capacidadDisponible - cuotaNuevaEstimada',
-            'capacidadHistorica':'ingresoComputable - subtotalMensualHdcReconocido - deduccionesNomina - TRUNC(ingresoComputable * 0.25) - cuotaParaCapacidad'},
-        escenarioEstimadoNoContractual=True)
+        exact_expense = income * Decimal('0.25')
+        available = income - debt - payroll - exact_expense
+        scenario = EscenarioCapacidadDisponibleV2(ingresos=income, cuotas_hdc=debt, deducciones_nomina=payroll, gastos_familiares_exactos=exact_expense, capacidad_disponible=available, cuota_nueva_estimada=estimate, residual_posterior_estimado=available - estimate if estimate is not None else None)
+
+    def money(amount):
+        return {'disponible': amount is not None, 'valor': str(amount) if amount is not None else None}
+    result = deepcopy(preliminar)
+    result.update(versionSemanticaCapacidad=scenario.version, disponibleAntesGastosFamiliares=money(income - debt - payroll), capacidadDisponible=money(scenario.capacidad_disponible), gastosFamiliaresExactos=money(scenario.gastos_familiares_exactos), residualPosteriorEstimado=money(scenario.residual_posterior_estimado), cuotaNuevaEstimada=money(scenario.cuota_nueva_estimada), semanticaCapacidadHistorica='RESIDUAL_TRUNC_POSTERIOR_CUOTA_REFERENCIA_NO_DISPONIBLE', antecedenteTrunc={name: deepcopy(preliminar[name]) for name in ('gastosFamiliares', 'cuotaParaCapacidad', 'capacidad')}, formulasCapacidad={'disponibleAntesGastosFamiliares': 'ingresoComputable - subtotalMensualHdcReconocido - deduccionesNomina', 'capacidadDisponible': 'ingresoComputable - subtotalMensualHdcReconocido - deduccionesNomina - gastosFamiliaresExactos', 'gastosFamiliaresExactos': 'ingresoComputable * 0.25; sin TRUNC', 'residualPosteriorEstimado': 'capacidadDisponible - cuotaNuevaEstimada', 'capacidadHistorica': 'ingresoComputable - subtotalMensualHdcReconocido - deduccionesNomina - TRUNC(ingresoComputable * 0.25) - cuotaParaCapacidad'}, escenarioEstimadoNoContractual=True)
     if cuota_estimada is not None:
-        result['cuotaNuevaEstimada']['procedencia']=cuota_estimada.a_dict()
+        result['cuotaNuevaEstimada']['procedencia'] = cuota_estimada.a_dict()
     return result
 
+
+
+def escenario_capacidad_persistido(preliminar):
+    """Rebuild the same sourced operands; never promote a stored row label."""
+    from datetime import date, datetime
+    from .dto import EscenarioCapacidadDisponibleV2
+    try:
+        raw = preliminar['cuotaNuevaEstimada']['procedencia']
+        if set(raw) != set(Hecho.__dataclass_fields__):
+            raise ValueError()
+        values = dict(raw)
+        if type(values['valor']) is not str:
+            raise ValueError()
+        values['valor'] = Decimal(values['valor'])
+        values['estado_certificacion'] = EC(values['estado_certificacion'])
+        if values['fecha_corte'] is not None:
+            try:
+                values['fecha_corte'] = date.fromisoformat(values['fecha_corte'])
+            except ValueError:
+                values['fecha_corte'] = datetime.fromisoformat(values['fecha_corte'])
+        if values['fecha_consulta'] is not None:
+            values['fecha_consulta'] = datetime.fromisoformat(values['fecha_consulta'])
+        quote = Hecho(**values)
+        if quote.fecha_corte is None or quote.fecha_consulta is None:
+            raise ValueError()
+        checked = normalizar_capacidad_disponible(preliminar, cuota_estimada=quote)
+        if checked != preliminar:
+            raise ValueError()
+
+        def amount(name):
+            fact = checked[name]
+            if fact['disponible'] is not True or type(fact['valor']) is not str:
+                raise ValueError()
+            return Decimal(fact['valor'])
+        return EscenarioCapacidadDisponibleV2(ingresos=amount('ingresoComputable'), cuotas_hdc=amount('subtotalMensualHdcReconocido'), deducciones_nomina=amount('deduccionesNomina'), gastos_familiares_exactos=amount('gastosFamiliaresExactos'), capacidad_disponible=amount('capacidadDisponible'), cuota_nueva_estimada=amount('cuotaNuevaEstimada'), residual_posterior_estimado=amount('residualPosteriorEstimado'))
+    except (KeyError, TypeError, ValueError, ArithmeticError):
+        raise ValueError('ESCENARIO_CAPACIDAD_PERSISTIDO_NO_ACREDITADO') from None

@@ -1,4 +1,6 @@
 """Existing owner contract: temporary progress, then explicit durable submission."""
+
+
 from datetime import datetime
 from decimal import Decimal
 import hmac
@@ -78,7 +80,13 @@ def vincular_consumo_enviada(s, alias):
 def habilitar(sesion=None, *, expira_at=None):
     if getattr(settings, 'CREDIHOY_AUTOSERVICIO_ENABLED', False) is not True:
         raise wire.NoDisponible
-    if getattr(settings, 'CREDIHOY_PUBLICO_RESTRINGIDO', False) is True:
+    if getattr(settings,'CREDIHOY_PERFIL_DISPONIBILIDAD','')=='PERMANENT_PRIVATE_V1':
+        from .publico_controles import exigir_sesion_permanente,AccesoDenegado
+        try:
+            exigir_sesion_permanente(sesion,expira_at)
+            if getattr(settings,'CREDIHOY_AUTOSERVICIO_ALCANCE',None)!={'modo':'SESION_PERSONAL_VERIFICADA'}:raise ValueError
+        except (AccesoDenegado,ValueError):raise wire.NoDisponible from None
+    elif getattr(settings, 'CREDIHOY_PUBLICO_RESTRINGIDO', False) is True:
         try:
             scope = settings.CREDIHOY_AUTOSERVICIO_ALCANCE
             if type(scope) is dict and scope.get('modo')=='SESION_PERSONAL_VERIFICADA':
@@ -123,14 +131,21 @@ def habilitar_lectura(identity):
         for field in ('_sesionReferencia','_requestId'):
             if str(UUID(identity[field]))!=identity[field]:raise ValueError
         expires=datetime.fromisoformat(identity['_sesionExpiraAt'])
-        window=datetime.fromisoformat(settings.CREDIHOY_PUBLICO_AUTORIZACION_HASTA)
+        permanent=getattr(settings,'CREDIHOY_PERFIL_DISPONIBILIDAD','')=='PERMANENT_PRIVATE_V1'
+        if permanent:
+            from .publico_controles import exigir_sesion_permanente,AccesoDenegado
+            try:exigir_sesion_permanente(identity['_sesionReferencia'],expires)
+            except AccesoDenegado:raise ValueError from None
+        window=expires if permanent else datetime.fromisoformat(settings.CREDIHOY_PUBLICO_AUTORIZACION_HASTA)
         if (not timezone.is_aware(expires) or not timezone.is_aware(window)
                 or timezone.now()>=min(expires,window)
                 or not getattr(settings,'CREDIHOY_PUBLICO_AUTORIZACION_REFERENCIA','')
                 or not re.fullmatch('[0-9]{6,15}',identity['numeroDocumento'])):raise ValueError
         cohort=settings.CREDIHOY_TITULAR_DOCUMENTOS_HMAC
         from .publico_controles import admision_ensayo_vigente
-        if not admision_ensayo_vigente() and (not 1<=len(cohort)<=2 or not any(hmac.compare_digest(document_hmac(identity['numeroDocumento']),v) for v in cohort)):raise ValueError
+        if permanent:
+            if cohort!=[]:raise ValueError
+        elif not admision_ensayo_vigente() and (not 1<=len(cohort)<=2 or not any(hmac.compare_digest(document_hmac(identity['numeroDocumento']),v) for v in cohort)):raise ValueError
     except (KeyError,AttributeError,TypeError,ValueError):raise wire.NoDisponible from None
     privacy.configuracion()
 
@@ -154,10 +169,12 @@ def leer_enviadas(identity, payload):
         rows=[]
         for s in query.order_by('-created_at','pk')[:20]:
             estudio=_estudio_publico_personal(s,identity)
+            from .progreso_estudio import read as leer_progreso
+            progreso=leer_progreso(s,getattr(settings,'CREDIHOY_AUTORIZACION_DB_ALIAS',alias),estudio)
             rows.append(wire.project_row({'referencia':str(s.pk),'titulo':'Tu solicitud esta en revision',
                 'monto':str(s.monto_solicitado),'plazoMeses':s.plazo_solicitado,'periodicidad':'Mensual',
                 'fechaCreacion':s.created_at.isoformat(),'requisitosCumplidos':sum(r['resultado']=='CUMPLE' for r in estudio['reglas']) if estudio else None,
-                'estudio':estudio,'envio':envio_publico(s,alias),'simulacionLocal':estimacion_de_envio(s,identity),
+                'estudio':estudio,'progreso':progreso,'envio':envio_publico(s,alias),'simulacionLocal':estimacion_de_envio(s,identity),
                 'pendientes':['Necesitamos completar algunas validaciones antes de tomar una decision.'],
                 'siguientePaso':'Espera la revision de Congente.','ofertaDisponible':False,
                 'acciones':{'radicar':False,'firmar':False},'institucional':None,'simulacion':None,
@@ -400,43 +417,49 @@ def validar_procedencia_formulario(s, raw):
     return expected
 
 def _estudio_publico_personal(s, identity):
-    import base64,hashlib,json
+    import base64, hashlib, json
     from django.db import transaction
-    from apps.xcore_consumo.models import EvaluacionConsumo,ConsentimientoConsumo,SolicitudConsumo
+    from apps.xcore_consumo.models import EvaluacionConsumo, ConsentimientoConsumo, SolicitudConsumo
     from cryptography.exceptions import InvalidSignature
-    def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True,default=str).encode()
-    def digest(value):return hashlib.sha256(canonical(value)).hexdigest()
-    alias=getattr(settings,'CREDIHOY_AUTORIZACION_DB_ALIAS','')
-    if not alias:return None
+
+    def canonical(value):
+        return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, default=str).encode()
+
+    def digest(value):
+        return hashlib.sha256(canonical(value)).hexdigest()
+    alias = getattr(settings, 'CREDIHOY_AUTORIZACION_DB_ALIAS', '')
+    if not alias:
+        return None
     with transaction.atomic(using=alias):
-        with connections[alias].cursor() as cursor:cursor.execute('SET TRANSACTION READ ONLY')
         with connections[alias].cursor() as cursor:
-            cursor.execute('SELECT resumen_tecnico FROM public.credihoy_estudio_publico '
-                'WHERE solicitud_id=%s ORDER BY registrado_en DESC,registro_id DESC LIMIT 1',[str(s.pk)])
-            row=cursor.fetchone()
-        if row is None:return None
+            cursor.execute('SET TRANSACTION READ ONLY')
+        with connections[alias].cursor() as cursor:
+            cursor.execute('SELECT resumen_tecnico,registrado_en FROM public.credihoy_estudio_publico WHERE solicitud_id=%s ORDER BY registrado_en DESC,registro_id DESC LIMIT 1', [str(s.pk)])
+            row = cursor.fetchone()
+        if row is None:
+            return None
         from . import centrales_personal as central
         try:
-            envelope=row[0]
-            if type(envelope) is str:envelope=json.loads(envelope)
-            if type(envelope) is not dict or set(envelope)!={'algoritmo','payload','firmaBase64'} or envelope['algoritmo']!='Ed25519':raise ValueError
-            body=envelope['payload']
-            if type(body) is not dict or set(body)!={'version','proposito','solicitudId','titularSha256',
-                    'evaluacionBaseSha256','consentimientoSha256','consumoSha256','estudio'}:raise ValueError
-            central._clave_publica(owner=True).verify(base64.b64decode(envelope['firmaBase64'],validate=True),
-                'credihoy-estudio-publico-tecnico-v1\x00'.encode()+canonical(body))
-            if (body['version']!='credihoy-estudio-tecnico-firmado-v1'
-                    or body['proposito']!='LECTURA_ESTUDIO_NO_DECISION' or body['solicitudId']!=str(s.pk)
-                    or body['titularSha256']!=hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()):raise ValueError
-            study=wire.project_study(body['estudio'],str(s.pk))
-            evaluation=EvaluacionConsumo.objects.using(alias).values().get(pk=study['evaluacionBaseId'],solicitud_id=s.pk)
-            consent=ConsentimientoConsumo.objects.using(alias).values().get(solicitud_id=s.pk)
-            detail=SolicitudConsumo.objects.using(alias).values().get(solicitud_id=s.pk)
-            if (digest(evaluation)!=body['evaluacionBaseSha256'] or digest(consent)!=body['consentimientoSha256']
-                    or digest(detail)!=body['consumoSha256']):raise ValueError
+            envelope = row[0]
+            if type(envelope) is str:
+                envelope = json.loads(envelope)
+            if type(envelope) is not dict or set(envelope) != {'algoritmo', 'payload', 'firmaBase64'} or envelope['algoritmo'] != 'Ed25519':
+                raise ValueError
+            body = envelope['payload']
+            if type(body) is not dict or set(body) != {'version', 'proposito', 'solicitudId', 'titularSha256', 'evaluacionBaseSha256', 'consentimientoSha256', 'consumoSha256', 'estudio'}:
+                raise ValueError
+            central._clave_publica(owner=True).verify(base64.b64decode(envelope['firmaBase64'], validate=True), 'credihoy-estudio-publico-tecnico-v1\x00'.encode() + canonical(body))
+            if body['version'] not in ('credihoy-estudio-tecnico-firmado-v1', 'credihoy-estudio-tecnico-firmado-v2') or body['proposito'] != 'LECTURA_ESTUDIO_NO_DECISION' or body['solicitudId'] != str(s.pk) or (body['titularSha256'] != hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()):
+                raise ValueError
+            study = wire.project_study(body['estudio'], str(s.pk))
+            evaluation = EvaluacionConsumo.objects.using(alias).values().get(pk=study['evaluacionBaseId'], solicitud_id=s.pk)
+            consent = ConsentimientoConsumo.objects.using(alias).values().get(solicitud_id=s.pk)
+            detail = SolicitudConsumo.objects.using(alias).values().get(solicitud_id=s.pk)
+            from .funcional import huella_consumo_estudio
+            if digest(evaluation) != body['evaluacionBaseSha256'] or digest(consent) != body['consentimientoSha256'] or (huella_consumo_estudio(detail, version=body['version']) != body['consumoSha256'] and (not verificar_custodia_contractual_posterior(detail, body, row[1], s))):
+                raise ValueError
             return study
-        except (ValueError,TypeError,KeyError,AttributeError,InvalidSignature,
-                EvaluacionConsumo.DoesNotExist,ConsentimientoConsumo.DoesNotExist,SolicitudConsumo.DoesNotExist):
+        except (ValueError, TypeError, KeyError, AttributeError, InvalidSignature, EvaluacionConsumo.DoesNotExist, ConsentimientoConsumo.DoesNotExist, SolicitudConsumo.DoesNotExist):
             raise wire.NoDisponible from None
 
 
@@ -466,3 +489,74 @@ def estimacion_de_envio(s,identity):
         logging.getLogger('credito.publico').warning('estimacion_envio_no_disponible request=%s tipo=%s',
             identity.get('_requestId',''),type(exc).__name__)
         return None
+
+
+def verificar_custodia_contractual_posterior(detail,body,registrado_en,case=None):
+    """Match the signed input snapshot without deleting later document revisions."""
+    from copy import deepcopy
+    from datetime import datetime,timezone
+    from uuid import UUID
+    import re
+    from .funcional import huella_consumo_estudio
+    try:
+        if body['version']!='credihoy-estudio-tecnico-firmado-v2':return False
+        cutoff=registrado_en if isinstance(registrado_en,datetime) else datetime.fromisoformat(registrado_en)
+        if cutoff.utcoffset() is None or cutoff>datetime.now(timezone.utc):return False
+        data=detail['orchestration_data'];history=data.get('credihoy_pdf_oficiales_v1')
+        if type(history) is not dict or not 1<=len(history)<=20:return False
+        retained={};removed=[]
+        for key,entry in history.items():
+            if str(UUID(key))!=key or type(entry) is not dict:return False
+            created=datetime.fromisoformat(entry['creadoEn'])
+            if created.utcoffset() is None or created>datetime.now(timezone.utc):return False
+            if created<=cutoff:retained[key]=entry;continue
+            meta=entry['metadata']
+            if (meta['codigo']!='COLO-FO.001' or meta['version']!='13'
+                    or meta['solicitudId']!=body['solicitudId']
+                    or meta['originalSha256']!='93a8f53214a95fdbeb249572f40cac9c751d3b8ac481372e9d11dfa75899cc9e'
+                    or not re.fullmatch('[a-f0-9]{64}',meta['pdfSha256'])
+                    or type(entry['contenidoCifrado']) is not str or not entry['contenidoCifrado']):return False
+            removed.append(key)
+        if not removed:return False
+        snapshot=deepcopy(detail);snapshot['orchestration_data']['credihoy_pdf_oficiales_v1']=retained
+        empty=['credihoy_pdf_oficiales_v1'] if not retained else []
+        contracts=data.get('credihoy_otp_contractual_v1')
+        if contracts:
+            from types import SimpleNamespace
+            from .consentimiento_real import _leer_contractual
+            if (case is None or str(case.pk)!=body['solicitudId']
+                    or type(contracts) is not dict or len(contracts)>20):return False
+            previous={}
+            for key,stored in contracts.items():
+                record=_leer_contractual(case,key,detail=SimpleNamespace(orchestration_data=data))
+                binding=record['vinculo'];document=binding['documentoOperacionId']
+                if binding['codigo']=='PRUEBA-FIRMA-STAGING':
+                    from .consentimiento_real import _documento_contractual,_fecha_contractual,_exigir_auditoria_contractual,_digest_contractual
+                    alias='cotizacion' if 'cotizacion' in settings.DATABASES else case._state.db
+                    scoped=case.__class__.objects.using(alias).select_related('solicitante').filter(pk=case.pk,solicitante_id=case.solicitante_id).first()
+                    if scoped is None:return False
+                    _,meta=_documento_contractual(scoped,document,historico=True)
+                    _exigir_auditoria_contractual(scoped,alias,'presentado',key,{'vinculoSha256':_digest_contractual(binding)})
+                    if (binding['versionDocumento']!='1' or binding['pdfSha256']!=meta['pdfSha256']
+                            or binding['originalSha256']!=meta['originalSha256']
+                            or meta.get('proposito')!='PRUEBA_INTEGRACION_AUTENTIC'
+                            or binding['proposito']!='FIRMA_DOCUMENTO_CONTRACTUAL'
+                            or binding['scope']!='solicitudes:firmarContrato'
+                            or _fecha_contractual(meta['preparadoEn'])<=cutoff):return False
+                    continue
+                if document not in removed:previous[key]=stored;continue
+                meta=history[document]['metadata']
+                if (binding['proposito']!='FIRMA_DOCUMENTO_CONTRACTUAL'
+                        or binding['scope']!='solicitudes:firmarContrato'
+                        or binding['codigo']!='COLO-FO.001' or binding['versionDocumento']!='13'
+                        or binding['pdfSha256']!=meta['pdfSha256']
+                        or binding['originalSha256']!=meta['originalSha256']):return False
+            snapshot['orchestration_data']['credihoy_otp_contractual_v1']=previous
+            if not previous:empty.append('credihoy_otp_contractual_v1')
+        candidates=[snapshot]
+        for key in empty:
+            for value in list(candidates):
+                absent=deepcopy(value);absent['orchestration_data'].pop(key);candidates.append(absent)
+        return any(huella_consumo_estudio(value,body['version'])==body['consumoSha256'] for value in candidates)
+    except (ValueError,KeyError,TypeError,AttributeError):return False
+

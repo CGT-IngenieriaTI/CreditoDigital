@@ -1,4 +1,6 @@
 """Public cookie/CSRF boundary. No staff auth or financial actions are exposed."""
+
+
 from datetime import timedelta
 from uuid import UUID,uuid4
 import logging
@@ -48,6 +50,9 @@ class PublicView(APIView):
         return response
 
     def handle_exception(self,exc):
+        from . import publico_institucional as wire
+        if isinstance(exc,wire.RechazoOperacion):
+            return Response(wire.respuesta_rechazo(exc),status=exc.status_code)
         if isinstance(exc,Http404):status=404
         elif isinstance(exc,service.AccesoDenegado):status=401
         elif isinstance(exc,ValueError):status=400
@@ -82,29 +87,27 @@ class VerificarView(PublicView):
 
 
 class SesionView(PublicView):
-    http_method_names=['get','options']
-    def get(self,request):
-        try:a,data=service.acceso(request)
-        except service.AccesoDenegado:return Response({'versionContrato':service.VERSION,'autenticado':False})
+    http_method_names = ['get', 'options']
+
+    def get(self, request):
+        try:
+            (a, data) = service.acceso(request)
+        except service.AccesoDenegado:
+            return Response({'versionContrato': service.VERSION, 'autenticado': False})
         from .autoservicio import sesion_habilitada
         from django.core.validators import validate_email
         from django.core.exceptions import ValidationError
-        email=data.get('correo')
+        email = data.get('correo')
         try:
-            if type(email) is not str or len(email)>254:raise ValidationError('EMAIL')
+            if type(email) is not str or len(email) > 254:
+                raise ValidationError('EMAIL')
             validate_email(email)
-        except ValidationError:email=None
-        channel=data.get('canal');contact=data.get('contacto')
-        mask=('***'+contact[-2:]) if channel=='SMS' and type(contact) is str and len(contact)>=2 else None
-        return Response({'versionContrato':service.VERSION,'autenticado':True,
-            'nombre':data['nombre'],'expiraAt':a.sesion_expira_at.isoformat(),'sesionReferencia':str(a.pk),
-            'perfil':{'correoRegistrado':email,'correoVerificado':bool(email and channel=='EMAIL' and contact==email),
-                'contactoEnmascarado':mask,'fuente':'COTEJO_INSTITUCIONAL_AUTENTICADO'},
-            'acciones':{'seguimiento':getattr(settings,'CREDIHOY_SEGUIMIENTO_ENABLED',True) is True,
-                'solicitar':sesion_habilitada(str(a.pk),expira_at=a.sesion_expira_at),'simular':False,'documentos':False,
-                **({'simuladorLocal':True} if simulador_habilitado() else {}),
-                **({'autorizar':True} if getattr(settings,'CREDIHOY_AUTORIZACION_TITULAR_ENABLED',False) is True else {}),
-                **({'centralesOtp':True} if getattr(settings,'CREDIHOY_CENTRALES_OTP_ENABLED',False) is True else {})}})
+        except ValidationError:
+            email = None
+        channel = data.get('canal')
+        contact = data.get('contacto')
+        mask = '***' + contact[-2:] if channel == 'SMS' and type(contact) is str and (len(contact) >= 2) else None
+        return Response({'versionContrato': service.VERSION, 'autenticado': True, 'nombre': data['nombre'], 'expiraAt': a.sesion_expira_at.isoformat(), 'sesionReferencia': str(a.pk), 'perfil': {'correoRegistrado': email, 'correoVerificado': bool(email and channel == 'EMAIL' and (contact == email)), 'contactoEnmascarado': mask, 'fuente': 'COTEJO_INSTITUCIONAL_AUTENTICADO'}, 'acciones': {'seguimiento': getattr(settings, 'CREDIHOY_SEGUIMIENTO_ENABLED', True) is True, 'solicitar': sesion_habilitada(str(a.pk), expira_at=a.sesion_expira_at), 'simular': getattr(settings, 'CREDIHOY_COTIZACION_TITULAR_ENABLED', False) is True, 'documentos': False, **({'simuladorLocal': True} if simulador_habilitado() else {}), **({'autorizar': True} if getattr(settings, 'CREDIHOY_AUTORIZACION_TITULAR_ENABLED', False) is True else {}), **({'centralesOtp': True} if getattr(settings, 'CREDIHOY_CENTRALES_OTP_ENABLED', False) is True else {}), 'radicar': getattr(settings, 'CREDIHOY_RADICACION_TITULAR_ENABLED', False) is True}})
 
 
 class CerrarView(PublicView):
@@ -230,6 +233,15 @@ class SolicitudesView(PublicView):
     def post(self,request):
         from .autoservicio import habilitar
         from . import publico_institucional as wire
+        if type(request.data) is dict and request.data.get('operacion')=='radicacion':
+            if getattr(settings,'CREDIHOY_RADICACION_TITULAR_ENABLED',False) is not True:raise wire.NoDisponible
+            grant,_=service.acceso(request)
+            if request.headers.get('X-Acceso-Referencia')!=str(grant.pk):raise service.AccesoDenegado
+            action={k:v for k,v in request.data.items() if k not in {'operacion','accion'}}
+            action['operacion']=request.data.get('accion')
+            packet=wire.seguimiento(grant,radicacion=action)
+            service.acceso(request)
+            return Response(packet)
         if type(request.data) is dict and request.data.get('operacion')=='autorizacion':
             if getattr(settings,'CREDIHOY_AUTORIZACION_TITULAR_ENABLED',False) is not True:raise wire.NoDisponible
             if request.data.get('accion')=='centrales_resultado':raise service.AccesoDenegado

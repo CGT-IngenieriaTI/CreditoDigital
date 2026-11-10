@@ -1,5 +1,13 @@
 """Firma especifica del piloto con ConsentimientoConsumo y OTP existentes."""
 
+import base64
+import json
+import re
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from uuid import uuid4
+
 import hashlib
 import hmac
 from decimal import Decimal
@@ -123,10 +131,25 @@ def aceptar_autogestion(solicitud_id,identity,*,presentacion,acepta,clave):
         case,_=obtener_autogestion(case.pk,identity,lock=True)
         previous=ConsentimientoConsumo.objects.using(alias).filter(solicitud=case).first()
         if previous:
-            if (previous.evidencia.get('workflow')!='COLO023_AUTOGESTION_V1'
+            if (not previous.aceptado or previous.solicitud_id!=case.pk
+                    or previous.version!='COLO-FO.023:v'+meta['version']
+                    or previous.text_snapshot!=text
+                    or previous.text_hash!=build_consent_hash(previous.version,text)
+                    or previous.evidencia.get('workflow')!='COLO023_AUTOGESTION_V1'
+                    or previous.evidencia.get('proposito')!=binding['proposito']
                     or previous.evidencia.get('pdfSha256')!=meta['pdfSha256']
-                    or previous.evidencia.get('claveAceptacion')!=key):
+                    or previous.evidencia.get('originalSha256')!=meta['originalSha256']
+                    or not previous.evidencia.get('claveAceptacion')
+                    or not previous.evidencia.get('sesionReferencia')):
                 raise ValueError('AUTORIZACION_EXISTENTE_NO_SOBRESCRIBIR')
+            # A fresh presentation can recover an earlier personal act. Its key,
+            # original session and acceptance evidence remain immutable.
+            original_key=previous.evidencia.get('documentoOperacionId')
+            original=case.consumo_detail.orchestration_data.get('credihoy_pdf_oficiales_v1',{}).get(original_key,{})
+            if (original.get('metadata')!=meta
+                    or original.get('actorId')!='titular:'+previous.evidencia['sesionReferencia']
+                    or not original.get('contenidoCifrado')):
+                raise ValueError('AUTORIZACION_EXISTENTE_DOCUMENTO_NO_ACREDITADO')
             return {'solicitudId':str(case.pk),'estado':previous.evidencia['estado'],
                 'firmado':previous.firmado,'consultasHabilitadas':False}
         detail=SolicitudConsumo.objects.using(alias).select_for_update().get(solicitud=case)
@@ -731,3 +754,807 @@ def presentar_documento_existente(case,identity,document):
     return {'codigo':'COLO-FO.023','version':meta['version'],'pdfSha256':meta['pdfSha256'],
         'pdfBase64':base64.b64encode(pdf).decode('ascii'),'presentacion':token,
         'operacionId':key,'proposito':binding['proposito']}
+
+
+@dataclass(frozen=True, repr=False)
+class AceptacionContractualOTPVerificada:
+    solicitud_id: str
+    documento_id: str
+    envio_id: str
+    pdf_sha256: str
+    titular_sha256: str
+    secure_key_sha256: str
+    aceptado_en: datetime
+    verificado_en: datetime
+    referencia: str
+    canal: str
+
+
+def preparar_envio_contractual(solicitud_id, identity, clave):
+    """Prepare only from the stored accepted/validated act; never creates it."""
+    from apps.integraciones.autentic.contratos import preparar_firma
+    case, alias = _contexto_contractual(solicitud_id, identity)
+    key = str(UUID(str(clave)))
+    record = _leer_contractual(case, key)
+    binding = record['vinculo']
+    pdf, meta = _documento_contractual(case, binding['documentoOperacionId'])
+    verified = validar_aceptacion_contractual(case, key, meta['pdfSha256'])
+    proof = record['prueba']
+    challenge = _challenge_contractual(case, alias, record)
+    now = timezone.now()
+    if (binding['sesionReferencia'] != identity['_sesionReferencia']
+            or binding['sesionExpiraAt'] != identity['_sesionExpiraAt']
+            or now >= min(_fecha_contractual(binding['sesionExpiraAt']), challenge.expira_at)
+            or verified.referencia != proof['referencia']):
+        raise ValueError('OTP_CONTRACTUAL_VENTANA_PREPARACION_CERRADA')
+    signer = record['firmante']
+    secure = _secure_key_contractual(_base_prueba_contractual(proof))
+    metadata = {'names': signer['names'], 'lastNames': signer['lastNames'],
+        'docId': case.solicitante.numero_identificacion, 'secureKey': secure,
+        'identityValidation': 'NONE', 'identityValidationId': challenge.transaction_uuid,
+        'identityValidationPhone': decrypt_text(challenge.destination_full_encrypted)}
+    if case.solicitante.email:
+        from django.core.validators import validate_email
+        validate_email(case.solicitante.email)
+        metadata['identityValidationEmail']=case.solicitante.email
+    request = preparar_firma(metadata, {meta['codigo']+'.pdf': pdf})
+    return request, dict(proof)
+
+
+def validar_aceptacion_contractual(case, envio_id, pdf_sha256):
+    """Strictly read-only historical custody; verify original audits, never add one."""
+    alias = case._state.db or 'default'
+    key = str(UUID(str(envio_id)))
+    with transaction.atomic(using=alias):
+        detail = SolicitudConsumo.objects.using(alias).select_related('solicitud__solicitante').get(solicitud_id=case.pk)
+        current_case = detail.solicitud
+        if current_case.producto != PRODUCTO or current_case.solicitante_id != case.solicitante_id:
+            raise ValueError('ACEPTACION_CONTRACTUAL_DE_OTRO_TITULAR')
+        proof = _validar_prueba_contractual(current_case, key, pdf_sha256, alias, detail=detail)
+    return AceptacionContractualOTPVerificada(str(case.pk), proof['documentoOperacionId'], key,
+        proof['pdfSha256'], proof['titularReferencia'], proof['secureKeySha256'],
+        _fecha_contractual(proof['aceptadoEn']), _fecha_contractual(proof['verificadoEn']),
+        proof['referencia'], proof['canal'])
+
+
+def _fecha_contractual(value):
+    date = datetime.fromisoformat(value)
+    if not timezone.is_aware(date):
+        raise ValueError('FECHA_CONTRACTUAL_SIN_ZONA')
+    return date
+
+
+def _contexto_contractual(solicitud_id, identity, *, lock=False):
+    """Live, separately scoped owner access; no calls back into documentary forms."""
+    from django.db import connections
+    from .autoservicio import MODO, ORIGEN, VINCULO_CONSUMO
+    if getattr(settings, 'CREDIHOY_OTP_CONTRACTUAL_ENABLED', False) is not True:
+        raise ValueError('OTP_CONTRACTUAL_NO_HABILITADO')
+    try:
+        if (type(identity) is not dict or identity.get('_scopeContractual') != CONTRACTUAL_SCOPE
+                or str(UUID(identity['_sesionReferencia'])) != identity['_sesionReferencia']
+                or _fecha_contractual(identity['_sesionExpiraAt']) <= timezone.now()
+                or not re.fullmatch(r'[0-9]{6,15}', identity['numeroDocumento'])):
+            raise ValueError
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise ValueError('SESION_CONTRACTUAL_NO_ACREDITADA') from None
+    if getattr(settings,'CREDIHOY_CONTRACTUAL_AMBIENTE','')=='STAGING':
+        from .publico_institucional import alcance_contractual
+        alcance_contractual(solicitud_id,identity)
+    alias = getattr(settings, 'CREDIHOY_OTP_CONTRACTUAL_DB_ALIAS',
+                    getattr(settings, 'CREDIHOY_AUTORIZACION_DB_ALIAS', 'default'))
+    if alias not in {'default', 'cotizacion'} or alias not in settings.DATABASES:
+        raise ValueError('ALIAS_CONTRACTUAL_NO_ADMITIDO')
+    if lock and not connections[alias].in_atomic_block:
+        raise ValueError('CONTRACTUAL_REQUIERE_TRANSACCION')
+    case = Solicitud.objects.using(alias).select_related('solicitante').get(pk=UUID(str(solicitud_id)),
+        producto=PRODUCTO, asesor__isnull=True, solicitante__tipo_identificacion='CC',
+        solicitante__numero_identificacion=identity['numeroDocumento'], metadatos__modo=MODO, metadatos__origen=ORIGEN)
+    query = SolicitudConsumo.objects.using(alias)
+    if lock:
+        query = query.select_for_update()
+    detail = query.get(solicitud_id=case.pk)
+    binding = detail.orchestration_data.get(VINCULO_CONSUMO, {})
+    if (any(case.metadatos.get(k) != v for k, v in (
+            ('productoLinix', '390'), ('modalidadLinix', '111'), ('destinacionLinix', 'CFA')))
+            or binding.get('solicitudId') != str(case.pk)
+            or not binding.get('operacionEnvioOriginal')
+            or binding['operacionEnvioOriginal'] != case.metadatos.get('envio', {}).get('operacionId')):
+        raise ValueError('VINCULO_CONTRACTUAL_DE_OTRO_EXPEDIENTE')
+    case.consumo_detail = detail
+    return case, alias
+
+
+def _json_contractual(data):
+    return json.dumps(data, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+
+
+def _digest_contractual(data):
+    return hashlib.sha256(_json_contractual(data).encode()).hexdigest()
+
+
+def _mac_contractual(purpose, data):
+    secret = getattr(settings, 'CREDIHOY_OTP_CONTRACTUAL_HMAC_KEY', '')
+    if type(secret) is not str or len(secret) < 48:
+        raise ValueError('CLAVE_HMAC_CONTRACTUAL_NO_CONFIGURADA')
+    return hmac.new(secret.encode(), (purpose+'\x00'+_json_contractual(data)).encode(), 'sha256').hexdigest()
+
+
+def _secure_key_contractual(base):
+    return 'CREDIHOY-CONTRACTUAL:'+_mac_contractual('secure-key', base)
+
+
+def _base_prueba_contractual(proof):
+    return {k: v for k, v in proof.items() if k not in {'referencia', 'secureKeySha256'}}
+
+
+def _leer_contractual(case, key, *, detail=None):
+    if detail is None:
+        detail = case.consumo_detail
+    try:
+        stored = detail.orchestration_data[CONTRACTUAL_HISTORY][key]
+        record = json.loads(decrypt_text(stored['contenidoCifrado']))
+        if (stored['sha256'] != _digest_contractual(record)
+                or record['vinculo']['solicitudId'] != str(case.pk)
+                or record['vinculo']['operacionFirmaId'] != key):
+            raise ValueError
+        return record
+    except Exception:
+        raise ValueError('CUSTODIA_OTP_CONTRACTUAL_NO_INTEGRA') from None
+
+
+def _guardar_contractual(case, alias, key, record):
+    detail = case.consumo_detail
+    history = dict(detail.orchestration_data.get(CONTRACTUAL_HISTORY, {}))
+    if key not in history and len(history) >= 20:
+        raise ValueError('LIMITE_ACTOS_CONTRACTUALES')
+    history[key] = {'sha256': _digest_contractual(record), 'contenidoCifrado': encrypt_text(_json_contractual(record))}
+    detail.orchestration_data = {**detail.orchestration_data, CONTRACTUAL_HISTORY: history}
+    detail.save(using=alias, update_fields=['orchestration_data', 'updated_at'])
+
+
+def _auditar_contractual(case, alias, action, key, payload, *, actor='titular:contractual'):
+    AuditLog.objects.using(alias).create(solicitud_id=case.pk, event='credihoy_contractual_'+action,
+        actor=actor, request_id=key, payload=payload)
+
+
+def _exigir_auditoria_contractual(case, alias, action, key, payload):
+    rows = _auditorias_contractuales(case,alias,'credihoy_contractual_'+action,key)
+    if len(rows) != 1 or rows[0] != payload:
+        raise ValueError('AUDITORIA_CONTRACTUAL_NO_INTEGRA')
+
+
+def _documento_contractual(case, key, *, detail=None, historico=False):
+    from apps.documentos.formularios_credihoy import FORMATOS
+    from apps.integraciones.autentic.contratos import validar_pdf
+    try:
+        detail = detail if detail is not None else case.consumo_detail
+        independent = _auditorias_contractuales(case,detail._state.db,'credihoy_contractual_documento_prueba_custodiado',key)
+        if len(independent)>1:raise ValueError
+        stored = independent[0] if independent else detail.orchestration_data['credihoy_pdf_oficiales_v1'][key]
+        meta = stored['metadata']
+        trial=meta['codigo']=='PRUEBA-FIRMA-STAGING'
+        if trial:
+            if (not independent or meta.get('proposito')!='PRUEBA_INTEGRACION_AUTENTIC'
+                    or meta.get('version')!='1' or meta.get('ambienteFirma')!='STAGING'
+                    or meta.get('firmaProductivaAcreditada') is not False or meta.get('autorizaDesembolso') is not False
+                    or meta.get('originalSha256')!=meta.get('pdfSha256') or not 1<=meta.get('paginas',0)<=10):raise ValueError
+            if not historico:
+                from .publico_institucional import alcance_contractual
+                scope=alcance_contractual(case.pk)
+                if (scope.get('documentoPrueba')!={'codigo':meta['codigo'],'version':'1','paginas':meta['paginas']}
+                        or scope['documentoOperacionId']!=key or scope['pdfSha256']!=meta['pdfSha256']):raise ValueError
+        admitted = getattr(settings, 'CREDIHOY_OTP_CONTRACTUAL_DOCUMENTOS', ('COLO-FO.001',))
+        if (meta['codigo'] == 'COLO-FO.023'
+                or (not historico and not trial and (meta['codigo'] not in admitted or meta['codigo'] not in FORMATOS
+                    or meta['version'] != FORMATOS[meta['codigo']]['version']
+                    or meta['originalSha256'] != FORMATOS[meta['codigo']]['sha256']))
+                or meta['solicitudId'] != str(case.pk)
+                or meta['identidadDocumentalReferencia'] != hashlib.sha256(case.solicitante.numero_identificacion.encode()).hexdigest()):
+            raise ValueError
+        envelope = json.loads(decrypt_text(stored['contenidoCifrado']))
+        pdf = base64.b64decode(envelope['pdfBase64'], validate=True)
+        if (envelope['solicitudId'] != str(case.pk) or envelope['operacionId'] != key
+                or envelope['metadata'] != meta or validar_pdf(pdf) != meta['pdfSha256']):
+            raise ValueError
+        audits = independent if trial else _auditorias_contractuales(case,detail._state.db,'CREDIHOY_PDF_OFICIAL_CUSTODIADO',key)
+        expected={'codigo':meta['codigo'],'version':meta['version'],'sha256':meta['pdfSha256']}
+        if len(audits) != 1 or {k:audits[0].get(k) for k in expected}!=expected:
+            raise ValueError
+        if not trial and audits[0]!=expected:raise ValueError
+        return pdf, dict(meta)
+    except Exception:
+        raise ValueError('DOCUMENTO_CONTRACTUAL_NO_INTEGRO') from None
+
+
+@contextmanager
+def _transaccion_contractual(solicitud_id, identity):
+    from django.db import connections
+    case, alias = _contexto_contractual(solicitud_id, identity)
+    if connections[alias].vendor != 'postgresql' or connections[alias].in_atomic_block:
+        raise ValueError('OTP_CONTRACTUAL_REQUIERE_COMMIT_POSTGRESQL_DURABLE')
+    with transaction.atomic(using=alias, durable=True):
+        case, _ = _contexto_contractual(solicitud_id, identity, lock=True)
+        yield case, alias
+
+
+def _vinculo_sesion_contractual(record, identity):
+    binding = record['vinculo']
+    if (binding['proposito'] != CONTRACTUAL_PURPOSE or binding['scope'] != CONTRACTUAL_SCOPE
+            or binding['sesionReferencia'] != identity['_sesionReferencia']
+            or binding['sesionExpiraAt'] != identity['_sesionExpiraAt']
+            or binding['titularReferencia'] != hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest()):
+        raise ValueError('ACTO_CONTRACTUAL_DE_OTRA_SESION')
+
+
+def _firmante_contractual(case, identity, key, pdf, meta):
+    """Reuse the existing signed institutional assertion only as a source of names."""
+    from .publico_seguimiento import verificar_firmante
+    from apps.documentos.formularios_credihoy import MAPA
+    from pypdf import PdfReader
+    from io import BytesIO
+    try:
+        signer = verificar_firmante(identity['_firmanteInstitucional'], identity, solicitud_id=case.pk,
+            pdf_sha256=meta['pdfSha256'], clave=key, proposito=CONTRACTUAL_PURPOSE)
+        fields = PdfReader(BytesIO(pdf)).get_fields() or {}
+        name = signer['names']+' '+signer['lastNames'] if meta['codigo']=='PRUEBA-FIRMA-STAGING' else str(fields[MAPA[meta['codigo']]['nombre']]['/V'])
+        normalize = lambda value:' '.join(value.split()).casefold()
+        surname = normalize(case.solicitante.primer_apellido)
+        if (normalize(name) != normalize(signer['names']+' '+signer['lastNames']) or not surname
+                or not (normalize(signer['lastNames']) == surname or normalize(signer['lastNames']).startswith(surname+' '))):
+            raise ValueError
+        return {k: signer[k] for k in ('names', 'lastNames')}
+    except Exception:
+        raise ValueError('IDENTIDAD_CONTRACTUAL_INSTITUCIONAL_NO_ACREDITADA') from None
+
+
+def presentar_documento_contractual(solicitud_id, identity, *, documento_operacion_id, clave):
+    from django.core import signing
+    from .publico_seguimiento import key as signing_key
+    key, doc = str(UUID(str(clave))), str(UUID(str(documento_operacion_id)))
+    with _transaccion_contractual(solicitud_id, identity) as (case, alias):
+        pdf, meta = _documento_contractual(case, doc)
+        signer = _firmante_contractual(case, identity, key, pdf, meta)
+        binding = {'version': CONTRACTUAL_WORKFLOW, 'proposito': CONTRACTUAL_PURPOSE, 'scope': CONTRACTUAL_SCOPE,
+            'solicitudId': str(case.pk), 'titularReferencia': hashlib.sha256(identity['numeroDocumento'].encode()).hexdigest(),
+            'sesionReferencia': identity['_sesionReferencia'], 'sesionExpiraAt': identity['_sesionExpiraAt'],
+            'documentoOperacionId': doc, 'operacionFirmaId': key, 'pdfSha256': meta['pdfSha256'],
+            'codigo': meta['codigo'], 'versionDocumento': meta['version'], 'originalSha256': meta['originalSha256'],
+            'firmanteSha256': _digest_contractual(signer)}
+        history = case.consumo_detail.orchestration_data.get(CONTRACTUAL_HISTORY, {})
+        if key in history:
+            if puede_renovar_revision_contractual(case, alias, _leer_contractual(case, key), key):
+                return None
+            if _leer_contractual(case, key)['vinculo'] != binding:
+                raise ValueError('PRESENTACION_CONTRACTUAL_IDEMPOTENCIA_CONFLICTO')
+        else:
+            antecedents = []
+            for other in history:
+                previous = _leer_contractual(case, other)
+                if previous['vinculo']['pdfSha256'] == binding['pdfSha256']:
+                    if not puede_renovar_revision_contractual(case, alias, previous, other):
+                        raise ValueError('ACTO_CONTRACTUAL_ACTIVO_O_INCIERTO_NO_DUPLICAR')
+                    antecedents.append(other)
+            _guardar_contractual(case, alias, key, {'vinculo': binding, 'firmante': signer,
+                'estado': 'PRESENTADA', 'comprobaciones': {}, 'antecedentes': sorted(antecedents)})
+            if antecedents:
+                _auditar_contractual(case, alias, 'revision_renovada', key,
+                    {'antecedentes': sorted(antecedents), 'pdfSha256': binding['pdfSha256']})
+        payload = {'vinculoSha256': _digest_contractual(binding)}
+        events = _auditorias_contractuales(case,alias,'credihoy_contractual_presentado',key)
+        if events:
+            _exigir_auditoria_contractual(case, alias, 'presentado', key, payload)
+        else:
+            _auditar_contractual(case, alias, 'presentado', key, payload)
+        token = signing.dumps(binding, key=signing_key(), salt=CONTRACTUAL_SALT)
+    return {'solicitudId': str(case.pk), 'operacionFirmaId': key, 'documentoOperacionId': doc,
+        'codigo': meta['codigo'], 'pdfSha256': meta['pdfSha256'], 'pdfBase64': base64.b64encode(pdf).decode(),
+        'presentacion': token, 'proposito': CONTRACTUAL_PURPOSE, 'ttl': CONTRACTUAL_TTL}
+
+
+def aceptar_documento_contractual(solicitud_id, identity, *, presentacion, acepta, clave):
+    from django.core import signing
+    from .publico_seguimiento import key as signing_key
+    if acepta is not True:
+        raise ValueError('ACEPTACION_CONTRACTUAL_EXPRESA_REQUERIDA')
+    key = str(UUID(str(clave)))
+    try:
+        binding = signing.loads(presentacion, key=signing_key(), salt=CONTRACTUAL_SALT,
+                               max_age=CONTRACTUAL_TTL, fallback_keys=[])
+    except Exception:
+        raise ValueError('PRESENTACION_CONTRACTUAL_INVALIDA_O_VENCIDA') from None
+    with _transaccion_contractual(solicitud_id, identity) as (case, alias):
+        record = _leer_contractual(case, key)
+        if record['vinculo'] != binding:
+            raise ValueError('PRESENTACION_CONTRACTUAL_DE_OTRO_ACTO')
+        _vinculo_sesion_contractual(record, identity)
+        if binding['solicitudId'] != str(case.pk) or binding['operacionFirmaId'] != key:
+            raise ValueError('PRESENTACION_CONTRACTUAL_DE_OTRO_ENVIO')
+        pdf, meta = _documento_contractual(case, binding['documentoOperacionId'])
+        signer = record['firmante']
+        if (binding['pdfSha256'] != meta['pdfSha256'] or binding['firmanteSha256'] != _digest_contractual(signer)
+                or binding['codigo'] != meta['codigo'] or binding['versionDocumento'] != meta['version']):
+            raise ValueError('DOCUMENTO_PRESENTADO_CAMBIO')
+        _exigir_auditoria_contractual(case, alias, 'presentado', key, {'vinculoSha256': _digest_contractual(binding)})
+        history = case.consumo_detail.orchestration_data.get(CONTRACTUAL_HISTORY, {})
+        if record['estado'] != 'PRESENTADA':
+            existing = _leer_contractual(case, key)
+            if existing['vinculo'] != binding:
+                raise ValueError('ACEPTACION_CONTRACTUAL_IDEMPOTENCIA_CONFLICTO')
+            return _estado_contractual(existing)
+        for other in history:
+            if other != key and _leer_contractual(case, other)['vinculo']['pdfSha256'] == binding['pdfSha256']:
+                if not puede_renovar_revision_contractual(case, alias, _leer_contractual(case, other), other):
+                    raise ValueError('DOCUMENTO_CONTRACTUAL_YA_RECLAMADO')
+        record.update(firmante=signer, aceptacionId=str(uuid4()), aceptadoEn=timezone.now().isoformat(),
+                      estado='ACEPTADA_PENDIENTE_OTP', comprobaciones={})
+        record['aceptacionSha256'] = _digest_contractual({k: record[k] for k in (
+            'vinculo', 'firmante', 'aceptacionId', 'aceptadoEn')})
+        _guardar_contractual(case, alias, key, record)
+        _auditar_contractual(case, alias, 'aceptado', key, {'aceptacionSha256': record['aceptacionSha256']})
+        return _estado_contractual(record)
+
+
+def _estado_contractual(record):
+    return {'solicitudId': record['vinculo']['solicitudId'], 'operacionFirmaId': record['vinculo']['operacionFirmaId'],
+        'estado': record['estado'], 'proposito': CONTRACTUAL_PURPOSE, 'firmaProveedorVerificada': False}
+
+
+def _challenge_contractual(case, alias, record, *, lock=False):
+    from apps.xcore_consumo.models import OtpChallenge
+    query = OtpChallenge.objects.using(alias)
+    if lock:
+        query = query.select_for_update()
+    challenge = query.get(pk=record['otpId'], solicitud_id=case.pk)
+    if (challenge.provider != 'twilio_verify' or challenge.max_intentos != CONTRACTUAL_MAX_ATTEMPTS
+            or not challenge.validation_result.startswith('contractual:') or challenge.otp_hash
+            or challenge.codigo or challenge.otp_code_encrypted or challenge.otp_masked):
+        raise ValueError('CHALLENGE_DE_OTRO_PROPOSITO_O_NO_INTEGRO')
+    return challenge
+
+
+def _cliente_otp_contractual(service,*,identity=None,record=None,comprobacion_id=None):
+    import logging
+    from apps.xcore_consumo.services.twilio_verify import TwilioVerifyClient
+    if any(logging.getLogger(name).isEnabledFor(logging.INFO) for name in ('twilio', 'twilio.http_client')):
+        raise ValueError('OTP_CONTRACTUAL_LOG_HTTP_NO_AISLADO')
+    if getattr(settings,'CREDIHOY_OTP_CONTRACTUAL_TRANSPORTE','SDK')=='RELE_HTTP':
+        from .publico_institucional import cliente_verify_contractual
+        return cliente_verify_contractual(service,identity,record,comprobacion_id=comprobacion_id)
+    key_sid = getattr(settings, 'TWILIO_VERIFY_API_KEY_SID', '')
+    key_secret = getattr(settings, 'TWILIO_VERIFY_API_KEY_SECRET', '')
+    account_sid = getattr(settings, 'TWILIO_ACCOUNT_SID', '')
+    if (any(type(value) is not str for value in (key_sid, key_secret, account_sid))
+            or not re.fullmatch('SK[a-fA-F0-9]{32}', key_sid.strip())
+            or len(key_secret.strip()) < 32
+            or not re.fullmatch('AC[a-fA-F0-9]{32}', account_sid.strip())):
+        raise ValueError('PERFIL_VERIFY_CONTRACTUAL_DEDICADO_REQUERIDO')
+    return TwilioVerifyClient(service_sid=service)
+
+
+def enviar_otp_contractual(solicitud_id, identity, *, clave):
+    from apps.xcore_consumo.services import otp
+    if getattr(settings, 'CREDIHOY_OTP_CONTRACTUAL_ENVIO_ENABLED', False) is not True:
+        raise ValueError('ENVIO_OTP_CONTRACTUAL_NO_HABILITADO')
+    service = getattr(settings, 'CREDIHOY_OTP_CONTRACTUAL_VERIFY_SID', '')
+    if (type(service) is not str or not re.fullmatch('VA[a-fA-F0-9]{32}', service)
+            or service in (getattr(settings, 'CREDIHOY_PUBLICO_VERIFY_SID', None), getattr(settings, 'TWILIO_VERIFY_SID', None))):
+        raise ValueError('SERVICIO_VERIFY_CONTRACTUAL_DEDICADO_REQUERIDO')
+    key = str(UUID(str(clave)))
+    with _transaccion_contractual(solicitud_id, identity) as (case, alias):
+        record = _leer_contractual(case, key)
+        _vinculo_sesion_contractual(record, identity)
+        _documento_contractual(case, record['vinculo']['documentoOperacionId'])
+        if record['estado'] in {'OTP_ENVIADA', 'OTP_VALIDADA'}:
+            return _estado_contractual(record)
+        if record['estado'] != 'ACEPTADA_PENDIENTE_OTP':
+            raise ValueError('OTP_CONTRACTUAL_INCIERTA_NO_REENVIAR')
+        if timezone.now()-_fecha_contractual(record['aceptadoEn']) > timedelta(seconds=CONTRACTUAL_TTL):
+            raise ValueError('ACEPTACION_CONTRACTUAL_VENCIDA_PARA_ENVIO')
+        destination = otp.normalize_sms_destination(case.solicitante.celular)
+        challenge = otp._create_base_challenge(case, channel='SMS', provider=otp.PROVIDER_TWILIO_VERIFY,
+            destination=destination, using=alias, max_intentos=CONTRACTUAL_MAX_ATTEMPTS,
+            validation_result='contractual:send_reserved')
+        now = timezone.now()
+        challenge.validation_result = 'contractual:send_reserved'
+        challenge.expira_at = now+timedelta(seconds=CONTRACTUAL_TTL)
+        challenge.save(using=alias, update_fields=['validation_result', 'expira_at', 'updated_at'])
+        record.update(estado='OTP_ENVIO_RESERVADO', otpId=str(challenge.pk), serviceSid=service,
+            reservadoEn=now.isoformat(), contactoSha256=hashlib.sha256(destination.encode()).hexdigest())
+        _guardar_contractual(case, alias, key, record)
+        _auditar_contractual(case, alias, 'otp_reservado', key, {'otpId': str(challenge.pk), 'proposito': CONTRACTUAL_PURPOSE})
+    # No database transaction or caller code survives the provider boundary.
+    try:
+        reply = _cliente_otp_contractual(service,identity=identity,record=record).start_verification(destination, channel='sms')
+        sid = getattr(reply, 'sid', None)
+        if not re.fullmatch('VE[a-fA-F0-9]{32}', sid or '') or getattr(reply, 'status', None) != 'pending':
+            raise ValueError
+        success = True
+    except Exception:
+        success, sid = False, ''
+    result = _cerrar_envio_otp_contractual(case, alias, key, success, sid)
+    if not success:
+        raise ValueError('OTP_CONTRACTUAL_ENVIO_INDETERMINADO_NO_REPETIR') from None
+    return result
+
+
+def verificar_otp_contractual(solicitud_id, identity, *, clave, codigo, clave_verificacion):
+    if getattr(settings, 'CREDIHOY_OTP_CONTRACTUAL_ENVIO_ENABLED', False) is not True:
+        raise ValueError('VERIFICACION_OTP_CONTRACTUAL_NO_HABILITADA')
+    if type(codigo) is not str or not re.fullmatch('[0-9]{6}', codigo):
+        raise ValueError('CODIGO_CONTRACTUAL_INVALIDO')
+    key, operation = str(UUID(str(clave))), str(UUID(str(clave_verificacion)))
+    with _transaccion_contractual(solicitud_id, identity) as (case, alias):
+        record = _leer_contractual(case, key)
+        _vinculo_sesion_contractual(record, identity)
+        challenge = _challenge_contractual(case, alias, record, lock=True)
+        previous = record['comprobaciones'].get(operation)
+        if record['estado'] == 'OTP_VALIDADA':
+            _validar_prueba_contractual(case, key, record['vinculo']['pdfSha256'], alias)
+            return _estado_contractual(record)
+        if previous is not None or record['estado'] != 'OTP_ENVIADA':
+            raise ValueError('COMPROBACION_CONTRACTUAL_EXISTENTE_O_INCIERTA_NO_REPETIR')
+        now = timezone.now()
+        if (challenge.estado != EstadoOtp.ENVIADA or challenge.intentos >= CONTRACTUAL_MAX_ATTEMPTS
+                or not challenge.expira_at or now >= challenge.expira_at
+                or not re.fullmatch('VE[a-fA-F0-9]{32}', challenge.verification_sid)):
+            raise ValueError('OTP_CONTRACTUAL_NO_DISPONIBLE')
+        challenge.intentos += 1
+        challenge.validation_result = 'contractual:check_reserved'
+        challenge.save(using=alias, update_fields=['intentos', 'validation_result', 'updated_at'])
+        record['estado'] = 'OTP_COMPROBACION_RESERVADA'
+        record['comprobaciones'][operation] = {'estado': 'RESERVADA', 'reservadoEn': now.isoformat()}
+        _guardar_contractual(case, alias, key, record)
+        _auditar_contractual(case, alias, 'otp_check_reservado', operation, {'otpId': str(challenge.pk), 'envioId': key})
+        sid, service = challenge.verification_sid, record['serviceSid']
+        destination = decrypt_text(challenge.destination_full_encrypted)
+    try:
+        reply = _cliente_otp_contractual(service,identity=identity,record=record,comprobacion_id=operation).check_verification(destination, codigo, verification_sid=sid)
+        if getattr(reply, 'sid', None) != sid:
+            raise ValueError
+        status = getattr(reply, 'status', None)
+        if status not in {'approved', 'pending'}:
+            raise ValueError
+    except Exception:
+        status = 'uncertain'
+    finally:
+        codigo = None
+    with transaction.atomic(using=alias, durable=True):
+        case.consumo_detail = SolicitudConsumo.objects.using(alias).select_for_update().get(solicitud_id=case.pk)
+        record = _leer_contractual(case, key)
+        challenge = _challenge_contractual(case, alias, record, lock=True)
+        if record['estado'] != 'OTP_COMPROBACION_RESERVADA' or challenge.verification_sid != sid:
+            raise ValueError('RESERVA_COMPROBACION_CONTRACTUAL_CAMBIO')
+        now = timezone.now()
+        if now >= min(challenge.expira_at, _fecha_contractual(record['vinculo']['sesionExpiraAt'])):
+            status = 'expired'
+        record['comprobaciones'][operation]['estado'] = status
+        if status == 'approved':
+            challenge.estado, challenge.verificado_at = EstadoOtp.VALIDADA, now
+            challenge.verification_check_sid = sid
+            record['estado'] = 'OTP_VALIDADA'
+            proof = {**record['vinculo'], 'aceptacionId': record['aceptacionId'], 'aceptadoEn': record['aceptadoEn'],
+                'aceptacionSha256': record['aceptacionSha256'], 'otpId': str(challenge.pk), 'canal': challenge.canal,
+                'provider': challenge.provider, 'transactionUuid': challenge.transaction_uuid,
+                'serviceSid': service, 'verificationSid': sid, 'verificationCheckSid': sid,
+                'contactoSha256': record['contactoSha256'], 'verificadoEn': now.isoformat(), 'checkOperacionId': operation}
+            proof['referencia'] = _mac_contractual('proof', proof)
+            proof['secureKeySha256'] = hashlib.sha256(_secure_key_contractual(_base_prueba_contractual(proof)).encode()).hexdigest()
+            record['prueba'] = proof
+            _auditar_contractual(case, alias, 'otp_validado', key,
+                {'referencia': proof['referencia'], 'secureKeySha256': proof['secureKeySha256'], 'otpId': str(challenge.pk)})
+        elif status == 'pending':
+            challenge.estado = EstadoOtp.BLOQUEADA if challenge.intentos >= CONTRACTUAL_MAX_ATTEMPTS else EstadoOtp.ENVIADA
+            record['estado'] = 'OTP_BLOQUEADA' if challenge.intentos >= CONTRACTUAL_MAX_ATTEMPTS else 'OTP_ENVIADA'
+        else:
+            challenge.estado = EstadoOtp.EXPIRADA if status == 'expired' else EstadoOtp.ERROR_ENVIO
+            record['estado'] = 'OTP_EXPIRADA' if status == 'expired' else 'OTP_COMPROBACION_INDETERMINADA'
+        challenge.validation_result = 'contractual:'+status
+        challenge.save(using=alias, update_fields=['estado', 'verificado_at', 'verification_check_sid', 'validation_result', 'updated_at'])
+        _guardar_contractual(case, alias, key, record)
+    if status != 'approved':
+        raise ValueError('OTP_CONTRACTUAL_NO_VALIDADA_NO_REINTENTO_CIEGO') from None
+    return _estado_contractual(record)
+
+
+def _validar_prueba_contractual(case, key, pdf_sha256, alias, *, detail=None):
+    try:
+        record = _leer_contractual(case, key, detail=detail)
+        binding, proof = record['vinculo'], record['prueba']
+        pdf, meta = _documento_contractual(case, binding['documentoOperacionId'], detail=detail, historico=True)
+        challenge = _challenge_contractual(case, alias, record)
+        base = _base_prueba_contractual(proof)
+        expected_acceptance = _digest_contractual({k: record[k] for k in ('vinculo', 'firmante', 'aceptacionId', 'aceptadoEn')})
+        accepted, checked = _fecha_contractual(proof['aceptadoEn']), _fecha_contractual(proof['verificadoEn'])
+        if (record['estado'] != 'OTP_VALIDADA' or proof['version'] != CONTRACTUAL_WORKFLOW
+                or any(proof[k] != v for k, v in binding.items()) or proof['proposito'] != CONTRACTUAL_PURPOSE
+                or proof['scope'] != CONTRACTUAL_SCOPE or proof['solicitudId'] != str(case.pk)
+                or proof['operacionFirmaId'] != key or proof['pdfSha256'] != pdf_sha256
+                or meta['pdfSha256'] != pdf_sha256 or proof['codigo'] != meta['codigo']
+                or proof['versionDocumento'] != meta['version']
+                or proof['originalSha256'] != meta['originalSha256']
+                or proof['titularReferencia'] != hashlib.sha256(case.solicitante.numero_identificacion.encode()).hexdigest()
+                or proof['firmanteSha256'] != _digest_contractual(record['firmante'])
+                or expected_acceptance != record['aceptacionSha256'] or proof['aceptacionSha256'] != expected_acceptance
+                or proof['aceptacionId'] != record['aceptacionId'] or proof['aceptadoEn'] != record['aceptadoEn']
+                or challenge.estado != EstadoOtp.VALIDADA or challenge.validation_result != 'contractual:approved'
+                or challenge.verificado_at != checked or not 1 <= challenge.intentos <= CONTRACTUAL_MAX_ATTEMPTS
+                or proof['otpId'] != str(challenge.pk) or proof['provider'] != challenge.provider
+                or proof['canal'] != challenge.canal or proof['transactionUuid'] != challenge.transaction_uuid
+                or not challenge.verification_sid or challenge.verification_check_sid != challenge.verification_sid
+                or proof['verificationSid'] != challenge.verification_sid or proof['verificationCheckSid'] != challenge.verification_sid
+                or proof['serviceSid'] != record['serviceSid']
+                or proof['contactoSha256'] != hashlib.sha256(decrypt_text(challenge.destination_full_encrypted).encode()).hexdigest()
+                or not accepted <= _fecha_contractual(record['reservadoEn']) <= challenge.enviado_at <= checked < challenge.expira_at
+                or checked > _fecha_contractual(binding['sesionExpiraAt']) or checked > timezone.now()
+                or not hmac.compare_digest(proof['referencia'], _mac_contractual('proof', base))
+                or not hmac.compare_digest(proof['secureKeySha256'], hashlib.sha256(_secure_key_contractual(base).encode()).hexdigest())):
+            raise ValueError
+        _exigir_auditoria_contractual(case, alias, 'presentado', key, {'vinculoSha256': _digest_contractual(binding)})
+        _exigir_auditoria_contractual(case, alias, 'aceptado', key, {'aceptacionSha256': expected_acceptance})
+        _exigir_auditoria_contractual(case, alias, 'otp_reservado', key, {'otpId': str(challenge.pk), 'proposito': CONTRACTUAL_PURPOSE})
+        _exigir_auditoria_contractual(case, alias, 'otp_enviado', key, {'otpId': str(challenge.pk), 'proposito': CONTRACTUAL_PURPOSE})
+        _exigir_auditoria_contractual(case, alias, 'otp_check_reservado', proof['checkOperacionId'], {'otpId': str(challenge.pk), 'envioId': key})
+        _exigir_auditoria_contractual(case, alias, 'otp_validado', key,
+            {'referencia': proof['referencia'], 'secureKeySha256': proof['secureKeySha256'], 'otpId': str(challenge.pk)})
+        return dict(proof)
+    except Exception:
+        raise ValueError('ACEPTACION_CONTRACTUAL_OTP_NO_ACREDITADA') from None
+
+CONTRACTUAL_WORKFLOW = 'CREDIHOY_OTP_CONTRACTUAL_V1'
+
+CONTRACTUAL_PURPOSE = 'FIRMA_DOCUMENTO_CONTRACTUAL'
+
+CONTRACTUAL_SCOPE = 'solicitudes:firmarContrato'
+
+CONTRACTUAL_HISTORY = 'credihoy_otp_contractual_v1'
+
+CONTRACTUAL_TTL = 600
+
+CONTRACTUAL_MAX_ATTEMPTS = 3
+
+CONTRACTUAL_SALT = 'credihoy-documento-contractual-v1'
+
+
+def _auditorias_contractuales(case,alias,event,key):
+    if alias=='cotizacion':
+        from django.db import connections
+        with connections[alias].cursor() as cursor:
+            cursor.execute('SELECT payload FROM public.credihoy_auditoria_contractual_publica '
+                'WHERE solicitud_id=%s AND event=%s AND request_id=%s LIMIT 2',[str(case.pk),event,str(key)])
+            return [json.loads(row[0]) if type(row[0]) is str else row[0] for row in cursor.fetchall()]
+    return list(AuditLog.objects.using(alias).filter(solicitud_id=case.pk,event=event,request_id=key).values_list('payload',flat=True)[:2])
+
+
+
+def operar_contractual(identity,action):
+    """Personal operations over the existing authorization transport, never a server acceptance."""
+    from .publico_institucional import alcance_contractual
+    required={'operacion','accion','solicitudId','clave'}
+    extras={'contractual_presentar':set(),'contractual_aceptar':{'presentacion','acepta'},
+        'contractual_enviar_otp':set(),'contractual_comprobar_otp':{'codigo','comprobacionId'},
+        'contractual_firmar':{'confirmaFirma'},'contractual_consultar':set()}
+    if (type(action) is not dict or action.get('operacion')!='autorizacion'
+            or action.get('accion') not in extras or set(action)!=required|extras[action['accion']]):
+        raise ValueError('OPERACION_CONTRACTUAL_INVALIDA')
+    sid,key=str(UUID(action['solicitudId'])),str(UUID(action['clave']))
+    scope=alcance_contractual(sid,identity)
+    name=action['accion'];document=None;pending=[];signed=None
+    independent_verified=False
+    if name=='contractual_presentar':
+        document=presentar_documento_contractual(sid,identity,documento_operacion_id=scope['documentoOperacionId'],clave=key)
+    elif name=='contractual_aceptar':
+        aceptar_documento_contractual(sid,identity,presentacion=action['presentacion'],acepta=action['acepta'],clave=key)
+    elif name=='contractual_enviar_otp':enviar_otp_contractual(sid,identity,clave=key)
+    elif name=='contractual_comprobar_otp':
+        verificar_otp_contractual(sid,identity,clave=key,codigo=action['codigo'],clave_verificacion=action['comprobacionId'])
+    case,alias=_contexto_contractual(sid,identity)
+    record=_leer_contractual(case,key)
+    expired_review=name in {'contractual_consultar','contractual_presentar'} and puede_renovar_revision_contractual(case,alias,record,key)
+    if not expired_review:_vinculo_sesion_contractual(record,identity)
+    if record['vinculo']['documentoOperacionId']!=scope['documentoOperacionId'] or record['vinculo']['pdfSha256']!=scope['pdfSha256']:
+        raise ValueError('DOCUMENTO_CONTRACTUAL_CAMBIO')
+    if expired_review:pending=['REVISION_PERSONAL_CONTRACTUAL_VENCIDA']
+    if name=='contractual_consultar' and not expired_review:
+        from django.core import signing
+        from .publico_seguimiento import key as signing_key
+        pdf,meta=_documento_contractual(case,scope['documentoOperacionId'])
+        _exigir_auditoria_contractual(case,alias,'presentado',key,{'vinculoSha256':_digest_contractual(record['vinculo'])})
+        document={'solicitudId':sid,'operacionFirmaId':key,'documentoOperacionId':scope['documentoOperacionId'],
+            'codigo':meta['codigo'],'pdfSha256':meta['pdfSha256'],'pdfBase64':base64.b64encode(pdf).decode(),
+            'presentacion':signing.dumps(record['vinculo'],key=signing_key(),salt=CONTRACTUAL_SALT),
+            'proposito':CONTRACTUAL_PURPOSE,'ttl':CONTRACTUAL_TTL}
+    history=case.consumo_detail.orchestration_data.get('credihoy_autentic_envios_v1',{})
+    if name=='contractual_firmar' or name=='contractual_consultar' and key in history:
+        from dataclasses import replace
+        from apps.documentos.formularios_credihoy import enviar_formato_custodiado,recuperar_documento_autentic,inspeccionar_evidencia_custodiada
+        from apps.integraciones.autentic.cliente import AutenticDEVClient
+        from apps.integraciones.autentic.contratos import ConfiguracionSTAGING
+        from apps.integraciones.autentic.operaciones import RegistroFirmasExpediente
+        if name=='contractual_firmar' and action['confirmaFirma'] is not True:
+            raise ValueError('CONFIRMACION_PERSONAL_CONTRACTUAL_REQUERIDA')
+        if name=='contractual_firmar':
+            with _transaccion_contractual(sid,identity) as (locked,locked_alias):
+                current=_leer_contractual(locked,key);_vinculo_sesion_contractual(current,identity)
+                _validar_prueba_contractual(locked,key,scope['pdfSha256'],locked_alias)
+                if 'confirmacionFirma' not in current:
+                    current['confirmacionFirma']={'confirmadaEn':timezone.now().isoformat(),
+                        'requestId':identity['_requestId'],'pdfSha256':scope['pdfSha256'],'ambiente':'STAGING'}
+                    _guardar_contractual(locked,locked_alias,key,current)
+                    _auditar_contractual(locked,locked_alias,'firma_confirmada',key,current['confirmacionFirma'])
+        config=ConfiguracionSTAGING.desde_archivo(getattr(settings,'CREDIHOY_AUTENTIC_STAGING_PROFILE_FILE',''))
+        client=AutenticDEVClient(replace(config,permitir_documentos=True))
+        reference='CREDIHOY_CONTRACTUAL_STAGING:'+sid+':'+key
+        try:
+            if name=='contractual_firmar':
+                enviar_formato_custodiado(sid,actor=None,titular=identity,operacion_id=scope['documentoOperacionId'],
+                    metadata=None,clave_idempotencia=key,cliente=client,
+                    registro=RegistroFirmasExpediente(sid,key,alias=alias),
+                    referencia_autorizacion=reference,autoriza_firma=True)
+            case,alias=_contexto_contractual(sid,identity)
+            entry=case.consumo_detail.orchestration_data['credihoy_autentic_envios_v1'][key]
+            if entry.get('vinculo',{}).get('ambienteFirma')!='STAGING':raise ValueError('ENVIO_CONTRACTUAL_DE_OTRO_AMBIENTE')
+            if not entry.get('reciboCifrado'):
+                pending=[{'FALLO_DEFINITIVO_DOCUMENTADO':'FIRMA_RECHAZADA_DOCUMENTADA_NO_REENVIAR',
+                    'CONCILIADA_NO_PROCESADA':'FIRMA_NO_PROCESADA_CONCILIADA_NO_REENVIAR'}.get(
+                        entry['estado'],'RESPUESTA_PROVEEDOR_INCIERTA_NO_REENVIAR')]
+            else:
+                pdf,download=recuperar_documento_autentic(sid,actor=None,titular=identity,envio_id=key,
+                    cliente=client,referencia_autorizacion=reference)
+                signed={'pdfBase64':base64.b64encode(pdf).decode(),'pdfSha256':download['pdfSha256']}
+                try:
+                    result=inspeccionar_evidencia_custodiada(sid,actor=None,titular=identity,envio_id=key)
+                    pending=result.get('pendientes',[])
+                    independent_verified=bool(scope.get('documentoPrueba') and result.get('firmaAcreditada') is True)
+                except (ImportError,ModuleNotFoundError):pending=['VERIFICADOR_DOCUMENTAL_NO_DISPONIBLE_EN_RUNTIME']
+        finally:client.close()
+    case,alias=_contexto_contractual(sid,identity)
+    record=_leer_contractual(case,key)
+    sent=case.consumo_detail.orchestration_data.get('credihoy_autentic_envios_v1',{}).get(key)
+    if getattr(settings,'CREDIHOY_OTP_CONTRACTUAL_ENVIO_ENABLED',False) is not True:
+        pending.append('TRANSPORTE_OTP_CONTRACTUAL_NO_HABILITADO')
+    if getattr(settings,'CREDIHOY_AUTENTIC_CONTRACTUAL_STAGING_ENVIO_ENABLED',False) is not True:
+        pending.append('TRANSPORTE_FIRMA_STAGING_NO_HABILITADO')
+    return {'versionContrato':'credihoy-contractual-staging-v1','solicitudId':sid,'operacionFirmaId':key,
+        'ambiente':'STAGING','estado':'PRUEBA_FIRMA_VERIFICADA' if independent_verified else sent['estado'] if sent else record['estado'],
+        'pdfSha256':scope['pdfSha256'],'documento':document,'firmado':signed,'pendientes':pending,
+        'otpProveedor':'TWILIO_VERIFY','otpVerificado':record['estado']=='OTP_VALIDADA',
+        'firmaProductivaAcreditada':False,'autorizaDesembolso':False}
+
+
+
+def puede_renovar_revision_contractual(case, alias, record, key):
+    """Allow a new personal review only after an expired act without a signature claim."""
+    claims = case.consumo_detail.orchestration_data.get('credihoy_autentic_envios_v1', {})
+    if any(entry.get('vinculo', {}).get('pdfSha256') == record['vinculo']['pdfSha256'] for entry in claims.values()):
+        return False
+    if record['estado'] == 'OTP_VALIDADA' and record.get('confirmacionFirma'):
+        if getattr(settings, 'CREDIHOY_CONTRACTUAL_AMBIENTE', '') != 'STAGING':
+            return False
+        if _digest_contractual(record) != _digest_contractual(_leer_contractual(case, key)):
+            return False
+        proof = _validar_prueba_contractual(case, key, record['vinculo']['pdfSha256'], alias)
+        _, meta = _documento_contractual(case, record['vinculo']['documentoOperacionId'], historico=True)
+        challenge = _challenge_contractual(case, alias, record)
+        confirmation = record['confirmacionFirma']
+        _exigir_auditoria_contractual(case, alias, 'firma_confirmada', key, confirmation)
+        end = min(challenge.expira_at, _fecha_contractual(record['vinculo']['sesionExpiraAt']))
+        return (meta.get('ambienteFirma') == 'STAGING' and meta.get('firmaProductivaAcreditada') is False
+            and confirmation.get('ambiente') == 'STAGING' and confirmation.get('pdfSha256') == proof['pdfSha256']
+            and _fecha_contractual(proof['verificadoEn']) <= _fecha_contractual(confirmation['confirmadaEn']) < end
+            and timezone.now() >= end+timedelta(seconds=60))
+    recovered_expiry = record['estado'] == 'OTP_EXPIRADA' and bool(record.get('recuperacionEnvio'))
+    if recovered_expiry:
+        challenge = _challenge_contractual(case, alias, record)
+        if (challenge.estado != EstadoOtp.EXPIRADA or challenge.validation_result != 'contractual:sent_expired'
+                or challenge.intentos != 0 or challenge.verification_check_sid
+                or not re.fullmatch('VE[a-fA-F0-9]{32}', challenge.verification_sid)
+                or not challenge.expira_at or timezone.now() < challenge.expira_at+timedelta(seconds=60)):
+            return False
+        _exigir_auditoria_contractual(case, alias, 'otp_envio_recuperado', key, record['recuperacionEnvio'])
+        _exigir_auditoria_contractual(case, alias, 'otp_enviado', key, {'otpId': record['otpId'], 'proposito': CONTRACTUAL_PURPOSE})
+    if (record['estado'] not in {'PRESENTADA', 'ACEPTADA_PENDIENTE_OTP'}
+            and not recovered_expiry
+            or record.get('comprobaciones') != {}
+            or any(k in record for k in (('prueba', 'confirmacionFirma') if recovered_expiry else ('otpId', 'serviceSid', 'prueba', 'confirmacionFirma')))
+            or key in case.consumo_detail.orchestration_data.get('credihoy_autentic_envios_v1', {})):
+        return False
+    binding = record['vinculo']
+    if (binding['proposito'] != CONTRACTUAL_PURPOSE or binding['scope'] != CONTRACTUAL_SCOPE
+            or binding['titularReferencia'] != hashlib.sha256(case.solicitante.numero_identificacion.encode()).hexdigest()):
+        return False
+    now = timezone.now()
+    expired = _fecha_contractual(binding['sesionExpiraAt']) <= now
+    if record['estado'] == 'ACEPTADA_PENDIENTE_OTP' or recovered_expiry:
+        if record.get('aceptacionSha256') != _digest_contractual({k: record[k] for k in (
+                'vinculo', 'firmante', 'aceptacionId', 'aceptadoEn')}):
+            raise ValueError('ACEPTACION_CONTRACTUAL_NO_INTEGRA')
+        _exigir_auditoria_contractual(case, alias, 'aceptado', key, {'aceptacionSha256': record['aceptacionSha256']})
+        expired = expired or now-_fecha_contractual(record['aceptadoEn']) > timedelta(seconds=CONTRACTUAL_TTL)
+    if not expired:
+        return False
+    _exigir_auditoria_contractual(case, alias, 'presentado', key, {'vinculoSha256': _digest_contractual(binding)})
+    if alias == 'cotizacion':
+        from django.db import connections
+        with connections[alias].cursor() as cursor:
+            cursor.execute('SELECT event FROM public.credihoy_auditoria_contractual_publica '
+                'WHERE solicitud_id=%s AND request_id=%s LIMIT 7', [str(case.pk), key])
+            events = [r[0] for r in cursor.fetchall()]
+    else:
+        events = list(AuditLog.objects.using(alias).filter(solicitud_id=case.pk, request_id=key).values_list('event', flat=True)[:7])
+    allowed = {'credihoy_contractual_presentado', 'credihoy_contractual_aceptado', 'credihoy_contractual_revision_renovada'}
+    if recovered_expiry:
+        allowed |= {'credihoy_contractual_otp_reservado', 'credihoy_contractual_otp_enviado', 'credihoy_contractual_otp_envio_recuperado'}
+    return bool(events) and set(events) <= allowed and len(events) <= (6 if recovered_expiry else 3)
+
+
+
+def _cerrar_envio_otp_contractual(case, alias, key, success, sid, *, acuse=None):
+    with transaction.atomic(using=alias, durable=True):
+        case.consumo_detail = SolicitudConsumo.objects.using(alias).select_for_update().get(solicitud_id=case.pk)
+        record = _leer_contractual(case, key)
+        challenge = _challenge_contractual(case, alias, record, lock=True)
+        if acuse is not None and record.get('recuperacionEnvio', {}).get('acuseSha256') == acuse['acuseSha256']:
+            return _estado_contractual(record)
+        if record['estado'] != 'OTP_ENVIO_RESERVADO':
+            raise ValueError('RESERVA_OTP_CONTRACTUAL_CAMBIO')
+        if acuse is not None and any(acuse[k] != record[k] for k in ('otpId', 'aceptacionSha256')):
+            raise ValueError('ACUSE_OTP_CONTRACTUAL_CAMBIO')
+        now = timezone.now()
+        expired = success and now >= challenge.expira_at
+        challenge.verification_sid = sid
+        challenge.enviado_at = now if success else None
+        challenge.estado = EstadoOtp.EXPIRADA if expired else EstadoOtp.ENVIADA if success else EstadoOtp.ERROR_ENVIO
+        challenge.validation_result = 'contractual:sent_expired' if expired else 'contractual:sent' if success else 'contractual:send_uncertain'
+        challenge.save(using=alias, update_fields=['verification_sid', 'enviado_at', 'estado', 'validation_result', 'updated_at'])
+        record['estado'] = 'OTP_EXPIRADA' if expired else 'OTP_ENVIADA' if success else 'OTP_ENVIO_INDETERMINADO'
+        if acuse is not None:
+            record['recuperacionEnvio'] = dict(acuse)
+            _auditar_contractual(case, alias, 'otp_envio_recuperado', key, acuse, actor='sistema:contractual:conciliacion')
+        _guardar_contractual(case, alias, key, record)
+        _auditar_contractual(case, alias, 'otp_enviado' if success else 'otp_incierto', key,
+            {'otpId': str(challenge.pk), 'proposito': CONTRACTUAL_PURPOSE},
+            actor='sistema:contractual:conciliacion' if acuse is not None else 'titular:contractual')
+    return _estado_contractual(record)
+
+
+
+def conciliar_acuse_otp_contractual(solicitud_id, *, clave, acuse):
+    """Acknowledge a signed, finalized relay result. Never sends or approves an OTP."""
+    from django.core import signing
+    from uuid import uuid5
+    from .publico_seguimiento import key as shared_key
+    key = str(UUID(str(clave)))
+    proof = signing.loads(acuse, key=shared_key(), salt='credihoy-contractual-otp-ack-v1', max_age=3600, fallback_keys=[])
+    fields = {'version', 'journalId', 'verificationSid', 'estadoProveedor', 'observadoEn', 'otpId', 'pdfSha256',
+        'aceptacionSha256', 'contactoSha256', 'serviceSha256', 'aceptadoEn', 'solicitudId', 'operacionFirmaId'}
+    scope = getattr(settings, 'CREDIHOY_CONTRACTUAL_STAGING_ALCANCE', {})
+    if (set(proof) != fields or proof['version'] != 'CREDIHOY_CONTRACTUAL_OTP_ACK_V1'
+            or proof['estadoProveedor'] != 'pending' or proof['solicitudId'] != str(solicitud_id)
+            or proof['operacionFirmaId'] != key or scope.get('solicitudId') != str(solicitud_id)
+            or scope.get('ambiente') != 'STAGING' or scope.get('pdfSha256') != proof['pdfSha256']
+            or not re.fullmatch('VE[a-fA-F0-9]{32}', proof['verificationSid'])):
+        raise ValueError('ACUSE_OTP_CONTRACTUAL_DE_OTRA_OPERACION')
+    alias = settings.CREDIHOY_OTP_CONTRACTUAL_DB_ALIAS
+    case = Solicitud.objects.using(alias).select_related('solicitante').get(pk=solicitud_id, producto=PRODUCTO, asesor__isnull=True)
+    case.consumo_detail = SolicitudConsumo.objects.using(alias).get(solicitud_id=case.pk)
+    record = _leer_contractual(case, key)
+    if (any(proof[k] != record[k] for k in ('otpId', 'aceptacionSha256', 'contactoSha256', 'aceptadoEn'))
+            or proof['pdfSha256'] != record['vinculo']['pdfSha256']
+            or record['vinculo']['documentoOperacionId'] != scope['documentoOperacionId']
+            or scope['titularReferencia'] != hashlib.sha256(case.solicitante.numero_identificacion.encode()).hexdigest()
+            or proof['serviceSha256'] != hashlib.sha256(record['serviceSid'].encode()).hexdigest()
+            or proof['journalId'] != str(uuid5(UUID(key), 'CONTRACTUAL:ENVIAR:'+str(record['otpId'])))
+            or not _fecha_contractual(record['reservadoEn']) <= _fecha_contractual(proof['observadoEn']) <= timezone.now()):
+        raise ValueError('ACUSE_OTP_CONTRACTUAL_NO_CONCORDANTE')
+    _exigir_auditoria_contractual(case, alias, 'aceptado', key, {'aceptacionSha256': record['aceptacionSha256']})
+    _exigir_auditoria_contractual(case, alias, 'otp_reservado', key, {'otpId': record['otpId'], 'proposito': CONTRACTUAL_PURPOSE})
+    meta = {'acuseSha256': hashlib.sha256(acuse.encode()).hexdigest(), 'journalId': proof['journalId'],
+        'otpId': proof['otpId'], 'aceptacionSha256': proof['aceptacionSha256'],
+        'verificationSidSha256': hashlib.sha256(proof['verificationSid'].encode()).hexdigest(),
+        'observadoEn': proof['observadoEn'], 'conciliadoEn': timezone.now().isoformat()}
+    previous = record.get('recuperacionEnvio')
+    if previous and previous['acuseSha256'] == meta['acuseSha256']:
+        return _estado_contractual(record)
+    return _cerrar_envio_otp_contractual(case, alias, key, True, proof['verificationSid'], acuse=meta)
+

@@ -1,5 +1,7 @@
 """Cumplimiento documental UNICO, separado de capacidad y decision crediticia."""
 
+
+
 from dataclasses import dataclass, field
 from decimal import Decimal
 from datetime import date, datetime
@@ -71,75 +73,69 @@ def datos_faltantes_regla(regla):
     return regla.operandos_referenciados
 
 
-def evaluar_reglas_unico_v2(entrada: EntradaCredihoyUnicoV2, *,
-        hechos: HechosReglasUnicoV2,
-        capacidad: CapacidadCredihoyUnicoV2 | None = None,
-        fecha_evaluacion: date | datetime | None = None,
-        capacidad_disponible=None, titularidad_recogida: Hecho[bool] | None = None) -> ResultadoGlobalCrediHoyV2:
+def evaluar_reglas_unico_v2(entrada: EntradaCredihoyUnicoV2, *, hechos: HechosReglasUnicoV2, capacidad: CapacidadCredihoyUnicoV2 | None=None, fecha_evaluacion: date | datetime | None=None, capacidad_disponible=None, titularidad_recogida: Hecho[bool] | None=None) -> ResultadoGlobalCrediHoyV2:
     if not isinstance(entrada, EntradaCredihoyUnicoV2) or not isinstance(hechos, HechosReglasUnicoV2):
-        raise TypeError("Requiere entrada y hechos tipados UNICO")
+        raise TypeError('Requiere entrada y hechos tipados UNICO')
     if capacidad is not None:
         if not isinstance(capacidad, CapacidadCredihoyUnicoV2):
-            raise TypeError("Requiere capacidad UNICO, no decision Consumo")
+            raise TypeError('Requiere capacidad UNICO, no decision Consumo')
         if capacidad.validacion_recogida.entrada != entrada:
-            raise ValueError("Capacidad de otra entrada no puede reutilizarse")
+            raise ValueError('Capacidad de otra entrada no puede reutilizarse')
     comparacion_capacidad = evaluar_capacidad_disponible_regla_unico(capacidad_disponible)
     definicion = definicion_funcional_reglas_unico_v2()
     resultados = []
     pendientes = []
     monto_valido = entrada.monto_solicitado is not None and entrada.monto_solicitado > 0
     for regla in inventario_reglas_unico_v2():
-        resultado, motivo, refs = RV.NO_EVALUABLE, "DEFINICION_FUNCIONAL_PENDIENTE", ()
+        resultado, motivo, refs = (RV.NO_EVALUABLE, 'DEFINICION_FUNCIONAL_PENDIENTE', ())
         efecto = EfectoVariable.PENDIENTE_DEFINICION
 
         def comparar(ok):
-            return (RV.CUMPLE if ok else RV.NO_CUMPLE), "COMPARACION_DOCUMENTADA"
-
+            return (RV.CUMPLE if ok else RV.NO_CUMPLE, 'COMPARACION_DOCUMENTADA')
         if not regla.activa:
-            motivo, efecto = "REGLA_INACTIVA_NO_APLICADA", EfectoVariable.INFORMATIVO
+            motivo, efecto = ('REGLA_INACTIVA_NO_APLICADA', EfectoVariable.INFORMATIVO)
         elif regla.fila == 2:
             resultado, motivo, refs = comparacion_capacidad
         elif regla.fila in (4, 6, 10, 21, 24):
-            nombre = {4: "consulta_central_realizada", 6: "cuentas_embargadas", 10: "edad_anios",
-                      21: "calificacion_interna", 24: "persona_natural"}[regla.fila]
+            if regla.fila == 6:
+                efecto = EfectoVariable.INFORMATIVO
+            nombre = {4: 'consulta_central_realizada', 6: 'cuentas_embargadas', 10: 'edad_anios', 21: 'calificacion_interna', 24: 'persona_natural'}[regla.fila]
             refs = (nombre,)
             hecho = getattr(hechos, nombre)
-            motivo = "HECHO_NO_CERTIFICADO"
-            if _certificado(hecho):
+            motivo = 'HECHO_NO_CERTIFICADO'
+            edad_core_observada = regla.fila == 10 and hecho.disponible and (hecho.estado_certificacion == EC.OBSERVADO) and (hecho.fuente == 'LINIX.GR001MTERCERO.F_NACIMI') and (hecho.ruta_origen == 'datosAsociado.fechaNacimiento') and (hecho.fecha_corte is not None) and (hecho.fecha_consulta is not None) and bool(hecho.referencia_evidencia)
+            if _certificado(hecho) or edad_core_observada:
                 valor = hecho.valor
-                if (regla.fila == 10 and valor < 0) or (regla.fila == 21 and not valor.strip()):
-                    motivo = "HECHO_INVALIDO"
+                if regla.fila == 10 and valor < 0 or (regla.fila == 21 and (not valor.strip())):
+                    motivo = 'HECHO_INVALIDO'
                 else:
-                    ok = (valor >= 18 if regla.fila == 10 else valor == "A" if regla.fila == 21
-                          else not valor if regla.fila == 6 else valor)
+                    ok = valor >= 18 if regla.fila == 10 else valor == 'A' if regla.fila == 21 else not valor if regla.fila == 6 else valor
                     resultado, motivo = comparar(ok)
         elif regla.fila in (12, 14, 17):
-            nombre = "saldo_aportes_utilizable" if regla.fila == 14 else "smmlv_vigente"
-            refs = ("monto_solicitado", nombre)
+            nombre = 'saldo_aportes_utilizable' if regla.fila == 14 else 'smmlv_vigente'
+            refs = ('monto_solicitado', nombre)
             hecho = getattr(hechos, nombre)
             limite_aplicado = regla.fila == 14 and hechos.limite_aportes_90.disponible
             if limite_aplicado:
                 hecho = hechos.limite_aportes_90
-                refs = ("monto_solicitado", "limite_aportes_90")
-            motivo = "MONTO_NO_POSITIVO_O_AUSENTE" if not monto_valido else "HECHO_NO_CERTIFICADO"
+                refs = ('monto_solicitado', 'limite_aportes_90')
+            motivo = 'MONTO_NO_POSITIVO_O_AUSENTE' if not monto_valido else 'HECHO_NO_CERTIFICADO'
             if monto_valido and _certificado(hecho):
                 if hecho.valor < 0 or (regla.fila != 14 and hecho.valor == 0):
-                    motivo = "PARAMETRO_MONETARIO_INVALIDO"
+                    motivo = 'PARAMETRO_MONETARIO_INVALIDO'
                 else:
                     limite = hecho.valor if limite_aplicado else limite_monetario(hecho.valor, regla.fila)
-                    resultado, motivo = comparar(entrada.monto_solicitado >= limite if regla.fila == 17
-                                                  else entrada.monto_solicitado <= limite)
+                    resultado, motivo = comparar(entrada.monto_solicitado >= limite if regla.fila == 17 else entrada.monto_solicitado <= limite)
         elif regla.fila == 23:
-            refs = ("periodicidad_pago",)
-            motivo = "PERIODICIDAD_AUSENTE"
+            refs = ('periodicidad_pago',)
+            motivo = 'PERIODICIDAD_AUSENTE'
             if entrada.periodicidad_pago is not None:
-                resultado, motivo = comparar(entrada.periodicidad_pago == "MENSUAL")
+                resultado, motivo = comparar(entrada.periodicidad_pago == 'MENSUAL')
         elif regla.fila in (27, 28):
-            refs = ("plazo_meses",)
-            motivo = "PLAZO_AUSENTE"
+            refs = ('plazo_meses',)
+            motivo = 'PLAZO_AUSENTE'
             if entrada.plazo_meses is not None:
-                resultado, motivo = comparar(entrada.plazo_meses <= 48 if regla.fila == 27
-                                              else entrada.plazo_meses >= 1)
+                resultado, motivo = comparar(entrada.plazo_meses <= 48 if regla.fila == 27 else entrada.plazo_meses >= 1)
         elif regla.fila == 9:
             refs = ('fecha_actualizacion_datos',)
             validity = actualizacion_al_corte(hechos.fecha_actualizacion_datos, fecha_evaluacion)
@@ -149,24 +145,18 @@ def evaluar_reglas_unico_v2(entrada: EntradaCredihoyUnicoV2, *,
                 resultado = RV.CUMPLE if validity['cumple'] else RV.NO_CUMPLE
                 motivo = 'ACTUALIZACION_DENTRO_DE_MES_CALENDARIO' if validity['cumple'] else MENSAJE_ACTUALIZACION
         elif regla.fila == 31:
-            motivo = "PROMEDIO_ULTIMO_CREDITO_Y_EXCEPCION_RENOVACION_PENDIENTES"
+            motivo = 'PROMEDIO_ULTIMO_CREDITO_Y_EXCEPCION_RENOVACION_PENDIENTES'
             if entrada.recogida is not None and entrada.recogida.aplica is False:
-                motivo, efecto = 'SOLO_RENOVACION_GER_PO_068_6_2_3_7', EfectoVariable.INFORMATIVO
+                motivo, efecto = ('SOLO_RENOVACION_GER_PO_068_6_2_3_7', EfectoVariable.INFORMATIVO)
         elif regla.fila == 32:
-            resultado, motivo, refs = evaluar_condicion_recogida_regla_unico(entrada,
-                hechos.existe_credihoy_111_registrado, titularidad_recogida, fecha_evaluacion)
+            resultado, motivo, refs = evaluar_condicion_recogida_regla_unico(entrada, hechos.existe_credihoy_111_registrado, titularidad_recogida, fecha_evaluacion)
             if motivo == 'AUSENCIA_CREDIHOY_111_CERTIFICADA_SIN_RECOGIDA':
                 efecto = EfectoVariable.INFORMATIVO
-        codigo = f"UNICO_FILA_{regla.fila}"
-        evaluada = ResultadoVariableCrediHoyV2(codigo=codigo, resultado=resultado,
-            version_regla=(definicion['version'] if regla.fila in (2, 32) else
-                "actualizacion-mes-calendario-v1" if regla.fila == 9 else "cd5a4-1"),
-            version_politica=(definicion['procedencia'] if regla.fila in (2, 32) else
-                POLITICA_ACTUALIZACION if regla.fila == 9 else "EXCEL_UNICO_a0339ce8"),
-            efecto=efecto, motivos=(motivo,), operandos_referenciados=refs)
+        codigo = f'UNICO_FILA_{regla.fila}'
+        evaluada = ResultadoVariableCrediHoyV2(codigo=codigo, resultado=resultado, version_regla=definicion['version'] if regla.fila in (2, 32) else 'actualizacion-mes-calendario-v1' if regla.fila == 9 else 'cd5a4-1', version_politica=definicion['procedencia'] if regla.fila in (2, 32) else POLITICA_ACTUALIZACION if regla.fila == 9 else 'EXCEL_UNICO_a0339ce8', efecto=efecto, motivos=(motivo,), operandos_referenciados=refs)
         resultados.append(evaluada)
-        if estado_evaluacion_regla(evaluada) == "PENDIENTE_POLITICA":
-            pendientes.append(codigo + ":" + motivo)
+        if estado_evaluacion_regla(evaluada) == 'PENDIENTE_POLITICA':
+            pendientes.append(codigo + ':' + motivo)
     return ResultadoGlobalCrediHoyV2(resultados=tuple(resultados), pendientes=tuple(pendientes))
 
 def definicion_funcional_reglas_unico_v2():

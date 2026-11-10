@@ -50,15 +50,21 @@ def consult(grant,identity,payload,rid,*,firmante=None):
     body=wire.encode(payload)
     editing = 'borrador' in payload
     quoting = 'cotizacion' in payload
+    radicating = 'radicacion' in payload
+    if radicating and getattr(settings,'CREDIHOY_RADICACION_TITULAR_ENABLED',False) is not True:
+        raise wire.NoDisponible
     if quoting:
         from .simulacion_lectura import es_simulacion, simulador_habilitado
         if es_simulacion(payload['cotizacion']) and not simulador_habilitado():raise wire.NoDisponible
     consenting='autorizacion' in payload
+    contractual=consenting and str(payload['autorizacion'].get('accion','')).startswith('contractual_')
+    if contractual:wire.alcance_contractual(payload['autorizacion']['solicitudId'],
+        {**identity,'_sesionExpiraAt':grant.sesion_expira_at.isoformat()})
     if consenting and getattr(settings,'CREDIHOY_AUTORIZACION_TITULAR_ENABLED',False) is not True:raise wire.NoDisponible
     if editing:
         from .autoservicio import habilitar
         habilitar(str(grant.pk),expira_at=grant.sesion_expira_at)
-    proof=signing.dumps({'scope':'solicitudes:autorizar' if consenting else 'solicitudes:cotizar' if quoting else 'solicitudes:borrador' if editing else 'solicitudes:leer','aud':PATH,'requestId':rid,
+    proof=signing.dumps({'scope':'solicitudes:firmarContrato' if contractual else 'solicitudes:radicar' if radicating else 'solicitudes:autorizar' if consenting else 'solicitudes:cotizar' if quoting else 'solicitudes:borrador' if editing else 'solicitudes:leer','aud':PATH,'requestId':rid,
         'bodySha256':hashlib.sha256(body).hexdigest(),'accesoId':str(grant.pk),
         'numeroDocumento':identity['numeroDocumento'],
         'sesionExpiraAt':grant.sesion_expira_at.isoformat(),
@@ -80,19 +86,23 @@ def authorize(request):
             or request.content_type!='application/json' or len(body)>4096
             or not auth.startswith('Bearer ') or len(auth)>8192 or str(UUID(rid))!=rid
             or type(payload) is not dict or set(payload) not in ({'accesoId','navegador'},
-                {'accesoId','navegador','solicitudId'}, {'accesoId','navegador','borrador'}, {'accesoId','navegador','cotizacion'}, {'accesoId','navegador','autorizacion'})
+                {'accesoId','navegador','solicitudId'}, {'accesoId','navegador','borrador'}, {'accesoId','navegador','cotizacion'}, {'accesoId','navegador','autorizacion'}, {'accesoId','navegador','radicacion'})
             or str(UUID(payload['accesoId']))!=payload['accesoId']
             or not re.fullmatch('[a-f0-9]{64}',payload['navegador'])):raise ValueError
     if 'solicitudId' in payload and str(UUID(payload['solicitudId']))!=payload['solicitudId']:raise ValueError
     proof=signing.loads(auth[7:],key=key(),salt=SALT,max_age=TTL,fallback_keys=[])
     editing = 'borrador' in payload
     quoting = 'cotizacion' in payload
+    radicating = 'radicacion' in payload
+    if radicating and getattr(settings,'CREDIHOY_RADICACION_TITULAR_ENABLED',False) is not True:
+        raise wire.NoDisponible
     if quoting:
         from .simulacion_lectura import es_simulacion, simulador_habilitado
         if es_simulacion(payload['cotizacion']) and not simulador_habilitado():raise wire.NoDisponible
     consenting='autorizacion' in payload
+    contractual=consenting and type(payload['autorizacion']) is dict and str(payload['autorizacion'].get('accion','')).startswith('contractual_')
     if consenting and getattr(settings,'CREDIHOY_AUTORIZACION_TITULAR_ENABLED',False) is not True:raise wire.NoDisponible
-    if (proof['scope']!=('solicitudes:autorizar' if consenting else 'solicitudes:cotizar' if quoting else 'solicitudes:borrador' if editing else 'solicitudes:leer') or proof['aud']!=PATH or proof['requestId']!=rid
+    if (proof['scope']!=('solicitudes:firmarContrato' if contractual else 'solicitudes:radicar' if radicating else 'solicitudes:autorizar' if consenting else 'solicitudes:cotizar' if quoting else 'solicitudes:borrador' if editing else 'solicitudes:leer') or proof['aud']!=PATH or proof['requestId']!=rid
             or proof['accesoId']!=payload['accesoId']
             or not hmac.compare_digest(proof['bodySha256'],hashlib.sha256(body).hexdigest())
             or type(proof['numeroDocumento']) is not str
@@ -101,15 +111,23 @@ def authorize(request):
     if not timezone.is_aware(expires) or expires<=timezone.now():raise ValueError
     cohort=getattr(settings,'CREDIHOY_TITULAR_DOCUMENTOS_HMAC',())
     from .publico_controles import admision_ensayo_vigente
-    if not admision_ensayo_vigente() and (not 1<=len(cohort)<=2 or not any(hmac.compare_digest(document_hmac(proof['numeroDocumento']),v)
+    if getattr(settings,'CREDIHOY_PERFIL_DISPONIBILIDAD','')=='PERMANENT_PRIVATE_V1':
+        from .publico_controles import exigir_sesion_permanente
+        exigir_sesion_permanente(proof['accesoId'],expires)
+        if cohort!=[]:raise ValueError
+    elif not admision_ensayo_vigente() and (not 1<=len(cohort)<=2 or not any(hmac.compare_digest(document_hmac(proof['numeroDocumento']),v)
             for v in cohort)):raise ValueError
     identity={'numeroDocumento':proof['numeroDocumento'],
         '_sesionReferencia':proof['accesoId'],'_sesionExpiraAt':proof['sesionExpiraAt']}
-    if not editing and not quoting and not consenting:
+    if not editing and not quoting and not consenting and not radicating:
         identity.update(_scopeLectura=proof['scope'],_requestId=rid)
-    if consenting:identity.update(_scopeAutorizacion=proof['scope'],_requestId=rid)
+    if radicating:identity.update(_scopeRadicacion=proof['scope'],_requestId=rid)
+    if contractual:
+        identity.update(_scopeContractual=proof['scope'],_requestId=rid)
+        wire.alcance_contractual(payload['autorizacion']['solicitudId'],identity)
+    elif consenting:identity.update(_scopeAutorizacion=proof['scope'],_requestId=rid)
     if 'firmanteInstitucional' in proof:
-        if (not consenting or payload['autorizacion'].get('accion')!='verificar_firmante'
+        if (not consenting or payload['autorizacion'].get('accion') not in {'verificar_firmante','contractual_presentar'}
                 or type(proof['firmanteInstitucional']) is not str or len(proof['firmanteInstitucional'])>4096):raise ValueError
         identity['_firmanteInstitucional']=proof['firmanteInstitucional']
     if editing:
@@ -204,7 +222,8 @@ def claim_delegation(rid):
     return limite([('titular_delegacion',rid,1)],using=alias)
 
 
-def verificar_firmante(token,identity,*,solicitud_id,pdf_sha256,clave):
+def verificar_firmante(token,identity,*,solicitud_id,pdf_sha256,clave,
+        proposito='AUTORIZACION_CENTRALES_PRECONSULTA'):
     """Owner-side check of the relay assertion, after live signed delegation."""
     try:
         proof=signing.loads(token,key=key(),salt='credihoy-firmante-institucional-v1',max_age=TTL,fallback_keys=[])
@@ -212,14 +231,21 @@ def verificar_firmante(token,identity,*,solicitud_id,pdf_sha256,clave):
             'verificadoEn','verificacionReferencia','solicitudId','pdfSha256','operacionFirmaId',
             'numeroDocumento','names','lastNames','actoPersonalFirma','OTP9AEsFirma'}
         if type(proof) is not dict or set(proof)!=expected:raise ValueError
-        if (proof['version']!='COLO023_IDENTIDAD_INSTITUCIONAL_V1' or proof['fuente']!='API_DATA.consultarSocio'
-                or identity.get('_scopeAutorizacion')!='solicitudes:autorizar'
+        contractual_identity=(proposito=='FIRMA_DOCUMENTO_CONTRACTUAL'
+            and proof['version']=='CONTRACTUAL_IDENTIDAD_INSTITUCIONAL_V1')
+        scope_ok=(proposito=='AUTORIZACION_CENTRALES_PRECONSULTA'
+            and identity.get('_scopeAutorizacion')=='solicitudes:autorizar')
+        if proposito=='FIRMA_DOCUMENTO_CONTRACTUAL':
+            scope_ok=identity.get('_scopeContractual')=='solicitudes:firmarContrato'
+        if ((proof['version']!='COLO023_IDENTIDAD_INSTITUCIONAL_V1' and not contractual_identity) or proof['fuente']!='API_DATA.consultarSocio'
+                or not scope_ok
                 or proof['requestId']!=identity.get('_requestId')
                 or proof['sesionReferencia']!=identity['_sesionReferencia']
                 or proof['sesionExpiraAt']!=identity['_sesionExpiraAt']
                 or proof['numeroDocumento']!=identity['numeroDocumento']
                 or proof['solicitudId']!=str(solicitud_id) or proof['pdfSha256']!=pdf_sha256
-                or proof['operacionFirmaId']!=str(clave) or proof['actoPersonalFirma'] is not True
+                or proof['operacionFirmaId']!=str(clave)
+                or proof['actoPersonalFirma'] is not (False if contractual_identity else True)
                 or proof['OTP9AEsFirma'] is not False
                 or not re.fullmatch('[a-f0-9]{64}',proof['verificacionReferencia'])
                 or any(type(proof[k]) is not str or not proof[k].strip() or len(proof[k])>120

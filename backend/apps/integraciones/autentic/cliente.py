@@ -241,7 +241,11 @@ class AutenticDEVClient:
                     raise AutenticError("HTTP_NO_EXITOSO")
                 if consult_request and response.status_code==404:
                     return b''
-                if response.headers.get('Content-Type', '').split(';')[0].strip().lower() != mime:
+                content_type=response.headers.get('Content-Type', '').split(';')[0].strip().lower()
+                self._evento_http['tipoContenido']=content_type
+                zip_download=method=='GET' and mime=='application/zip'
+                accepted_types={'application/zip','application/x-zip-compressed','application/octet-stream','binary/octet-stream'} if zip_download else {mime}
+                if content_type not in accepted_types:
                     self._diagnostico(completo=False,codigo='RESPUESTA_INVALIDA')
                     raise AutenticError("RESPUESTA_INVALIDA")
                 content = bytearray()
@@ -252,8 +256,12 @@ class AutenticDEVClient:
                     content.extend(block)
                 if method=='GET':
                     import hashlib
+                    if zip_download and not content.startswith(b'PK\x03\x04'):
+                        self._diagnostico(bytes(content[:32768]),completo=len(content)<=32768,codigo='ZIP_INVALIDO')
+                        raise AutenticError('ZIP_INVALIDO')
                     self.auditoria_descarga={'version':'AUTENTIC_DESCARGA_V1','ambiente':self.config.ambiente,
                         'http':response.status_code,'TLSVerificado':True,'sinRedirecciones':True,
+                        'tipoContenido':content_type,
                         'urlSha256':hashlib.sha256(url.encode()).hexdigest(),
                         'zipSha256':hashlib.sha256(content).hexdigest()}
                 return bytes(content)
